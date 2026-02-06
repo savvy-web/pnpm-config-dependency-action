@@ -1,51 +1,35 @@
 import { defineConfig } from "vitest/config";
 
-/**
- * Vitest configuration for monorepo
- * @see https://vitest.dev/config/
- */
 export default defineConfig({
 	test: {
-		// Global settings applied to all projects
-		globals: true,
-		environment: "node",
-
-		// Test file patterns
-		include: ["src/**/*.{test,spec}.{ts,tsx}"],
+		include: ["**/src/**/*.test.ts"],
 		exclude: ["**/node_modules/**", "**/dist/**"],
-
-		// Coverage configuration
+		setupFiles: ["./vitest.setup.ts"],
+		testTimeout: 30000,
+		reporters: ["default"],
 		coverage: {
 			provider: "v8",
-			reporter: ["text", "json", "html", "lcov"],
+			reporter: ["text", "json", ["html", { subdir: "report" }]],
+			reportsDirectory: "./.coverage",
 			exclude: [
-				"**/node_modules/**",
-				"**/dist/**",
-				"**/coverage/**",
-				"**/*.config.{ts,js,mjs}",
-				"**/.{turbo,cache}/**",
-				"**/lib/configs/**",
-				"**/*.d.ts",
-				"**/*.test.{ts,tsx}",
-				"**/*.spec.{ts,tsx}",
+				"src/main.ts",
+				"src/pre.ts",
+				"src/post.ts",
+				"src/lib/services/index.ts",
+				"src/lib/logging.ts",
+				"src/lib/github/branch.ts",
+				"src/types/**",
+				"src/lib/errors/**",
+				"src/lib/lockfile/compare.ts",
 			],
-			include: ["src/**/*.{ts,tsx}"],
-			clean: true,
-			// Coverage thresholds (adjust as needed)
+			enabled: true,
 			thresholds: {
-				lines: 5,
-				functions: 5,
-				branches: 5,
-				statements: 5,
+				perFile: true, // Enforce thresholds per file instead of globally
+				lines: 85,
+				functions: 85,
+				branches: 85,
+				statements: 85,
 			},
-			reportOnFailure: true,
 		},
-
-		// Timeouts
-		testTimeout: 10000,
-		hookTimeout: 10000,
-
-		// Use forks pool for better compatibility with Effect-TS
-		pool: "forks",
 	},
 });

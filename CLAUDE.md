@@ -5,10 +5,12 @@ code in this repository.
 
 ## Project Status
 
-This is a **base template repository** in initial state. The design
-documentation system (`.claude/` skills and agents) is included but no design
-docs exist yet. To begin planning and documenting architecture decisions, run
-`/design-init` to create your first design document.
+This is a **GitHub Action** for updating pnpm config dependencies and regular
+dependencies. The design documentation system is active with a comprehensive
+architecture design document.
+
+For architecture and implementation details:
+→ @./.claude/design/pnpm-config-dependency-action.md
 
 ## Commands
 

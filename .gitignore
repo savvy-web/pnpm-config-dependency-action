@@ -5,7 +5,6 @@
 # Generated TypeScript declaration files for config files
 *.config.d.ts
 **/build
-**/dist
 **/.rslib
 **/.artifacts
 **/.turbo

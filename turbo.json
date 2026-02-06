@@ -2,24 +2,6 @@
 	"$schema": "https://turborepo.com/schema.v2.json",
 	"globalPassThroughEnv": ["GITHUB_ACTIONS", "CI"],
 	"tasks": {
-		"build:dev": {
-			"cache": true,
-			"dependsOn": ["types:check"],
-			"inputs": [
-				"$TURBO_DEFAULT$",
-				"$TURBO_ROOT$/package.json",
-				"$TURBO_ROOT$/pnpm-lock.yml",
-				"$TURBO_ROOT$/pnpm-workspace.yml",
-				"package.json",
-				"rslib.config.ts",
-				"tsconfig.json",
-				"src/**/*.ts",
-				"README.md",
-				"LICENSE"
-			],
-			"outputLogs": "full",
-			"outputs": ["dist/dev/**", ".rslib/declarations/dev/**"]
-		},
 		"build:prod": {
 			"cache": true,
 			"dependsOn": ["types:check"],
@@ -36,7 +18,7 @@
 				"LICENSE"
 			],
 			"outputLogs": "full",
-			"outputs": ["dist/npm/**", ".rslib/declarations/npm/**"]
+			"outputs": ["dist/**"]
 		},
 		"types:check": {
 			"cache": true,
