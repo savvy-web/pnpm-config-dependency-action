@@ -2,13 +2,22 @@
 
 ## Supported Versions
 
+This project is pre-release (`0.x`). Only the latest version receives security
+updates.
+
 | Version | Supported |
 | ------- | --------- |
 | Latest  | Yes       |
 
 ## Reporting a Vulnerability
 
-To report a security vulnerability, please email [security@savvyweb.systems](mailto:security@savvyweb.systems).
+If you discover a security vulnerability, please report it through one of these
+channels:
+
+1. **GitHub Security Advisories** (preferred):
+   [Report a vulnerability](https://github.com/savvy-web/pnpm-config-dependency-action/security/advisories/new)
+2. **Email**:
+   [spencer@savvyweb.systems](mailto:security@savvyweb.systems)
 
 Please include:
 
@@ -17,4 +26,12 @@ Please include:
 - Potential impact
 - Any suggested fixes (optional)
 
-We will acknowledge receipt within 72 hours and provide updates as we investigate. We appreciate responsible disclosure and will credit reporters in release notes unless anonymity is requested.
+## Response Timeline
+
+- **Acknowledgement**: Within 72 hours of report
+- **Initial assessment**: Within 1 week
+- **Fix or mitigation**: Depends on severity, targeting 30 days for critical
+  issues
+
+We appreciate responsible disclosure and will credit reporters in release notes
+unless anonymity is requested.

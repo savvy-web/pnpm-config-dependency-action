@@ -1,0 +1,57 @@
+{
+	"$schema": "../skills/design-config/json-schemas/current.json",
+	"version": "1.0.0",
+	"project": {
+		"name": "pnpm-config-dependency-action",
+		"type": "application",
+		"repository": "https://github.com/savvy-web/pnpm-config-dependency-action",
+		"maintainer": "C. Spencer Beggs"
+	},
+	"paths": {
+		"designDocs": ".claude/design",
+		"skills": ".claude/skills",
+		"context": "CLAUDE.md",
+		"localContext": "CLAUDE.local.md"
+	},
+	"modules": {
+		"pnpm-config-dependency-action": {
+			"path": ".",
+			"designDocsPath": ".claude/design",
+			"categories": ["architecture", "integration", "observability"],
+			"maintainer": "C. Spencer Beggs",
+			"userDocs": {
+				"readme": "README.md",
+				"repoDocs": null,
+				"siteDocs": null
+			}
+		}
+	},
+	"skills": {
+		"baseNamespace": "/",
+		"enabled": ["design-init", "design-validate", "design-update", "design-sync", "design-review"]
+	},
+	"quality": {
+		"designDocs": {
+			"maxLineLength": 120,
+			"requireFrontmatter": true,
+			"requireTOC": true,
+			"minSections": ["Overview", "Current State", "Rationale"]
+		},
+		"context": {
+			"rootMaxLines": 500,
+			"childMaxLines": 300,
+			"requireDesignDocPointers": true
+		}
+	},
+	"integration": {
+		"ci": {
+			"enabled": false,
+			"validateOnPR": false,
+			"syncOnMerge": false
+		},
+		"git": {
+			"trackDesignDocs": true,
+			"requireReviewForChanges": false
+		}
+	}
+}
