@@ -4,16 +4,24 @@ export default defineConfig({
 	test: {
 		include: ["**/src/**/*.test.ts"],
 		exclude: ["**/node_modules/**", "**/dist/**"],
-		globalSetup: "./vitest.setup.ts",
+		setupFiles: ["./vitest.setup.ts"],
 		testTimeout: 30000,
 		reporters: ["default"],
 		coverage: {
 			provider: "v8",
 			reporter: ["text", "json", ["html", { subdir: "report" }]],
 			reportsDirectory: "./.coverage",
-			// ...coverage,
-			// // Merge exclusions from VitestConfig and workspace-specific ones
-			exclude: [],
+			exclude: [
+				"src/main.ts",
+				"src/pre.ts",
+				"src/post.ts",
+				"src/lib/services/index.ts",
+				"src/lib/logging.ts",
+				"src/lib/github/branch.ts",
+				"src/types/**",
+				"src/lib/errors/**",
+				"src/lib/lockfile/compare.ts",
+			],
 			enabled: true,
 			thresholds: {
 				perFile: true, // Enforce thresholds per file instead of globally

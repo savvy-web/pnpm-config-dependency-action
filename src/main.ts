@@ -242,7 +242,7 @@ const program = Effect.gen(function* () {
 /**
  * Update config dependencies with error accumulation.
  */
-const updateConfigDependencies = (
+export const updateConfigDependencies = (
 	dependencies: ReadonlyArray<string>,
 ): Effect.Effect<ReadonlyArray<DependencyUpdateResult>, never, PnpmExecutor> =>
 	Effect.gen(function* () {
@@ -294,7 +294,7 @@ const updateConfigDependencies = (
 /**
  * Update regular dependencies with error accumulation.
  */
-const updateRegularDependencies = (
+export const updateRegularDependencies = (
 	dependencies: ReadonlyArray<string>,
 ): Effect.Effect<ReadonlyArray<DependencyUpdateResult>, never, PnpmExecutor> =>
 	Effect.gen(function* () {
@@ -338,7 +338,7 @@ const updateRegularDependencies = (
 /**
  * Result of running custom commands.
  */
-interface RunCommandsResult {
+export interface RunCommandsResult {
 	readonly successful: ReadonlyArray<string>;
 	readonly failed: ReadonlyArray<{ command: string; error: string; exitCode?: number }>;
 }
@@ -349,7 +349,7 @@ interface RunCommandsResult {
  * Commands are executed sequentially. All commands are attempted even if some fail,
  * but failures are collected and returned for the caller to handle.
  */
-const runCommands = (commands: ReadonlyArray<string>): Effect.Effect<RunCommandsResult, never, PnpmExecutor> =>
+export const runCommands = (commands: ReadonlyArray<string>): Effect.Effect<RunCommandsResult, never, PnpmExecutor> =>
 	Effect.gen(function* () {
 		const pnpm = yield* PnpmExecutor;
 		const successful: string[] = [];
@@ -385,7 +385,7 @@ const runCommands = (commands: ReadonlyArray<string>): Effect.Effect<RunCommands
 /**
  * Create or update the dependency update PR.
  */
-const createOrUpdatePR = (
+export const createOrUpdatePR = (
 	branch: string,
 	updates: ReadonlyArray<DependencyUpdateResult>,
 	changesets: ReadonlyArray<ChangesetFile>,
@@ -428,7 +428,7 @@ const createOrUpdatePR = (
  * When commits are created via the GitHub API without an explicit author,
  * and include a matching sign-off footer, GitHub will verify/sign the commit.
  */
-const generateCommitMessage = (updates: ReadonlyArray<DependencyUpdateResult>): string => {
+export const generateCommitMessage = (updates: ReadonlyArray<DependencyUpdateResult>): string => {
 	const configCount = updates.filter((u) => u.type === "config").length;
 	const regularCount = updates.filter((u) => u.type === "regular").length;
 
@@ -454,12 +454,12 @@ Signed-off-by: ${botName} <${botEmail}>`;
 /**
  * Generate npm package URL.
  */
-const npmUrl = (pkg: string): string => `https://www.npmjs.com/package/${pkg}`;
+export const npmUrl = (pkg: string): string => `https://www.npmjs.com/package/${pkg}`;
 
 /**
  * Extract clean version from pnpm version string (removes hash suffix).
  */
-const cleanVersion = (version: string | null): string | null => {
+export const cleanVersion = (version: string | null): string | null => {
 	if (!version) return null;
 	// Remove +sha512-... suffix if present
 	return version.split("+")[0];
@@ -468,7 +468,7 @@ const cleanVersion = (version: string | null): string | null => {
 /**
  * Generate PR body with dependency changes (Dependabot-style formatting).
  */
-const generatePRBody = (
+export const generatePRBody = (
 	updates: ReadonlyArray<DependencyUpdateResult>,
 	changesets: ReadonlyArray<ChangesetFile>,
 ): string => {
@@ -559,7 +559,7 @@ const generatePRBody = (
 /**
  * Generate summary text for check run and job summary.
  */
-const generateSummary = (
+export const generateSummary = (
 	updates: ReadonlyArray<DependencyUpdateResult>,
 	changesets: ReadonlyArray<ChangesetFile>,
 	pr: PullRequest | null,

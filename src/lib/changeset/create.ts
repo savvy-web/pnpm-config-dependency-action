@@ -174,7 +174,7 @@ ${summary}
 /**
  * Format changeset summary from dependency changes.
  */
-const formatChangesetSummary = (changes: ReadonlyArray<LockfileChange>): string => {
+export const formatChangesetSummary = (changes: ReadonlyArray<LockfileChange>): string => {
 	const configChanges = changes.filter((c) => c.type === "config");
 	const regularChanges = changes.filter((c) => c.type === "regular");
 

@@ -87,7 +87,7 @@ export const parseInputs: Effect.Effect<ActionInputs, InvalidInputError> = Effec
 /**
  * Extract field name from a ParseIssue.
  */
-const getFieldFromParseIssue = (issue: ParseResult.ParseIssue): string => {
+export const getFieldFromParseIssue = (issue: ParseResult.ParseIssue): string => {
 	if ("path" in issue && Array.isArray(issue.path) && issue.path.length > 0) {
 		const firstPathSegment = issue.path[0];
 		if (typeof firstPathSegment === "object" && "key" in firstPathSegment) {
@@ -100,7 +100,7 @@ const getFieldFromParseIssue = (issue: ParseResult.ParseIssue): string => {
 /**
  * Extract human-readable reason from a ParseIssue.
  */
-const getReasonFromParseIssue = (issue: ParseResult.ParseIssue): string => {
+export const getReasonFromParseIssue = (issue: ParseResult.ParseIssue): string => {
 	if ("message" in issue && typeof issue.message === "string") {
 		return issue.message;
 	}
@@ -116,7 +116,7 @@ const getReasonFromParseIssue = (issue: ParseResult.ParseIssue): string => {
 /**
  * Parse a multiline input string into an array of trimmed, non-empty lines.
  */
-const parseMultilineInput = (input: string): ReadonlyArray<string> => {
+export const parseMultilineInput = (input: string): ReadonlyArray<string> => {
 	if (!input || input.trim().length === 0) {
 		return [];
 	}

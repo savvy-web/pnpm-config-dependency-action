@@ -19,9 +19,6 @@
 		"url": "https://savvyweb.systems"
 	},
 	"type": "module",
-	"exports": {
-		".": "./src/main.ts"
-	},
 	"scripts": {
 		"build": "turbo run build:prod --log-order=grouped",
 		"build:inspect": "rslib inspect --config-loader native --env-mode npm --verbose",
