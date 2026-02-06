@@ -3,7 +3,14 @@
 	"version": "0.0.0",
 	"private": true,
 	"description": "GitHub Action for updating pnpm config dependencies and regular dependencies with automated PR creation",
-	"keywords": ["github-action", "pnpm", "config-dependencies", "dependency-updates", "monorepo", "changesets"],
+	"keywords": [
+		"github-action",
+		"pnpm",
+		"config-dependencies",
+		"dependency-updates",
+		"monorepo",
+		"changesets"
+	],
 	"homepage": "https://github.com/savvy-web/pnpm-config-dependency-action#readme",
 	"bugs": {
 		"url": "https://github.com/savvy-web/pnpm-config-dependency-action/issues"
@@ -90,9 +97,5 @@
 				"onFail": "ignore"
 			}
 		]
-	},
-	"publishConfig": {
-		"access": "public",
-		"targets": ["github"]
 	}
 }
