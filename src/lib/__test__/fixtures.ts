@@ -10,6 +10,14 @@ import type { ChangesetFile, DependencyUpdateResult, LockfileChange, PullRequest
 // DependencyUpdateResult fixtures
 // ══════════════════════════════════════════════════════════════════════════════
 
+export const pnpmUpgradeUpdate: DependencyUpdateResult = {
+	dependency: "pnpm",
+	from: "10.28.2",
+	to: "10.29.0",
+	type: "config",
+	package: null,
+};
+
 export const configUpdate: DependencyUpdateResult = {
 	dependency: "typescript",
 	from: "5.3.3",

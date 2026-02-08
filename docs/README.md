@@ -16,7 +16,7 @@ User and developer documentation for the pnpm Config Dependency Action.
 - [Overview](./architecture/overview.md) -- How the action works: phases, data
   flow, and module structure
 - [Execution Phases](./architecture/execution-phases.md) -- Detailed breakdown
-  of the 13-step workflow
+  of the 14-step workflow
 
 ## Reference
 

@@ -5,7 +5,7 @@
 # --- BEGIN SAVVY-LINT MANAGED SECTION ---
 # DO NOT EDIT between these markers - managed by savvy-lint
 # Skip in CI environment
-{ [ -n "$CI" ] || [ -n "$GITHUB_ACTIONS" ]; } && exit 0
+if ! { [ -n "$CI" ] || [ -n "$GITHUB_ACTIONS" ]; }; then
 
 # Get repo root directory
 ROOT=$(git rev-parse --show-toplevel)
@@ -33,14 +33,14 @@ detect_pm() {
   fi
 }
 
-# Get the exec command for the detected package manager
+# Run lint-staged with the detected package manager
 PM=$(detect_pm)
 case "$PM" in
-  pnpm) CMD="pnpm exec" ;;
-  yarn) CMD="yarn exec" ;;
-  bun)  CMD="bunx" ;;
-  *)    CMD="npx --no --" ;;
+  pnpm) pnpm exec lint-staged --config "$ROOT/lib/configs/lint-staged.config.ts" ;;
+  yarn) yarn exec lint-staged --config "$ROOT/lib/configs/lint-staged.config.ts" ;;
+  bun)  bunx lint-staged --config "$ROOT/lib/configs/lint-staged.config.ts" ;;
+  *)    npx --no -- lint-staged --config "$ROOT/lib/configs/lint-staged.config.ts" ;;
 esac
 
-$CMD lint-staged --config "$ROOT/lib/configs/lint-staged.config.ts"
+fi
 # --- END SAVVY-LINT MANAGED SECTION ---

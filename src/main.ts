@@ -5,16 +5,17 @@
  * 1. Parse inputs and setup
  * 2. Manage branch (create/rebase)
  * 3. Capture lockfile state (before)
- * 4. Update config dependencies
- * 5. Run pnpm install
+ * 4. Upgrade pnpm (if enabled)
+ * 5. Update config dependencies
  * 6. Update regular dependencies
- * 7. Format pnpm-workspace.yaml
- * 8. Run custom commands (if specified)
- * 9. Capture lockfile state (after)
- * 10. Detect changes
- * 11. Create changesets (if enabled)
- * 12. Commit and push
- * 13. Create/update PR
+ * 7. Clean install (rm -rf node_modules pnpm-lock.yaml + pnpm install)
+ * 8. Format pnpm-workspace.yaml
+ * 9. Run custom commands (if specified)
+ * 10. Capture lockfile state (after)
+ * 11. Detect changes
+ * 12. Create changesets (if enabled)
+ * 13. Commit and push
+ * 14. Create/update PR
  *
  * @module main
  */
@@ -28,6 +29,7 @@ import { isDryRun, parseInputs } from "./lib/inputs.js";
 import { captureLockfileState, compareLockfiles } from "./lib/lockfile/compare.js";
 import { logDebug, logDebugState } from "./lib/logging.js";
 import { formatWorkspaceYaml, getConfigDependencyVersion, readWorkspaceYaml } from "./lib/pnpm/format.js";
+import { upgradePnpm } from "./lib/pnpm/upgrade.js";
 import { GitExecutor, GitHubClient, PnpmExecutor, makeAppLayer } from "./lib/services/index.js";
 import type { ChangesetFile, DependencyUpdateResult, PullRequest } from "./types/index.js";
 
@@ -52,6 +54,7 @@ const program = Effect.gen(function* () {
 		branch: inputs.branch,
 		configDependencies: inputs.configDependencies,
 		dependencies: inputs.dependencies,
+		updatePnpm: inputs.updatePnpm,
 		dryRun,
 	});
 
@@ -77,36 +80,64 @@ const program = Effect.gen(function* () {
 			importers: Object.keys(lockfileBefore?.importers || {}).length,
 		});
 
-		// Step 3: Update config dependencies
-		yield* Effect.logInfo("Step 3: Updating config dependencies");
+		// Step 3: Upgrade pnpm (if enabled)
+		const configUpdatesFromPnpm: DependencyUpdateResult[] = [];
+		if (inputs.updatePnpm) {
+			yield* Effect.logInfo("Step 3: Upgrading pnpm");
+			const pnpmUpgrade = yield* upgradePnpm().pipe(
+				Effect.catchAll((error) => {
+					return Effect.gen(function* () {
+						yield* Effect.logWarning(`Failed to upgrade pnpm: ${error.reason}`);
+						return null;
+					});
+				}),
+			);
+
+			if (pnpmUpgrade) {
+				yield* Effect.logInfo(`pnpm: ${pnpmUpgrade.from} -> ${pnpmUpgrade.to}`);
+				configUpdatesFromPnpm.push({
+					dependency: "pnpm",
+					from: pnpmUpgrade.from,
+					to: pnpmUpgrade.to,
+					type: "config",
+					package: null,
+				});
+			} else {
+				yield* Effect.logInfo("pnpm is already up-to-date");
+			}
+		}
+
+		// Step 4: Update config dependencies
+		yield* Effect.logInfo("Step 4: Updating config dependencies");
 		const workspaceBefore = yield* readWorkspaceYaml().pipe(Effect.catchAll(() => Effect.succeed(null)));
 		yield* logDebugState("pnpm-workspace.yaml (before)", workspaceBefore);
 
 		const configUpdates = yield* updateConfigDependencies(inputs.configDependencies);
 		yield* logDebugState("Config dependency updates", configUpdates);
 
-		// Step 4: Run pnpm install
-		if (configUpdates.length > 0 || inputs.dependencies.length > 0) {
-			yield* Effect.logInfo("Step 4: Running pnpm install");
+		// Step 5: Update regular dependencies
+		yield* Effect.logInfo("Step 5: Updating regular dependencies");
+		yield* updateRegularDependencies(inputs.dependencies);
+
+		// Step 6: Clean install (rm -rf node_modules pnpm-lock.yaml + pnpm install)
+		if (configUpdates.length > 0 || inputs.dependencies.length > 0 || configUpdatesFromPnpm.length > 0) {
+			yield* Effect.logInfo("Step 6: Running clean install");
 			const pnpm = yield* PnpmExecutor;
+			yield* pnpm.run("rm -rf node_modules pnpm-lock.yaml");
 			yield* pnpm.install();
 		}
 
-		// Step 5: Update regular dependencies
-		yield* Effect.logInfo("Step 5: Updating regular dependencies");
-		const regularUpdates = yield* updateRegularDependencies(inputs.dependencies);
-
-		// Step 6: Format pnpm-workspace.yaml
-		yield* Effect.logInfo("Step 6: Formatting pnpm-workspace.yaml");
+		// Step 7: Format pnpm-workspace.yaml
+		yield* Effect.logInfo("Step 7: Formatting pnpm-workspace.yaml");
 		yield* formatWorkspaceYaml();
 
 		const workspaceAfter = yield* readWorkspaceYaml().pipe(Effect.catchAll(() => Effect.succeed(null)));
 		yield* logDebugState("pnpm-workspace.yaml (after)", workspaceAfter);
 
-		// Step 7: Run custom commands (if specified)
+		// Step 8: Run custom commands (if specified)
 		let runCommandsResult: RunCommandsResult | null = null;
 		if (inputs.run.length > 0) {
-			yield* Effect.logInfo("Step 7: Running custom commands");
+			yield* Effect.logInfo("Step 8: Running custom commands");
 			runCommandsResult = yield* runCommands(inputs.run);
 
 			if (runCommandsResult.failed.length > 0) {
@@ -130,22 +161,39 @@ const program = Effect.gen(function* () {
 			}
 		}
 
-		// Step 8: Capture lockfile state after updates
-		yield* Effect.logInfo("Step 8: Capturing lockfile state (after)");
+		// Step 9: Capture lockfile state after updates
+		yield* Effect.logInfo("Step 9: Capturing lockfile state (after)");
 		const lockfileAfter = yield* captureLockfileState();
 		yield* logDebugState("Lockfile state (after)", {
 			packages: Object.keys(lockfileAfter?.packages || {}).length,
 			importers: Object.keys(lockfileAfter?.importers || {}).length,
 		});
 
-		// Step 9: Detect changes
-		yield* Effect.logInfo("Step 9: Detecting changes");
+		// Step 10: Detect changes
+		yield* Effect.logInfo("Step 10: Detecting changes");
 		const changes = yield* compareLockfiles(lockfileBefore, lockfileAfter);
 		yield* logDebugState("Detected changes", changes);
 
-		const allUpdates = [...configUpdates, ...regularUpdates];
+		// Build regular dependency updates from lockfile changes (actual packages, not glob patterns)
+		const regularChanges = changes.filter((c) => c.type === "regular");
+		const deduped = new Map<string, DependencyUpdateResult>();
+		for (const change of regularChanges) {
+			const key = `${change.dependency}:${change.from}:${change.to}`;
+			if (!deduped.has(key)) {
+				deduped.set(key, {
+					dependency: change.dependency,
+					from: change.from,
+					to: change.to,
+					type: "regular",
+					package: change.affectedPackages[0] ?? null,
+				});
+			}
+		}
+		const regularUpdatesFromLockfile = [...deduped.values()];
+
+		const allUpdates = [...configUpdatesFromPnpm, ...configUpdates, ...regularUpdatesFromLockfile];
 		yield* logDebug(
-			`Total updates: ${allUpdates.length} (config: ${configUpdates.length}, regular: ${regularUpdates.length})`,
+			`Total updates: ${allUpdates.length} (config: ${configUpdates.length}, regular: ${regularUpdatesFromLockfile.length})`,
 		);
 
 		// Check if there are any changes
@@ -170,8 +218,8 @@ const program = Effect.gen(function* () {
 			return;
 		}
 
-		// Step 10: Create changesets (if enabled)
-		yield* Effect.logInfo("Step 10: Creating changesets");
+		// Step 11: Create changesets (if enabled)
+		yield* Effect.logInfo("Step 11: Creating changesets");
 
 		// Merge config dependency updates into changes for changeset creation
 		// Config updates need to be converted to LockfileChange format
@@ -186,21 +234,21 @@ const program = Effect.gen(function* () {
 		const allChangesForChangeset = [...configChangesForChangeset, ...changes];
 		const changesets = yield* createChangesets(allChangesForChangeset);
 
-		// Step 11: Commit and push
+		// Step 12: Commit and push
 		if (dryRun) {
-			yield* Effect.logInfo("Step 11: [DRY RUN] Skipping commit and push");
+			yield* Effect.logInfo("Step 12: [DRY RUN] Skipping commit and push");
 		} else {
-			yield* Effect.logInfo("Step 11: Committing via GitHub API");
+			yield* Effect.logInfo("Step 12: Committing via GitHub API");
 			const commitMessage = generateCommitMessage(allUpdates);
 			yield* commitChanges(commitMessage, inputs.branch);
 		}
 
-		// Step 12: Create/update PR
+		// Step 13: Create/update PR
 		let pr: PullRequest | null = null;
 		if (dryRun) {
-			yield* Effect.logInfo("Step 12: [DRY RUN] Skipping PR creation/update");
+			yield* Effect.logInfo("Step 13: [DRY RUN] Skipping PR creation/update");
 		} else {
-			yield* Effect.logInfo("Step 12: Creating/updating PR");
+			yield* Effect.logInfo("Step 13: Creating/updating PR");
 			pr = yield* createOrUpdatePR(inputs.branch, allUpdates, changesets);
 		}
 
@@ -293,46 +341,28 @@ export const updateConfigDependencies = (
 
 /**
  * Update regular dependencies with error accumulation.
+ *
+ * Actual version changes are detected later via lockfile comparison,
+ * so this function only needs to execute the updates (not track versions).
  */
 export const updateRegularDependencies = (
 	dependencies: ReadonlyArray<string>,
-): Effect.Effect<ReadonlyArray<DependencyUpdateResult>, never, PnpmExecutor> =>
+): Effect.Effect<void, never, PnpmExecutor> =>
 	Effect.gen(function* () {
 		if (dependencies.length === 0) {
-			return [];
+			return;
 		}
 
 		const pnpm = yield* PnpmExecutor;
-		const results: DependencyUpdateResult[] = [];
 
 		for (const pattern of dependencies) {
 			yield* Effect.logInfo(`Updating dependencies matching: ${pattern}`);
 
-			// Run pnpm up --latest
-			const result = yield* pnpm.update(pattern).pipe(
-				Effect.map((output) => ({ success: true as const, output })),
-				Effect.catchAll((error) =>
-					Effect.gen(function* () {
-						yield* Effect.logWarning(`Failed to update ${pattern}: ${error.stderr}`);
-						return { success: false as const, output: error.stderr };
-					}),
-				),
+			yield* pnpm.update(pattern).pipe(
+				Effect.tap(() => Effect.logInfo(`Updated dependencies matching: ${pattern}`)),
+				Effect.catchAll((error) => Effect.logWarning(`Failed to update ${pattern}: ${error.stderr}`)),
 			);
-
-			if (result.success) {
-				results.push({
-					dependency: pattern,
-					from: null,
-					to: "latest",
-					type: "regular",
-					package: null,
-				});
-
-				yield* Effect.logInfo(`Updated dependencies matching: ${pattern}`);
-			}
 		}
-
-		return results;
 	});
 
 /**

@@ -1,22 +1,23 @@
 # Execution Phases
 
-Detailed breakdown of the 13-step workflow executed in the main phase.
+Detailed breakdown of the 14-step workflow executed in the main phase.
 
 ## Table of Contents
 
 - [Step 1: Setup](#step-1-setup)
 - [Step 2: Branch Management](#step-2-branch-management)
 - [Step 3: Capture Lockfile (Before)](#step-3-capture-lockfile-before)
-- [Step 4: Update Config Dependencies](#step-4-update-config-dependencies)
-- [Step 5: Run pnpm Install](#step-5-run-pnpm-install)
+- [Step 4: Upgrade pnpm](#step-4-upgrade-pnpm)
+- [Step 5: Update Config Dependencies](#step-5-update-config-dependencies)
 - [Step 6: Update Regular Dependencies](#step-6-update-regular-dependencies)
-- [Step 7: Format pnpm-workspace.yaml](#step-7-format-pnpm-workspaceyaml)
-- [Step 8: Run Custom Commands](#step-8-run-custom-commands)
-- [Step 9: Capture Lockfile (After)](#step-9-capture-lockfile-after)
-- [Step 10: Detect Changes](#step-10-detect-changes)
-- [Step 11: Create Changesets](#step-11-create-changesets)
-- [Step 12: Commit and Push](#step-12-commit-and-push)
-- [Step 13: Create or Update PR](#step-13-create-or-update-pr)
+- [Step 7: Clean Install](#step-7-clean-install)
+- [Step 8: Format pnpm-workspace.yaml](#step-8-format-pnpm-workspaceyaml)
+- [Step 9: Run Custom Commands](#step-9-run-custom-commands)
+- [Step 10: Capture Lockfile (After)](#step-10-capture-lockfile-after)
+- [Step 11: Detect Changes](#step-11-detect-changes)
+- [Step 12: Create Changesets](#step-12-create-changesets)
+- [Step 13: Commit and Push](#step-13-commit-and-push)
+- [Step 14: Create or Update PR](#step-14-create-or-update-pr)
 
 ## Step 1: Setup
 
@@ -43,7 +44,17 @@ Detailed breakdown of the 13-step workflow executed in the main phase.
 - Stores the lockfile object in memory for later comparison
 - Logs package and importer counts in debug mode
 
-## Step 4: Update Config Dependencies
+## Step 4: Upgrade pnpm
+
+- Runs when the `update-pnpm` input is `true` (the default)
+- Detects the current pnpm version from `packageManager` in `package.json`
+- Checks for the latest available pnpm version
+- If a newer version is available, updates the `packageManager` and `devEngines`
+  fields in `package.json`
+- Records the version change as a config dependency update
+- If the upgrade fails, logs a warning and continues
+
+## Step 5: Update Config Dependencies
 
 - Iterates over each config dependency listed in the input
 - For each dependency:
@@ -54,12 +65,6 @@ Detailed breakdown of the 13-step workflow executed in the main phase.
   proceed
 - Failed updates are logged as warnings but do not stop the workflow
 
-## Step 5: Run pnpm Install
-
-- Runs `pnpm install` to resolve and update the lockfile
-- Only runs if there are config or regular dependencies to update
-- This ensures all transitive dependencies are correctly resolved
-
 ## Step 6: Update Regular Dependencies
 
 - Iterates over each dependency pattern listed in the input
@@ -67,7 +72,15 @@ Detailed breakdown of the 13-step workflow executed in the main phase.
 - Supports glob patterns (e.g., `@effect/*`)
 - Uses the same error accumulation pattern as config dependency updates
 
-## Step 7: Format pnpm-workspace.yaml
+## Step 7: Clean Install
+
+- Only runs if there are config dependencies, regular dependencies, or a pnpm
+  upgrade to process
+- Removes `node_modules` and `pnpm-lock.yaml` for a fresh lockfile
+- Runs `pnpm install` to regenerate the lockfile from scratch
+- Ensures a fully coherent lockfile after all dependency updates
+
+## Step 8: Format pnpm-workspace.yaml
 
 - Reads and parses `pnpm-workspace.yaml`
 - Sorts array values alphabetically (`packages`, `onlyBuiltDependencies`,
@@ -78,7 +91,7 @@ Detailed breakdown of the 13-step workflow executed in the main phase.
 - This formatting matches the `@savvy-web/lint-staged` PnpmWorkspace handler to
   prevent lint-staged from making additional changes after commit
 
-## Step 8: Run Custom Commands
+## Step 9: Run Custom Commands
 
 - Executes commands from the `run` input sequentially via `sh -c`
 - All commands are attempted regardless of individual failures
@@ -88,12 +101,12 @@ Detailed breakdown of the 13-step workflow executed in the main phase.
   - The action exits early without creating a PR or committing
   - Outputs `has-changes: false` and `updates-count: 0`
 
-## Step 9: Capture Lockfile (After)
+## Step 10: Capture Lockfile (After)
 
 - Reads the updated `pnpm-lock.yaml` after all dependency changes
 - Stores the updated lockfile object for comparison
 
-## Step 10: Detect Changes
+## Step 11: Detect Changes
 
 Change detection uses two complementary methods:
 
@@ -114,7 +127,7 @@ Runs `git status --porcelain` to detect any modified, staged, or untracked
 files. If both the lockfile comparison and git status show no changes, the
 action exits early with a "neutral" check run conclusion.
 
-## Step 11: Create Changesets
+## Step 12: Create Changesets
 
 - Checks whether a `.changeset/` directory exists
 - Groups lockfile changes by affected package
@@ -123,7 +136,7 @@ action exits early with a "neutral" check run conclusion.
 - Changeset files are written to `.changeset/<random-id>.md` with a formatted
   summary of the dependency changes
 
-## Step 12: Commit and Push
+## Step 13: Commit and Push
 
 Commits are created through the GitHub Git Data API rather than `git commit`:
 
@@ -137,7 +150,7 @@ Commits are created through the GitHub Git Data API rather than `git commit`:
 
 In dry-run mode, this step is skipped entirely.
 
-## Step 13: Create or Update PR
+## Step 14: Create or Update PR
 
 - Searches for an existing open PR from the update branch to `main`
 - If a PR exists: updates its title and body with the latest dependency changes

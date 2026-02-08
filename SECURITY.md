@@ -6,8 +6,8 @@ This project is pre-release (`0.x`). Only the latest version receives security
 updates.
 
 | Version | Supported |
-| ------- | --------- |
-| Latest  | Yes       |
+| --- | --- |
+| Latest | Yes |
 
 ## Reporting a Vulnerability
 
@@ -17,7 +17,7 @@ channels:
 1. **GitHub Security Advisories** (preferred):
    [Report a vulnerability](https://github.com/savvy-web/pnpm-config-dependency-action/security/advisories/new)
 2. **Email**:
-   [spencer@savvyweb.systems](mailto:security@savvyweb.systems)
+   [security@savvyweb.systems](mailto:security@savvyweb.systems)
 
 Please include:
 

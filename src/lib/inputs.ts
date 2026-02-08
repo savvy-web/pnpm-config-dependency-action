@@ -22,6 +22,7 @@ const RawActionInputs = Schema.Struct({
 	configDependencies: Schema.Array(Schema.String),
 	dependencies: Schema.Array(Schema.String),
 	run: Schema.Array(Schema.String),
+	updatePnpm: Schema.Boolean,
 });
 
 /**
@@ -30,13 +31,13 @@ const RawActionInputs = Schema.Struct({
 const ValidatedInputs = Schema.transformOrFail(RawActionInputs, ActionInputs, {
 	strict: true,
 	decode: (raw) => {
-		// Validate at least one dependency type is specified
-		if (raw.configDependencies.length === 0 && raw.dependencies.length === 0) {
+		// Validate at least one update type is specified
+		if (raw.configDependencies.length === 0 && raw.dependencies.length === 0 && !raw.updatePnpm) {
 			return ParseResult.fail(
 				new ParseResult.Type(
 					ActionInputs.ast,
 					raw,
-					"Must specify at least one of: config-dependencies or dependencies",
+					"Must specify at least one of: config-dependencies, dependencies, or update-pnpm",
 				),
 			);
 		}
@@ -57,6 +58,7 @@ export const parseInputs: Effect.Effect<ActionInputs, InvalidInputError> = Effec
 		configDependencies: parseMultilineInput(getInput("config-dependencies")),
 		dependencies: parseMultilineInput(getInput("dependencies")),
 		run: parseMultilineInput(getInput("run")),
+		updatePnpm: getBooleanInput("update-pnpm") ?? true,
 	};
 
 	// Decode and validate using schema
@@ -78,7 +80,7 @@ export const parseInputs: Effect.Effect<ActionInputs, InvalidInputError> = Effec
 	const dryRun = isDryRun();
 
 	yield* Effect.logInfo(
-		`Parsed inputs: branch=${result.branch}, configDeps=${result.configDependencies.length}, deps=${result.dependencies.length}, run=${result.run.length}, dryRun=${dryRun}`,
+		`Parsed inputs: branch=${result.branch}, configDeps=${result.configDependencies.length}, deps=${result.dependencies.length}, run=${result.run.length}, updatePnpm=${result.updatePnpm}, dryRun=${dryRun}`,
 	);
 
 	return result;

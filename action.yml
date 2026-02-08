@@ -35,6 +35,10 @@ inputs:
     description: Skip revoking the GitHub App token on cleanup
     required: false
     default: "false"
+  update-pnpm:
+    description: Update pnpm version in packageManager and devEngines fields
+    required: false
+    default: "true"
   dry-run:
     description: Run without making changes (for testing)
     required: false

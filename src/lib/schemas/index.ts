@@ -81,6 +81,9 @@ export const ActionInputs = Schema.Struct({
 	run: Schema.Array(Schema.String).annotations({
 		description: "Commands to run after dependency updates (one per line)",
 	}),
+	updatePnpm: Schema.Boolean.annotations({
+		description: "Whether to update pnpm version in packageManager and devEngines fields",
+	}),
 }).annotations({
 	identifier: "ActionInputs",
 	title: "Action Inputs",

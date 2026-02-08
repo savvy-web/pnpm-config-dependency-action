@@ -43,21 +43,23 @@ Runs before the main action. Responsible for:
 
 ### Main Phase (`src/main.ts`)
 
-The core orchestration logic. Executes 13 steps sequentially:
+The core orchestration logic. Executes 14 steps sequentially:
 
 1. Setup (parse inputs, retrieve token, create check run)
 2. Branch management (create or reset the update branch)
 3. Capture lockfile state (before)
-4. Update config dependencies
-5. Run `pnpm install`
+4. Upgrade pnpm (if `update-pnpm` is enabled)
+5. Update config dependencies
 6. Update regular dependencies
-7. Format `pnpm-workspace.yaml`
-8. Run custom commands (if specified)
-9. Capture lockfile state (after)
-10. Detect changes (lockfile diff + git status)
-11. Create changesets (if `.changeset/` exists)
-12. Commit and push (via GitHub API)
-13. Create or update PR
+7. Clean install (remove `node_modules` and `pnpm-lock.yaml`, then
+   `pnpm install`)
+8. Format `pnpm-workspace.yaml`
+9. Run custom commands (if specified)
+10. Capture lockfile state (after)
+11. Detect changes (lockfile diff + git status)
+12. Create changesets (if `.changeset/` exists)
+13. Commit and push (via GitHub API)
+14. Create or update PR
 
 See [Execution Phases](./execution-phases.md) for detailed information on each
 step.
@@ -89,7 +91,8 @@ src/
 │   │   ├── auth.ts            # GitHub App JWT + installation token
 │   │   └── branch.ts          # Branch management + API commits
 │   ├── pnpm/
-│   │   └── format.ts          # pnpm-workspace.yaml formatting
+│   │   ├── format.ts          # pnpm-workspace.yaml formatting
+│   │   └── upgrade.ts         # pnpm version upgrade logic
 │   ├── changeset/
 │   │   └── create.ts          # Changeset file generation
 │   └── lockfile/
@@ -129,6 +132,7 @@ The main phase follows this data flow:
 ```text
 Inputs (action.yml)
   │
+  ├─ update-pnpm ───────────> upgradePnpm() ──────> version change
   ├─ config-dependencies ──> pnpm add --config ──> version changes
   ├─ dependencies ──────────> pnpm up --latest ──> version changes
   │

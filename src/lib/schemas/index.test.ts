@@ -10,6 +10,7 @@ const validInputs = {
 	configDependencies: ["typescript"],
 	dependencies: ["effect"],
 	run: [],
+	updatePnpm: true,
 };
 
 describe("decodeActionInputsEither", () => {
@@ -82,6 +83,7 @@ describe("schema types", () => {
 			configDependencies: ["ts"],
 			dependencies: [],
 			run: [],
+			updatePnpm: true,
 		});
 		expect(Either.isLeft(result)).toBe(true);
 	});
