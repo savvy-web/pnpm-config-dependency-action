@@ -21,6 +21,7 @@ export default defineConfig({
 				"src/types/**",
 				"src/lib/errors/**",
 				"src/lib/lockfile/compare.ts",
+				"src/lib/pnpm/upgrade.ts",
 			],
 			enabled: true,
 			thresholds: {

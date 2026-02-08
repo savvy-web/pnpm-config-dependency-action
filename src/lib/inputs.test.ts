@@ -32,6 +32,11 @@ const mockInputs = (inputs: Record<string, string>) => {
 	vi.mocked(getInput).mockImplementation((name: string) => inputs[name] ?? "");
 };
 
+// Helper to set up mocked boolean inputs
+const mockBooleanInputs = (inputs: Record<string, boolean>) => {
+	vi.mocked(getBooleanInput).mockImplementation((name: string) => inputs[name] ?? false);
+};
+
 describe("parseMultilineInput", () => {
 	it("parses newline-separated strings into array", () => {
 		const result = parseMultilineInput("typescript\n@biomejs/biome\neffect");
@@ -84,6 +89,7 @@ describe("parseInputs", () => {
 			dependencies: "effect",
 			run: "",
 		});
+		mockBooleanInputs({ "update-pnpm": true });
 
 		const result = await Effect.runPromise(parseInputs);
 
@@ -92,6 +98,7 @@ describe("parseInputs", () => {
 		expect(result.configDependencies).toEqual(["typescript"]);
 		expect(result.dependencies).toEqual(["effect"]);
 		expect(result.run).toEqual([]);
+		expect(result.updatePnpm).toBe(true);
 	});
 
 	it("uses default branch when not specified", async () => {
@@ -108,7 +115,7 @@ describe("parseInputs", () => {
 		expect(result.branch).toBe("pnpm/config-deps");
 	});
 
-	it("fails when no dependencies specified", async () => {
+	it("fails when no dependencies specified and updatePnpm is false", async () => {
 		mockInputs({
 			"app-id": "12345",
 			"app-private-key": "fake-key",
@@ -117,9 +124,27 @@ describe("parseInputs", () => {
 			dependencies: "",
 			run: "",
 		});
+		mockBooleanInputs({ "update-pnpm": false });
 
 		const result = await Effect.runPromise(Effect.either(parseInputs));
 		expect(result._tag).toBe("Left");
+	});
+
+	it("succeeds with only update-pnpm true and no dependencies", async () => {
+		mockInputs({
+			"app-id": "12345",
+			"app-private-key": "fake-key",
+			branch: "pnpm/config-deps",
+			"config-dependencies": "",
+			dependencies: "",
+			run: "",
+		});
+		mockBooleanInputs({ "update-pnpm": true });
+
+		const result = await Effect.runPromise(parseInputs);
+		expect(result.updatePnpm).toBe(true);
+		expect(result.configDependencies).toEqual([]);
+		expect(result.dependencies).toEqual([]);
 	});
 
 	it("fails for invalid branch name", async () => {

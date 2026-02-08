@@ -78,6 +78,16 @@ run: |
   pnpm build
 ```
 
+#### `update-pnpm`
+
+When set to `true`, the action checks for a newer pnpm version and updates the
+`packageManager` and `devEngines` fields in `package.json` if one is available.
+The version change is tracked as a config dependency update. Default: `true`.
+
+```yaml
+update-pnpm: false # Disable automatic pnpm upgrades
+```
+
 #### `dry-run`
 
 When set to `true`, the action detects changes and reports them in the GitHub

@@ -23,10 +23,17 @@ vi.mock("@actions/github", () => ({
 
 import type { Octokit } from "@octokit/rest";
 import { Effect, Layer, LogLevel, Logger } from "effect";
+import { pnpmUpgradeUpdate } from "./lib/__test__/fixtures.js";
 import { GitHubApiError, PnpmError } from "./lib/schemas/errors.js";
 import type { GitHubClientService, PnpmExecutorService } from "./lib/services/index.js";
 import { GitHubClient, PnpmExecutor } from "./lib/services/index.js";
-import { createOrUpdatePR, runCommands, updateConfigDependencies, updateRegularDependencies } from "./main.js";
+import {
+	createOrUpdatePR,
+	generatePRBody,
+	runCommands,
+	updateConfigDependencies,
+	updateRegularDependencies,
+} from "./main.js";
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Test Helpers
@@ -125,15 +132,14 @@ describe("updateConfigDependencies", () => {
 });
 
 describe("updateRegularDependencies", () => {
-	it("returns empty array for empty dependencies", async () => {
-		const result = await runWithPnpm(updateRegularDependencies([]));
-		expect(result).toEqual([]);
+	it("completes without error for empty dependencies", async () => {
+		await runWithPnpm(updateRegularDependencies([]));
 	});
 
 	it("calls update for each pattern", async () => {
 		const updateCalls: string[] = [];
 
-		const result = await runWithPnpm(updateRegularDependencies(["effect", "@effect/*"]), {
+		await runWithPnpm(updateRegularDependencies(["effect", "@effect/*"]), {
 			update: (pattern) => {
 				updateCalls.push(pattern);
 				return Effect.succeed("ok");
@@ -141,12 +147,14 @@ describe("updateRegularDependencies", () => {
 		});
 
 		expect(updateCalls).toEqual(["effect", "@effect/*"]);
-		expect(result).toHaveLength(2);
 	});
 
 	it("continues on failures", async () => {
-		const result = await runWithPnpm(updateRegularDependencies(["effect", "broken-pkg"]), {
+		const updateCalls: string[] = [];
+
+		await runWithPnpm(updateRegularDependencies(["effect", "broken-pkg"]), {
 			update: (pattern) => {
+				updateCalls.push(pattern);
 				if (pattern === "broken-pkg") {
 					return Effect.fail(
 						new PnpmError({ command: "up --latest", dependency: pattern, exitCode: 1, stderr: "error" }),
@@ -156,8 +164,8 @@ describe("updateRegularDependencies", () => {
 			},
 		});
 
-		expect(result).toHaveLength(1);
-		expect(result[0].dependency).toBe("effect");
+		// Both patterns should have been attempted
+		expect(updateCalls).toEqual(["effect", "broken-pkg"]);
 	});
 });
 
@@ -266,5 +274,30 @@ describe("createOrUpdatePR", () => {
 		);
 
 		expect(result.number).toBe(0);
+	});
+});
+
+describe("generatePRBody", () => {
+	it("includes pnpm upgrade in config dependencies table", () => {
+		const updates = [
+			pnpmUpgradeUpdate,
+			{ dependency: "typescript", from: "5.3.3", to: "5.4.0", type: "config" as const, package: null },
+		];
+
+		const body = generatePRBody(updates, []);
+
+		expect(body).toContain("Config Dependencies");
+		expect(body).toContain("`pnpm`");
+		expect(body).toContain("10.28.2");
+		expect(body).toContain("10.29.0");
+		expect(body).toContain("`typescript`");
+	});
+
+	it("includes only pnpm upgrade when no other updates", () => {
+		const body = generatePRBody([pnpmUpgradeUpdate], []);
+
+		expect(body).toContain("Config Dependencies");
+		expect(body).toContain("`pnpm`");
+		expect(body).not.toContain("Regular Dependencies");
 	});
 });
