@@ -112,5 +112,8 @@
 		"editor.formatOnSave": true,
 		"editor.formatOnPaste": true
 	},
-	"markdown.styles": [".vscode/static/github-markdown.css"]
+	"markdown.styles": [
+		".vscode/static/github-markdown.css"
+	],
+	"vitest.disableWorkspaceWarning": true
 }
