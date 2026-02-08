@@ -1,6 +1,11 @@
 #!/usr/bin/env sh
-# Skip in CI environment
-[ -n "$CI" ] || [ -n "$GITHUB_ACTIONS" ] && exit 0
+# Commit-msg hook with savvy-commit managed section
+# Custom hooks can go above or below the managed section
+
+# --- BEGIN SAVVY-COMMIT MANAGED SECTION ---
+# DO NOT EDIT between these markers - managed by savvy-commit
+# Skip managed section in CI environment
+if ! { [ -n "$CI" ] || [ -n "$GITHUB_ACTIONS" ]; }; then
 
 # Get repo root directory
 ROOT=$(git rev-parse --show-toplevel)
@@ -28,13 +33,14 @@ detect_pm() {
   fi
 }
 
-# Get the dlx/npx equivalent command for the detected package manager
+# Run commitlint via the detected package manager
 PM=$(detect_pm)
 case "$PM" in
-  pnpm) CMD="pnpm dlx" ;;
-  yarn) CMD="yarn dlx" ;;
-  bun)  CMD="bun x" ;;
-  *)    CMD="npx --no --" ;;
+  pnpm) pnpm dlx commitlint --config "$ROOT/lib/configs/commitlint.config.ts" --edit "$1" ;;
+  yarn) yarn dlx commitlint --config "$ROOT/lib/configs/commitlint.config.ts" --edit "$1" ;;
+  bun)  bun x commitlint --config "$ROOT/lib/configs/commitlint.config.ts" --edit "$1" ;;
+  *)    npx --no -- commitlint --config "$ROOT/lib/configs/commitlint.config.ts" --edit "$1" ;;
 esac
 
-$CMD commitlint --config "$ROOT/lib/configs/commitlint.config.ts" --edit "$1"
+fi
+# --- END SAVVY-COMMIT MANAGED SECTION ---

@@ -1433,12 +1433,12 @@ Effect distinguishes between **expected errors** (typed, recoverable) and **unex
 
 **Strategy by Error Type:**
 
-| Scenario           | Strategy             | Effect Pattern          |
-| ------------------ | -------------------- | ----------------------- |
-| Critical errors    | Fail fast            | `Effect.fail()`         |
-| Batch operations   | Accumulate           | `Effect.partition()`    |
-| Transient failures | Retry                | `Effect.retry(Schedule)`|
-| Optional features  | Graceful degradation | `Effect.catchAll()`     |
+| Scenario | Strategy | Effect Pattern |
+| --- | --- | --- |
+| Critical errors | Fail fast | `Effect.fail()` |
+| Batch operations | Accumulate | `Effect.partition()` |
+| Transient failures | Retry | `Effect.retry(Schedule)` |
+| Optional features | Graceful degradation | `Effect.catchAll()` |
 
 ### Typed Errors with Data.TaggedError
 

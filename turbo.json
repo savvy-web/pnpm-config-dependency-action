@@ -8,8 +8,8 @@
 			"inputs": [
 				"$TURBO_DEFAULT$",
 				"$TURBO_ROOT$/package.json",
-				"$TURBO_ROOT$/pnpm-lock.yml",
-				"$TURBO_ROOT$/pnpm-workspace.yml",
+				"$TURBO_ROOT$/pnpm-lock.yaml",
+				"$TURBO_ROOT$/pnpm-workspace.yaml",
 				"package.json",
 				"rslib.config.ts",
 				"tsconfig.json",
@@ -23,7 +23,7 @@
 		"types:check": {
 			"cache": true,
 			"dependsOn": [],
-			"inputs": ["*.ts", "lib/**/*.ts", "lib/**/*.mts"],
+			"inputs": ["*.ts", "src/**/*.ts", "lib/**/*.ts", "lib/**/*.mts"],
 			"outputLogs": "errors-only",
 			"outputs": []
 		}

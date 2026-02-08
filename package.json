@@ -3,7 +3,14 @@
 	"version": "0.1.0",
 	"private": true,
 	"description": "GitHub Action for updating pnpm config dependencies and regular dependencies with automated PR creation",
-	"keywords": ["github-action", "pnpm", "config-dependencies", "dependency-updates", "monorepo", "changesets"],
+	"keywords": [
+		"github-action",
+		"pnpm",
+		"config-dependencies",
+		"dependency-updates",
+		"monorepo",
+		"changesets"
+	],
 	"homepage": "https://github.com/savvy-web/pnpm-config-dependency-action#readme",
 	"bugs": {
 		"url": "https://github.com/savvy-web/pnpm-config-dependency-action/issues"
@@ -65,9 +72,9 @@
 		"@changesets/cli": "catalog:silk",
 		"@microsoft/api-extractor": "catalog:silk",
 		"@rslib/core": "catalog:silk",
-		"@savvy-web/commitlint": "^0.2.1",
-		"@savvy-web/github-action-builder": "^0.1.0",
-		"@savvy-web/lint-staged": "^0.2.1",
+		"@savvy-web/commitlint": "^0.3.1",
+		"@savvy-web/github-action-builder": "^0.1.1",
+		"@savvy-web/lint-staged": "^0.3.1",
 		"@types/node": "catalog:silk",
 		"@types/semver": "^7.7.1",
 		"@typescript/native-preview": "catalog:silk",

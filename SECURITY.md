@@ -6,8 +6,8 @@ This project is pre-release (`0.x`). Only the latest version receives security
 updates.
 
 | Version | Supported |
-| ------- | --------- |
-| Latest  | Yes       |
+| --- | --- |
+| Latest | Yes |
 
 ## Reporting a Vulnerability
 

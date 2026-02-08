@@ -30,7 +30,7 @@ jobs:
       checks: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: main
           fetch-depth: 0
@@ -39,7 +39,7 @@ jobs:
         uses: savvy-web/workflow-runtime-action@main
       - name: Update Config Dependencies
         id: update
-        uses: savvy-web/pnpm-config-dependency-action@feat/implementation
+        uses: savvy-web/pnpm-config-dependency-action@main
         with:
           app-id: ${{ secrets.APP_ID }}
           app-private-key: ${{ secrets.APP_PRIVATE_KEY }}
