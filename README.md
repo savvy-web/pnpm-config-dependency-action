@@ -61,6 +61,7 @@ jobs:
 | `run` | No | `""` | Commands to run after updates (one per line) |
 | `dry-run` | No | `false` | Detect changes without committing |
 | `log-level` | No | `info` | Logging verbosity (`info` or `debug`) |
+| `auto-merge` | No | `""` | Enable auto-merge on the PR (`merge`, `squash`, or `rebase`) |
 | `skip-token-revoke` | No | `false` | Skip revoking the GitHub App token on cleanup |
 
 ## Outputs

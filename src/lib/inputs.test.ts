@@ -220,6 +220,38 @@ describe("parseInputs", () => {
 		const result = await Effect.runPromise(parseInputs);
 		expect(result.run).toEqual(["pnpm lint:fix", "pnpm test"]);
 	});
+
+	it("parses auto-merge input with empty default", async () => {
+		mockInputs({
+			"app-id": "12345",
+			"app-private-key": "fake-key",
+			branch: "pnpm/config-deps",
+			"config-dependencies": "typescript",
+			dependencies: "",
+			run: "",
+			"auto-merge": "",
+		});
+		mockBooleanInputs({ "update-pnpm": true });
+
+		const result = await Effect.runPromise(parseInputs);
+		expect(result.autoMerge).toBe("");
+	});
+
+	it("parses auto-merge input with squash value", async () => {
+		mockInputs({
+			"app-id": "12345",
+			"app-private-key": "fake-key",
+			branch: "pnpm/config-deps",
+			"config-dependencies": "typescript",
+			dependencies: "",
+			run: "",
+			"auto-merge": "squash",
+		});
+		mockBooleanInputs({ "update-pnpm": true });
+
+		const result = await Effect.runPromise(parseInputs);
+		expect(result.autoMerge).toBe("squash");
+	});
 });
 
 describe("getFieldFromParseIssue", () => {

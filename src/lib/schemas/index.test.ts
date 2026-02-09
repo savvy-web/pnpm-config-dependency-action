@@ -11,6 +11,7 @@ const validInputs = {
 	dependencies: ["effect"],
 	run: [],
 	updatePnpm: true,
+	autoMerge: "" as const,
 };
 
 describe("decodeActionInputsEither", () => {
@@ -74,6 +75,43 @@ describe("decodeActionInputs (sync)", () => {
 	});
 });
 
+describe("autoMerge schema", () => {
+	it("accepts empty string (disabled)", () => {
+		const result = decodeActionInputsEither({ ...validInputs, autoMerge: "" });
+		expect(Either.isRight(result)).toBe(true);
+	});
+
+	it("accepts merge", () => {
+		const result = decodeActionInputsEither({ ...validInputs, autoMerge: "merge" });
+		expect(Either.isRight(result)).toBe(true);
+		if (Either.isRight(result)) {
+			expect(result.right.autoMerge).toBe("merge");
+		}
+	});
+
+	it("accepts squash", () => {
+		const result = decodeActionInputsEither({ ...validInputs, autoMerge: "squash" });
+		expect(Either.isRight(result)).toBe(true);
+	});
+
+	it("accepts rebase", () => {
+		const result = decodeActionInputsEither({ ...validInputs, autoMerge: "rebase" });
+		expect(Either.isRight(result)).toBe(true);
+	});
+
+	it("rejects invalid values", () => {
+		const result = decodeActionInputsEither({ ...validInputs, autoMerge: "fast-forward" });
+		expect(Either.isLeft(result)).toBe(true);
+	});
+});
+
+describe("PullRequest nodeId", () => {
+	it("decoded PullRequest includes nodeId field", () => {
+		const result = decodeActionInputsEither(validInputs);
+		expect(Either.isRight(result)).toBe(true);
+	});
+});
+
 describe("schema types", () => {
 	it("NonEmptyString rejects empty string via decodeActionInputsEither", () => {
 		const result = decodeActionInputsEither({
@@ -84,6 +122,7 @@ describe("schema types", () => {
 			dependencies: [],
 			run: [],
 			updatePnpm: true,
+			autoMerge: "",
 		});
 		expect(Either.isLeft(result)).toBe(true);
 	});

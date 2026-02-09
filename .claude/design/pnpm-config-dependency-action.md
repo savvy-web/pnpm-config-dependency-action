@@ -221,7 +221,10 @@ graph TD
     V --> W
     W --> X[Push Branch]
     X --> Y[Create/Update PR]
-    Y --> Z[Update Check Run]
+    Y --> Y2{Auto-merge enabled?}
+    Y2 -->|Yes| Y3[Enable Auto-merge]
+    Y2 -->|No| Z
+    Y3 --> Z[Update Check Run]
     Z --> AA[Write Summary]
     AA --> AB[post.ts: Cleanup]
     R --> AB
@@ -335,6 +338,11 @@ The action executes in **14 distinct steps** (implemented in `src/main.ts`):
 - Check if PR already exists for branch
 - Create new PR or update existing PR body
 - Generate detailed summary with dependency tables (pnpm upgrade appears in Config Dependencies table)
+- If `inputs.autoMerge` is set to a merge method ("merge", "squash", or "rebase"), enable auto-merge via GitHub GraphQL API
+  - Uses `enablePullRequestAutoMerge` mutation with the PR's node ID
+  - Requires repository "Allow auto-merge" setting enabled
+  - Requires branch protection with required status checks on target branch
+  - If enabling auto-merge fails, log warning but do not fail the action
 - Update check run with success/failure
 - Write GitHub Actions summary
 
@@ -347,7 +355,7 @@ import type { Effect } from "effect";
 import type { Octokit } from "@octokit/rest";
 
 /**
- * Parsed action inputs from action.yml (7 fields, defined via Effect Schema).
+ * Parsed action inputs from action.yml (8 fields, defined via Effect Schema).
  */
 export interface ActionInputs {
  readonly appId: string;           // NonEmptyString
@@ -357,6 +365,7 @@ export interface ActionInputs {
  readonly dependencies: ReadonlyArray<string>;
  readonly run: ReadonlyArray<string>;
  readonly updatePnpm: boolean;     // default: true
+ readonly autoMerge: "" | "merge" | "squash" | "rebase"; // default: ""
 }
 
 /**
@@ -445,6 +454,7 @@ export interface PullRequest {
  readonly number: number;
  readonly url: string;
  readonly created: boolean; // true if newly created, false if updated
+ readonly nodeId: string;
 }
 
 /**
@@ -730,6 +740,18 @@ export const main: Effect.Effect<ActionResult, never> = Effect.gen(function* () 
  // Phase 7: Pull Request
  const pr = yield* createOrUpdatePR(client, context, branchResult.branch, allUpdates, changedPackages);
 
+ // Phase 7.5: Enable Auto-merge (if configured)
+ if (inputs.autoMerge !== "") {
+  yield* enableAutoMerge(client, pr.nodeId, inputs.autoMerge).pipe(
+   Effect.catchAll((error) =>
+    Effect.gen(function* () {
+     yield* logWarning(`Failed to enable auto-merge: ${error.message}`);
+     return Effect.succeed(void 0);
+    })
+   )
+  );
+ }
+
  // Phase 8: Finalization
  yield* updateCheckRun(checkRun.id, "completed", "success", `Updated ${allUpdates.length} dependencies`);
  yield* writeSummary(generateSummaryMarkdown(allUpdates, changedPackages, pr));
@@ -819,7 +841,8 @@ export const cleanup: Effect.Effect<void, never> = Effect.gen(function* () {
 Parse and validate action inputs from `action.yml`.
 
 Uses Effect Schema (`src/lib/schemas/index.ts`) for type-safe validation and decoding.
-The `ActionInputs` schema has 7 fields including the `updatePnpm: Schema.Boolean` field.
+The `ActionInputs` schema has 8 fields including the `updatePnpm: Schema.Boolean` field and
+the `autoMerge` field (values: `""`, `"merge"`, `"squash"`, or `"rebase"`).
 
 **Validation Logic:**
 
@@ -859,8 +882,18 @@ export const parseInputs: Effect.Effect<ActionInputs, InvalidInputError> = Effec
   );
  }
 
+ const autoMerge = yield* getInput("auto-merge").pipe(
+  Effect.map((val) => {
+   const normalized = val.trim().toLowerCase();
+   if (normalized === "" || normalized === "merge" || normalized === "squash" || normalized === "rebase") {
+    return normalized as "" | "merge" | "squash" | "rebase";
+   }
+   return ""; // default to disabled for invalid values
+  })
+ );
+
  return {
-  appId, appPrivateKey, branch, updatePnpm,
+  appId, appPrivateKey, branch, updatePnpm, autoMerge,
   configDependencies: configDeps, dependencies: deps, run: []
  };
 });
@@ -1433,6 +1466,7 @@ class GitHubClient extends Context.Tag("GitHubClient")<
   readonly createBranch: (name: string, sha: string) => Effect.Effect<void, GitHubApiError>;
   readonly createPR: (data: PRData) => Effect.Effect<PullRequest, GitHubApiError>;
   readonly createCheckRun: (name: string) => Effect.Effect<CheckRun, GitHubApiError>;
+  readonly enableAutoMerge: (nodeId: string, method: "MERGE" | "SQUASH" | "REBASE") => Effect.Effect<void, GitHubApiError>;
  }
 >() {}
 
@@ -1511,7 +1545,19 @@ const GitHubClientLive = (token: string) =>
    Effect.tryPromise({
     try: () => octokit.rest.pulls.create({ ...context.repo, ...data }),
     catch: (e) => new GitHubApiError({ operation: "pulls.create", message: String(e) })
-   }).pipe(Effect.map((r) => ({ number: r.data.number, url: r.data.html_url, created: true }))),
+   }).pipe(Effect.map((r) => ({ number: r.data.number, url: r.data.html_url, created: true, nodeId: r.data.node_id }))),
+
+  enableAutoMerge: (nodeId, method) =>
+   Effect.tryPromise({
+    try: () => octokit.graphql(`
+     mutation($pullRequestId: ID!, $mergeMethod: PullRequestMergeMethod!) {
+      enablePullRequestAutoMerge(input: { pullRequestId: $pullRequestId, mergeMethod: $mergeMethod }) {
+       pullRequest { id }
+      }
+     }
+    `, { pullRequestId: nodeId, mergeMethod: method }),
+    catch: (e) => new GitHubApiError({ operation: "enablePullRequestAutoMerge", message: String(e) })
+   }).pipe(Effect.asVoid),
 
   createCheckRun: (name) =>
    Effect.tryPromise({
@@ -1873,6 +1919,19 @@ export const createCheckRun = (
 - Maintains comment threads
 - Shows evolution of changes
 
+**Auto-merge Support:**
+
+The action supports enabling auto-merge on dependency update PRs via the `auto-merge` input:
+
+- **Values:** `""` (disabled, default), `"merge"`, `"squash"`, or `"rebase"`
+- **Implementation:** Uses GitHub GraphQL API `enablePullRequestAutoMerge` mutation
+- **Requirements:**
+  - Repository must have "Allow auto-merge" setting enabled in Settings > General
+  - Target branch (usually `main`) must have branch protection with required status checks configured
+  - The GitHub App must have `pull-requests: write` permission
+- **Error Handling:** If enabling auto-merge fails (e.g., repository settings not configured), a warning is logged but the action does not fail
+- **Use Case:** Allows fully automated dependency updates when combined with passing CI checks
+
 **PR Description Template:**
 
 ```markdown
@@ -2178,6 +2237,7 @@ changeset creation, and GitHub PR management via App authentication.
 - Changeset creation for affected packages
 - Commit via GitHub API (verified/signed commits)
 - PR creation and update with Dependabot-style formatting
+- Auto-merge support via GitHub GraphQL API
 - Dry-run mode for testing
 - Debug logging mode
 

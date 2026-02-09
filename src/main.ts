@@ -223,7 +223,7 @@ const program = Effect.gen(function* () {
 
 		// Merge config dependency updates into changes for changeset creation
 		// Config updates need to be converted to LockfileChange format
-		const configChangesForChangeset = configUpdates.map((u) => ({
+		const configChangesForChangeset = [...configUpdatesFromPnpm, ...configUpdates].map((u) => ({
 			type: "config" as const,
 			dependency: u.dependency,
 			from: u.from,
@@ -250,6 +250,20 @@ const program = Effect.gen(function* () {
 		} else {
 			yield* Effect.logInfo("Step 13: Creating/updating PR");
 			pr = yield* createOrUpdatePR(inputs.branch, allUpdates, changesets);
+
+			// Enable auto-merge if configured
+			if (inputs.autoMerge && pr && pr.nodeId) {
+				const mergeMethod = inputs.autoMerge.toUpperCase() as "MERGE" | "SQUASH" | "REBASE";
+				yield* github.enableAutoMerge(pr.nodeId, mergeMethod).pipe(
+					Effect.tap(() => Effect.logInfo(`Auto-merge enabled (${inputs.autoMerge})`)),
+					Effect.catchAll((error) =>
+						Effect.logWarning(
+							`Failed to enable auto-merge: ${error.message}. ` +
+								`Ensure the repository has "Allow auto-merge" enabled and branch protection rules configured.`,
+						),
+					),
+				);
+			}
 		}
 
 		// Update check run
@@ -323,6 +337,12 @@ export const updateConfigDependencies = (
 				const versionAfter = yield* getConfigDependencyVersion(dep).pipe(
 					Effect.catchAll(() => Effect.succeed("unknown")),
 				);
+
+				// Skip no-op updates where version didn't change
+				if (versionBefore !== null && versionAfter === versionBefore) {
+					yield* Effect.logInfo(`${dep} is already up-to-date at ${versionBefore}`);
+					continue;
+				}
 
 				results.push({
 					dependency: dep,
@@ -443,7 +463,7 @@ export const createOrUpdatePR = (
 				head: branch,
 				base: "main",
 			})
-			.pipe(Effect.catchAll(() => Effect.succeed({ number: 0, url: "", created: false } as PullRequest)));
+			.pipe(Effect.catchAll(() => Effect.succeed({ number: 0, url: "", created: false, nodeId: "" } as PullRequest)));
 
 		if (pr.number > 0) {
 			yield* Effect.logInfo(`Created PR #${pr.number}: ${pr.url}`);

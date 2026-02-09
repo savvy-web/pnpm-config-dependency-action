@@ -59,6 +59,13 @@ inputs:
         pnpm test
     required: false
     default: ""
+  auto-merge:
+    description: |
+      Enable auto-merge on the dependency update PR.
+      Requires branch protection with required status checks.
+      Values: merge, squash, rebase, or empty to disable.
+    required: false
+    default: ""
 outputs:
   token:
     description: Generated GitHub App installation token
