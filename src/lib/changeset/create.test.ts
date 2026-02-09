@@ -93,6 +93,24 @@ describe("createChangesets", () => {
 		expect(result[0].summary).toContain("typescript");
 	});
 
+	it("includes pnpm upgrade in root changeset summary", async () => {
+		mkdirSync(join(tempDir, ".changeset"));
+
+		const changes: LockfileChange[] = [
+			{ type: "config", dependency: "pnpm", from: "10.28.2", to: "10.29.0", affectedPackages: [] },
+			{ type: "config", dependency: "typescript", from: "5.3.3", to: "5.4.0", affectedPackages: [] },
+		];
+
+		const result = await Effect.runPromise(createChangesets(changes, tempDir));
+
+		expect(result).toHaveLength(1);
+		expect(result[0].packages).toEqual([]);
+		expect(result[0].summary).toContain("pnpm");
+		expect(result[0].summary).toContain("10.28.2");
+		expect(result[0].summary).toContain("10.29.0");
+		expect(result[0].summary).toContain("typescript");
+	});
+
 	it("creates separate changesets for packages and root", async () => {
 		mkdirSync(join(tempDir, ".changeset"));
 

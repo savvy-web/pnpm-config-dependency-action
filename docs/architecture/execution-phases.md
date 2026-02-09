@@ -24,8 +24,8 @@ Detailed breakdown of the 14-step workflow executed in the main phase.
 - Retrieves the GitHub App installation token from state (saved by the pre
   phase)
 - Parses and validates all action inputs using Effect Schema
-- Validates that at least one of `config-dependencies` or `dependencies` is
-  specified
+- Validates that at least one of `config-dependencies`, `dependencies`, or
+  `update-pnpm` is active
 - Creates a GitHub check run for status visibility in the UI
 
 ## Step 2: Branch Management
@@ -159,6 +159,8 @@ In dry-run mode, this step is skipped entirely.
   - A summary of config and regular dependency changes in table format
   - Changeset details in expandable sections
   - Links to npm for each updated package
+- If the `auto-merge` input is set, enables auto-merge on the PR via the GitHub
+  GraphQL API. Failures are logged as warnings without failing the action.
 - Sets action outputs (`pr-number`, `pr-url`, `updates-count`, `has-changes`)
 - Writes a GitHub Actions job summary with the same information
 

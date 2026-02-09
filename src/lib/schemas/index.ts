@@ -84,6 +84,9 @@ export const ActionInputs = Schema.Struct({
 	updatePnpm: Schema.Boolean.annotations({
 		description: "Whether to update pnpm version in packageManager and devEngines fields",
 	}),
+	autoMerge: Schema.Literal("", "merge", "squash", "rebase").annotations({
+		description: "Auto-merge method for the dependency update PR",
+	}),
 }).annotations({
 	identifier: "ActionInputs",
 	title: "Action Inputs",
@@ -233,6 +236,7 @@ export const PullRequest = Schema.Struct({
 	number: Schema.Number.pipe(Schema.positive()),
 	url: Schema.String.pipe(Schema.startsWith("https://")),
 	created: Schema.Boolean,
+	nodeId: Schema.String,
 }).annotations({
 	identifier: "PullRequest",
 	title: "Pull Request",

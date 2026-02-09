@@ -21,9 +21,21 @@ vi.mock("@actions/github", () => ({
 	},
 }));
 
+// Mock pnpm/format to control getConfigDependencyVersion in tests
+vi.mock("./lib/pnpm/format.js", async (importOriginal) => {
+	const original = await importOriginal<typeof import("./lib/pnpm/format.js")>();
+	const { Effect } = await import("effect");
+	return {
+		...original,
+		// Default: returns null (simulates no workspace yaml / dep not found)
+		getConfigDependencyVersion: vi.fn(() => Effect.succeed(null)),
+	};
+});
+
 import type { Octokit } from "@octokit/rest";
 import { Effect, Layer, LogLevel, Logger } from "effect";
 import { pnpmUpgradeUpdate } from "./lib/__test__/fixtures.js";
+import { getConfigDependencyVersion } from "./lib/pnpm/format.js";
 import { GitHubApiError, PnpmError } from "./lib/schemas/errors.js";
 import type { GitHubClientService, PnpmExecutorService } from "./lib/services/index.js";
 import { GitHubClient, PnpmExecutor } from "./lib/services/index.js";
@@ -75,8 +87,10 @@ const makeTestGitHubClient = (overrides: Partial<GitHubClientService> = {}): Lay
 		createCheckRun: () => Effect.succeed({ id: 1, name: "test", status: "in_progress" as const }),
 		updateCheckRun: noop,
 		findPR: () => Effect.succeed(null),
-		createPR: () => Effect.succeed({ number: 1, url: "https://github.com/test/pull/1", created: true }),
+		createPR: () =>
+			Effect.succeed({ number: 1, url: "https://github.com/test/pull/1", created: true, nodeId: "PR_kwDOTest1" }),
 		updatePR: noop,
+		enableAutoMerge: noop,
 		...overrides,
 	};
 	return Layer.succeed(GitHubClient, service);
@@ -128,6 +142,18 @@ describe("updateConfigDependencies", () => {
 
 		expect(result[0].type).toBe("config");
 		expect(result[0].package).toBe(null);
+	});
+
+	it("excludes no-op updates where version did not change", async () => {
+		// Mock getConfigDependencyVersion to return the same version before and after
+		vi.mocked(getConfigDependencyVersion).mockReturnValue(Effect.succeed("0.4.1"));
+
+		const result = await runWithPnpm(updateConfigDependencies(["@savvy-web/pnpm-plugin-silk"]));
+
+		expect(result).toHaveLength(0);
+
+		// Restore default mock
+		vi.mocked(getConfigDependencyVersion).mockReturnValue(Effect.succeed(null));
 	});
 });
 
@@ -227,6 +253,7 @@ describe("createOrUpdatePR", () => {
 					number: 42,
 					url: "https://github.com/test/pull/42",
 					created: true,
+					nodeId: "PR_kwDOTest42",
 				}),
 		});
 
@@ -246,6 +273,7 @@ describe("createOrUpdatePR", () => {
 					number: 10,
 					url: "https://github.com/test/pull/10",
 					created: false,
+					nodeId: "PR_kwDOTest10",
 				}),
 			updatePR: (num) => {
 				updatedNumbers.push(num);
@@ -274,6 +302,56 @@ describe("createOrUpdatePR", () => {
 		);
 
 		expect(result.number).toBe(0);
+	});
+
+	it("returns nodeId from created PR", async () => {
+		const layer = makeTestGitHubClient({
+			findPR: () => Effect.succeed(null),
+			createPR: () =>
+				Effect.succeed({
+					number: 42,
+					url: "https://github.com/test/pull/42",
+					created: true,
+					nodeId: "PR_kwDOTestNode42",
+				}),
+		});
+
+		const result = await Effect.runPromise(
+			createOrUpdatePR("pnpm/config", [], []).pipe(Effect.provide(layer), Logger.withMinimumLogLevel(LogLevel.None)),
+		);
+
+		expect(result.nodeId).toBe("PR_kwDOTestNode42");
+	});
+
+	it("returns nodeId from existing PR", async () => {
+		const layer = makeTestGitHubClient({
+			findPR: () =>
+				Effect.succeed({
+					number: 10,
+					url: "https://github.com/test/pull/10",
+					created: false,
+					nodeId: "PR_kwDOExisting10",
+				}),
+		});
+
+		const result = await Effect.runPromise(
+			createOrUpdatePR("pnpm/config", [], []).pipe(Effect.provide(layer), Logger.withMinimumLogLevel(LogLevel.None)),
+		);
+
+		expect(result.nodeId).toBe("PR_kwDOExisting10");
+	});
+
+	it("returns empty nodeId on create failure", async () => {
+		const layer = makeTestGitHubClient({
+			findPR: () => Effect.succeed(null),
+			createPR: () => Effect.fail(new GitHubApiError({ operation: "pulls.create", statusCode: 500, message: "fail" })),
+		});
+
+		const result = await Effect.runPromise(
+			createOrUpdatePR("pnpm/config", [], []).pipe(Effect.provide(layer), Logger.withMinimumLogLevel(LogLevel.None)),
+		);
+
+		expect(result.nodeId).toBe("");
 	});
 });
 

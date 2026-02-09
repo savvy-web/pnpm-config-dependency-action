@@ -63,6 +63,10 @@ export interface GitHubClientService {
 	readonly findPR: (head: string, base: string) => Effect.Effect<PullRequest | null, GitHubApiError>;
 	readonly createPR: (data: PRData) => Effect.Effect<PullRequest, GitHubApiError>;
 	readonly updatePR: (number: number, data: Partial<PRData>) => Effect.Effect<void, GitHubApiError>;
+	readonly enableAutoMerge: (
+		pullRequestId: string,
+		mergeMethod: "MERGE" | "SQUASH" | "REBASE",
+	) => Effect.Effect<void, GitHubApiError>;
 }
 
 /**
@@ -306,7 +310,7 @@ export const makeGitHubClientLayer = (token: string): Layer.Layer<GitHubClient> 
 						state: "open",
 					});
 					if (data.length === 0) return null;
-					return { number: data[0].number, url: data[0].html_url, created: false };
+					return { number: data[0].number, url: data[0].html_url, created: false, nodeId: data[0].node_id };
 				},
 				catch: (e) =>
 					new GitHubApiError({
@@ -325,7 +329,7 @@ export const makeGitHubClientLayer = (token: string): Layer.Layer<GitHubClient> 
 						repo: ghContext.repo.repo,
 						...data,
 					});
-					return { number: pr.number, url: pr.html_url, created: true };
+					return { number: pr.number, url: pr.html_url, created: true, nodeId: pr.node_id };
 				},
 				catch: (e) =>
 					new GitHubApiError({
@@ -349,6 +353,34 @@ export const makeGitHubClientLayer = (token: string): Layer.Layer<GitHubClient> 
 				catch: (e) =>
 					new GitHubApiError({
 						operation: "pulls.update",
+						statusCode: (e as { status?: number }).status,
+						message: String(e),
+					}),
+			}),
+
+		enableAutoMerge: (pullRequestId, mergeMethod) =>
+			Effect.tryPromise({
+				try: async () => {
+					const octokit = new Octokit({ auth: token });
+					await octokit.graphql(
+						`mutation EnableAutoMerge($pullRequestId: ID!, $mergeMethod: PullRequestMergeMethod!) {
+							enablePullRequestAutoMerge(input: {
+								pullRequestId: $pullRequestId
+								mergeMethod: $mergeMethod
+							}) {
+								pullRequest {
+									autoMergeRequest {
+										enabledAt
+									}
+								}
+							}
+						}`,
+						{ pullRequestId, mergeMethod },
+					);
+				},
+				catch: (e) =>
+					new GitHubApiError({
+						operation: "enablePullRequestAutoMerge",
 						statusCode: (e as { status?: number }).status,
 						message: String(e),
 					}),

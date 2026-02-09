@@ -52,7 +52,8 @@ dependencies: |
   @savvy-web/*
 ```
 
-At least one of `config-dependencies` or `dependencies` must be specified.
+At least one of `config-dependencies`, `dependencies`, or `update-pnpm: true`
+must be active.
 
 #### `branch`
 
@@ -107,6 +108,25 @@ Controls logging verbosity. Default: `info`.
 When set to `true`, the GitHub App installation token is not revoked during
 cleanup. The token expires automatically after 1 hour regardless. Default:
 `false`.
+
+#### `auto-merge`
+
+Enables GitHub's auto-merge on the dependency update PR after it is created.
+Accepted values are `merge`, `squash`, or `rebase`, corresponding to the merge
+strategy. Leave empty (the default) to disable auto-merge.
+
+**Prerequisites:**
+
+- The repository must have "Allow auto-merge" enabled in **Settings > General**
+- Branch protection rules with required status checks must be configured on the
+  base branch
+
+If auto-merge cannot be enabled (e.g., missing prerequisites), the action logs a
+warning and continues -- it does not fail the workflow.
+
+```yaml
+auto-merge: squash # Enable auto-merge with squash strategy
+```
 
 ## Outputs
 
@@ -250,6 +270,20 @@ Run the action twice in the same workflow with different branches:
     dependencies: |
       effect
       @effect/*
+```
+
+### Auto-Merge with Squash
+
+Automatically merge the dependency PR once status checks pass:
+
+```yaml
+- uses: savvy-web/pnpm-config-dependency-action@main
+  with:
+    app-id: ${{ secrets.APP_ID }}
+    app-private-key: ${{ secrets.APP_PRIVATE_KEY }}
+    config-dependencies: |
+      typescript
+    auto-merge: squash
 ```
 
 ### Conditional Updates

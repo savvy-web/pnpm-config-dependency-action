@@ -34,6 +34,14 @@ export const configUpdateNew: DependencyUpdateResult = {
 	package: null,
 };
 
+export const configUpdateNoOp: DependencyUpdateResult = {
+	dependency: "@savvy-web/pnpm-plugin-silk",
+	from: "0.4.1",
+	to: "0.4.1",
+	type: "config",
+	package: null,
+};
+
 export const regularUpdate: DependencyUpdateResult = {
 	dependency: "effect",
 	from: "3.0.0",
@@ -115,4 +123,5 @@ export const pullRequest: PullRequest = {
 	number: 42,
 	url: "https://github.com/savvy-web/repo/pull/42",
 	created: true,
+	nodeId: "PR_kwDOTest42",
 };
