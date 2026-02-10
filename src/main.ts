@@ -219,7 +219,7 @@ const program = Effect.gen(function* () {
 		}
 
 		// Step 11: Create changesets (if enabled)
-		let changesets: ChangesetFile[] = [];
+		let changesets: ReadonlyArray<ChangesetFile> = [];
 		if (inputs.changesets) {
 			yield* Effect.logInfo("Step 11: Creating changesets");
 
