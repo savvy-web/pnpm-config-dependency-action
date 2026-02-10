@@ -84,6 +84,9 @@ export const ActionInputs = Schema.Struct({
 	updatePnpm: Schema.Boolean.annotations({
 		description: "Whether to update pnpm version in packageManager and devEngines fields",
 	}),
+	changesets: Schema.Boolean.annotations({
+		description: "Whether to create changesets for version management",
+	}),
 	autoMerge: Schema.Literal("", "merge", "squash", "rebase").annotations({
 		description: "Auto-merge method for the dependency update PR",
 	}),

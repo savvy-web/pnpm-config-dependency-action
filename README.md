@@ -59,6 +59,7 @@ jobs:
 | `dependencies` | No | `""` | Regular dependencies to update (one per line, supports globs) |
 | `update-pnpm` | No | `true` | Update pnpm version in `packageManager` and `devEngines` fields |
 | `run` | No | `""` | Commands to run after updates (one per line) |
+| `changesets` | No | `true` | Create changesets for version management when `.changeset/` exists |
 | `dry-run` | No | `false` | Detect changes without committing |
 | `log-level` | No | `info` | Logging verbosity (`info` or `debug`) |
 | `auto-merge` | No | `""` | Enable auto-merge on the PR (`merge`, `squash`, or `rebase`) |

@@ -219,20 +219,25 @@ const program = Effect.gen(function* () {
 		}
 
 		// Step 11: Create changesets (if enabled)
-		yield* Effect.logInfo("Step 11: Creating changesets");
+		let changesets: ChangesetFile[] = [];
+		if (inputs.changesets) {
+			yield* Effect.logInfo("Step 11: Creating changesets");
 
-		// Merge config dependency updates into changes for changeset creation
-		// Config updates need to be converted to LockfileChange format
-		const configChangesForChangeset = [...configUpdatesFromPnpm, ...configUpdates].map((u) => ({
-			type: "config" as const,
-			dependency: u.dependency,
-			from: u.from,
-			to: u.to,
-			affectedPackages: [] as string[],
-		}));
+			// Merge config dependency updates into changes for changeset creation
+			// Config updates need to be converted to LockfileChange format
+			const configChangesForChangeset = [...configUpdatesFromPnpm, ...configUpdates].map((u) => ({
+				type: "config" as const,
+				dependency: u.dependency,
+				from: u.from,
+				to: u.to,
+				affectedPackages: [] as string[],
+			}));
 
-		const allChangesForChangeset = [...configChangesForChangeset, ...changes];
-		const changesets = yield* createChangesets(allChangesForChangeset);
+			const allChangesForChangeset = [...configChangesForChangeset, ...changes];
+			changesets = yield* createChangesets(allChangesForChangeset);
+		} else {
+			yield* Effect.logInfo("Step 11: Skipping changesets (disabled)");
+		}
 
 		// Step 12: Commit and push
 		if (dryRun) {

@@ -129,6 +129,7 @@ action exits early with a "neutral" check run conclusion.
 
 ## Step 12: Create Changesets
 
+- Skips entirely if the `changesets` input is `false`
 - Checks whether a `.changeset/` directory exists
 - Groups lockfile changes by affected package
 - Creates a `patch` changeset for each workspace package with dependency changes

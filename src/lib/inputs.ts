@@ -23,6 +23,7 @@ const RawActionInputs = Schema.Struct({
 	dependencies: Schema.Array(Schema.String),
 	run: Schema.Array(Schema.String),
 	updatePnpm: Schema.Boolean,
+	changesets: Schema.Boolean,
 	autoMerge: Schema.Literal("", "merge", "squash", "rebase"),
 });
 
@@ -60,6 +61,7 @@ export const parseInputs: Effect.Effect<ActionInputs, InvalidInputError> = Effec
 		dependencies: parseMultilineInput(getInput("dependencies")),
 		run: parseMultilineInput(getInput("run")),
 		updatePnpm: getBooleanInput("update-pnpm") ?? true,
+		changesets: getBooleanInput("changesets") ?? true,
 		autoMerge: (getInput("auto-merge") || "") as "" | "merge" | "squash" | "rebase",
 	};
 
@@ -82,7 +84,7 @@ export const parseInputs: Effect.Effect<ActionInputs, InvalidInputError> = Effec
 	const dryRun = isDryRun();
 
 	yield* Effect.logInfo(
-		`Parsed inputs: branch=${result.branch}, configDeps=${result.configDependencies.length}, deps=${result.dependencies.length}, run=${result.run.length}, updatePnpm=${result.updatePnpm}, autoMerge=${result.autoMerge || "disabled"}, dryRun=${dryRun}`,
+		`Parsed inputs: branch=${result.branch}, configDeps=${result.configDependencies.length}, deps=${result.dependencies.length}, run=${result.run.length}, updatePnpm=${result.updatePnpm}, changesets=${result.changesets}, autoMerge=${result.autoMerge || "disabled"}, dryRun=${dryRun}`,
 	);
 
 	return result;
