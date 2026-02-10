@@ -1,5 +1,11 @@
 # pnpm-config-dependency-action
 
+## 0.4.0
+
+### Minor Changes
+
+- 85f1c06: Add `changesets` input option (default: `true`) to control whether changesets are created during dependency updates. When set to `false`, the action skips changeset creation, which is useful for repos that don't need the release cycle and just want a dependency update PR.
+
 ## 0.3.0
 
 ### Minor Changes
