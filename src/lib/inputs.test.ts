@@ -89,7 +89,7 @@ describe("parseInputs", () => {
 			dependencies: "effect",
 			run: "",
 		});
-		mockBooleanInputs({ "update-pnpm": true });
+		mockBooleanInputs({ "update-pnpm": true, changesets: true });
 
 		const result = await Effect.runPromise(parseInputs);
 
@@ -99,6 +99,7 @@ describe("parseInputs", () => {
 		expect(result.dependencies).toEqual(["effect"]);
 		expect(result.run).toEqual([]);
 		expect(result.updatePnpm).toBe(true);
+		expect(result.changesets).toBe(true);
 	});
 
 	it("uses default branch when not specified", async () => {
@@ -139,7 +140,7 @@ describe("parseInputs", () => {
 			dependencies: "",
 			run: "",
 		});
-		mockBooleanInputs({ "update-pnpm": true });
+		mockBooleanInputs({ "update-pnpm": true, changesets: true });
 
 		const result = await Effect.runPromise(parseInputs);
 		expect(result.updatePnpm).toBe(true);
@@ -231,7 +232,7 @@ describe("parseInputs", () => {
 			run: "",
 			"auto-merge": "",
 		});
-		mockBooleanInputs({ "update-pnpm": true });
+		mockBooleanInputs({ "update-pnpm": true, changesets: true });
 
 		const result = await Effect.runPromise(parseInputs);
 		expect(result.autoMerge).toBe("");
@@ -247,10 +248,25 @@ describe("parseInputs", () => {
 			run: "",
 			"auto-merge": "squash",
 		});
-		mockBooleanInputs({ "update-pnpm": true });
+		mockBooleanInputs({ "update-pnpm": true, changesets: true });
 
 		const result = await Effect.runPromise(parseInputs);
 		expect(result.autoMerge).toBe("squash");
+	});
+
+	it("parses changesets input as false", async () => {
+		mockInputs({
+			"app-id": "12345",
+			"app-private-key": "fake-key",
+			branch: "pnpm/config-deps",
+			"config-dependencies": "typescript",
+			dependencies: "",
+			run: "",
+		});
+		mockBooleanInputs({ "update-pnpm": true, changesets: false });
+
+		const result = await Effect.runPromise(parseInputs);
+		expect(result.changesets).toBe(false);
 	});
 });
 

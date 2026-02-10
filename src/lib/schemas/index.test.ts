@@ -11,6 +11,7 @@ const validInputs = {
 	dependencies: ["effect"],
 	run: [],
 	updatePnpm: true,
+	changesets: true,
 	autoMerge: "" as const,
 };
 
@@ -105,6 +106,24 @@ describe("autoMerge schema", () => {
 	});
 });
 
+describe("changesets schema", () => {
+	it("accepts true", () => {
+		const result = decodeActionInputsEither({ ...validInputs, changesets: true });
+		expect(Either.isRight(result)).toBe(true);
+		if (Either.isRight(result)) {
+			expect(result.right.changesets).toBe(true);
+		}
+	});
+
+	it("accepts false", () => {
+		const result = decodeActionInputsEither({ ...validInputs, changesets: false });
+		expect(Either.isRight(result)).toBe(true);
+		if (Either.isRight(result)) {
+			expect(result.right.changesets).toBe(false);
+		}
+	});
+});
+
 describe("PullRequest nodeId", () => {
 	it("decoded PullRequest includes nodeId field", () => {
 		const result = decodeActionInputsEither(validInputs);
@@ -122,6 +141,7 @@ describe("schema types", () => {
 			dependencies: [],
 			run: [],
 			updatePnpm: true,
+			changesets: true,
 			autoMerge: "",
 		});
 		expect(Either.isLeft(result)).toBe(true);

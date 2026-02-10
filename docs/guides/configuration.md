@@ -89,6 +89,17 @@ The version change is tracked as a config dependency update. Default: `true`.
 update-pnpm: false # Disable automatic pnpm upgrades
 ```
 
+#### `changesets`
+
+When set to `true` and a `.changeset/` directory exists, the action creates
+changesets for affected packages after dependency updates. Set to `false` to
+skip changeset creation entirely, which is useful for repositories that do not
+use the changeset release workflow. Default: `true`.
+
+```yaml
+changesets: false # Skip changeset creation
+```
+
 #### `dry-run`
 
 When set to `true`, the action detects changes and reports them in the GitHub
@@ -235,8 +246,9 @@ the dependency changes.
 
 ## Changeset Integration
 
-If your repository has a `.changeset/` directory, the action automatically
-creates changesets for affected packages:
+If your repository has a `.changeset/` directory and the `changesets` input is
+`true` (the default), the action automatically creates changesets for affected
+packages:
 
 - **Regular dependency changes**: A `patch` changeset is created for each
   workspace package whose dependencies changed

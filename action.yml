@@ -59,6 +59,10 @@ inputs:
         pnpm test
     required: false
     default: ""
+  changesets:
+    description: Create changesets for version management when .changeset/ directory exists
+    required: false
+    default: "true"
   auto-merge:
     description: |
       Enable auto-merge on the dependency update PR.
