@@ -51,9 +51,7 @@ yarn.lock text eol=lf
 *.sh text eol=lf
 
 # Exclude from language statistics (GitHub Linguist)
-docs/dist/** linguist-generated=true
 **/dist/** linguist-generated=true
 **/node_modules/** linguist-vendored=true
 **/*.d.ts linguist-generated=true
 pnpm-lock.yaml linguist-generated=true
-lib/turbo/schema.json linguist-generated=true

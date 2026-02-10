@@ -1,5 +1,8 @@
 name: Update pnpm Config Dependencies
 on:
+  schedule:
+    - cron: 0 0,6,12,18 * * 1-5
+    - cron: 0 0 * * 0,6
   workflow_dispatch:
     inputs:
       dry-run:
@@ -43,13 +46,17 @@ jobs:
         with:
           app-id: ${{ secrets.APP_ID }}
           app-private-key: ${{ secrets.APP_PRIVATE_KEY }}
-          branch: ${{ inputs.branch }}
-          dry-run: ${{ inputs.dry-run }}
-          log-level: ${{ inputs.log-level }}
+          branch: ${{ inputs.branch || 'pnpm/config-deps' }}
+          dry-run: ${{ inputs.dry-run || false }}
+          log-level: ${{ inputs.log-level || 'info' }}
           config-dependencies: |
             @savvy-web/pnpm-plugin-silk
           dependencies: |
             @savvy-web/*
+          run: |
+            pnpm savvy-commit init --force
+            pnpm savvy-lint init --force
+            pnpm lint:fix
       - name: Summary
         if: always()
         run: |
