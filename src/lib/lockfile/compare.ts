@@ -8,7 +8,7 @@
 
 import { normalize } from "node:path";
 import { readWantedLockfile } from "@pnpm/lockfile.fs";
-import type { CatalogSnapshots, LockfileObject } from "@pnpm/lockfile.types";
+import type { CatalogSnapshots, LockfileObject, ResolvedCatalogEntry } from "@pnpm/lockfile.types";
 import { Effect } from "effect";
 import { getPackageInfosAsync } from "workspace-tools";
 
@@ -197,13 +197,20 @@ const compareCatalogs = (
 		for (const [catalogName, afterEntries] of Object.entries(after)) {
 			const beforeEntries = before[catalogName] ?? {};
 
-			for (const [dep, afterEntry] of Object.entries(afterEntries as Record<string, { specifier: string }>)) {
-				const beforeEntry = beforeEntries[dep] as { specifier: string } | undefined;
-				const afterVersion = afterEntry.specifier;
-				const beforeVersion = beforeEntry?.specifier ?? null;
+			for (const [dep, afterEntry] of Object.entries(afterEntries as Record<string, ResolvedCatalogEntry>)) {
+				const beforeEntry = beforeEntries[dep] as ResolvedCatalogEntry | undefined;
+				const afterSpecifier = afterEntry.specifier;
+				const beforeSpecifier = beforeEntry?.specifier ?? null;
+				const afterVersion = afterEntry.version;
+				const beforeVersion = beforeEntry?.version ?? null;
 
-				if (beforeVersion !== afterVersion) {
+				// Detect specifier OR resolved version change
+				if (beforeSpecifier !== afterSpecifier || beforeVersion !== afterVersion) {
 					const depName = catalogName === "default" ? dep : `${dep} (catalog:${catalogName})`;
+
+					// Use resolved versions when specifier unchanged (e.g., ^2.8.4 stayed same but resolved 2.8.6 -> 2.8.7)
+					const from = beforeSpecifier !== afterSpecifier ? beforeSpecifier : beforeVersion;
+					const to = beforeSpecifier !== afterSpecifier ? afterSpecifier : afterVersion;
 
 					// Find which packages actually use this catalog entry
 					const affectedPackages = findPackagesUsingCatalog(
@@ -213,15 +220,15 @@ const compareCatalogs = (
 						importerToPackage,
 					);
 
-					yield* logDebug(`Catalog change: ${depName}: ${beforeVersion} -> ${afterVersion}`);
+					yield* logDebug(`Catalog change: ${depName}: ${from} -> ${to}`);
 					yield* logDebugState(`Affected packages for ${depName}`, affectedPackages);
 
 					// Catalog changes are "regular" type - they affect the packages using them
 					changes.push({
 						type: "regular",
 						dependency: dep, // Use raw dep name, not with catalog suffix
-						from: beforeVersion,
-						to: afterVersion,
+						from,
+						to,
 						affectedPackages,
 					});
 				}
@@ -234,7 +241,7 @@ const compareCatalogs = (
 
 			for (const dep of Object.keys(beforeEntries as Record<string, unknown>)) {
 				if (!(dep in afterEntries)) {
-					const beforeEntry = (beforeEntries as Record<string, { specifier: string }>)[dep];
+					const beforeEntry = (beforeEntries as Record<string, ResolvedCatalogEntry>)[dep];
 					const depName = catalogName === "default" ? dep : `${dep} (catalog:${catalogName})`;
 
 					// For removed entries, check the 'before' lockfile importers
