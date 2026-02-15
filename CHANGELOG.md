@@ -1,5 +1,17 @@
 # pnpm-config-dependency-action
 
+## 0.5.0
+
+### Minor Changes
+
+### Bug Fixes
+
+- [`e36fba1`](https://github.com/savvy-web/pnpm-config-dependency-action/commit/e36fba14758a90bd7b98d83b842170d7151f695b) Fix missing dependency detection for catalog resolved version changes.
+
+When a clean install resolves a newer version within the same semver range (e.g., `^2.8.4` stays unchanged but resolves `2.8.6` to `2.8.7`), the action now correctly detects and reports the change. Previously, `compareCatalogs()` only compared the `specifier` field of catalog entries, ignoring the `version` (resolved) field. This caused changes that stayed within the declared semver range to fall through both the catalog and importer comparison paths undetected, resulting in 0 reported changes and an empty PR body.
+
+The fix compares both `specifier` and `version` fields of `ResolvedCatalogEntry`. When only the resolved version changed, the reported from/to values use the concrete resolved versions (e.g., `2.8.6` to `2.8.7`). When the specifier itself changed, existing behavior is preserved (e.g., `^2.8.4` to `^2.9.0`).
+
 ## 0.4.0
 
 ### Minor Changes
@@ -33,7 +45,6 @@
   `configDependencies` feature in `pnpm-workspace.yaml`.
 
   ### Features
-
   - **Config dependency updates**: Updates config dependencies via `pnpm add --config`,
     tracking version changes with before/after comparison
   - **Regular dependency updates**: Updates regular dependencies via `pnpm up --latest`
