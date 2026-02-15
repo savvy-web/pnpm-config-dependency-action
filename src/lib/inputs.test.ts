@@ -20,6 +20,7 @@ import {
 	getGitHubToken,
 	getLogLevel,
 	getReasonFromParseIssue,
+	getTimeout,
 	isDebugMode,
 	isDryRun,
 	parseInputs,
@@ -366,6 +367,33 @@ describe("isDebugMode", () => {
 	it("returns true when log-level is debug", () => {
 		mockInputs({ "log-level": "debug" });
 		expect(isDebugMode()).toBe(true);
+	});
+});
+
+describe("getTimeout", () => {
+	it("returns 180 by default", () => {
+		mockInputs({ timeout: "" });
+		expect(getTimeout()).toBe(180);
+	});
+
+	it("returns parsed value when provided", () => {
+		mockInputs({ timeout: "300" });
+		expect(getTimeout()).toBe(300);
+	});
+
+	it("returns 180 for non-numeric input", () => {
+		mockInputs({ timeout: "abc" });
+		expect(getTimeout()).toBe(180);
+	});
+
+	it("returns 180 for zero", () => {
+		mockInputs({ timeout: "0" });
+		expect(getTimeout()).toBe(180);
+	});
+
+	it("returns 180 for negative values", () => {
+		mockInputs({ timeout: "-10" });
+		expect(getTimeout()).toBe(180);
 	});
 });
 

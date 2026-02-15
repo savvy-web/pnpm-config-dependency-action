@@ -22,10 +22,10 @@
 
 import { getState, setFailed, setOutput, summary } from "@actions/core";
 import { NodeRuntime } from "@effect/platform-node";
-import { Effect } from "effect";
+import { Duration, Effect } from "effect";
 import { createChangesets } from "./lib/changeset/create.js";
 import { commitChanges, manageBranch } from "./lib/github/branch.js";
-import { isDryRun, parseInputs } from "./lib/inputs.js";
+import { getTimeout, isDryRun, parseInputs } from "./lib/inputs.js";
 import { captureLockfileState, compareLockfiles } from "./lib/lockfile/compare.js";
 import { logDebug, logDebugState } from "./lib/logging.js";
 import { formatWorkspaceYaml, getConfigDependencyVersion, readWorkspaceYaml } from "./lib/pnpm/format.js";
@@ -714,10 +714,15 @@ const runnable = Effect.gen(function* () {
 		return;
 	}
 
+	const timeoutSeconds = getTimeout();
 	const appLayer = makeAppLayer(token);
 
 	yield* program.pipe(
 		Effect.provide(appLayer),
+		Effect.timeoutFail({
+			duration: Duration.seconds(timeoutSeconds),
+			onTimeout: () => new Error(`Action timed out after ${timeoutSeconds} seconds`),
+		}),
 		Effect.catchAll((error) =>
 			Effect.sync(() => {
 				const message = error instanceof Error ? error.message : String(error);

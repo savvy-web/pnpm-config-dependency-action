@@ -63,6 +63,12 @@ inputs:
     description: Create changesets for version management when .changeset/ directory exists
     required: false
     default: "true"
+  timeout:
+    description: |
+      Maximum time in seconds for the main action to run before cancelling.
+      Prevents the action from hanging indefinitely on slow installs or commands.
+    required: false
+    default: "180"
   auto-merge:
     description: |
       Enable auto-merge on the dependency update PR.

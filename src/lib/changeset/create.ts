@@ -172,36 +172,53 @@ ${summary}
 	});
 
 /**
+ * Format a single dependency change as a list item.
+ */
+const formatDependencyLine = (change: LockfileChange): string => {
+	if (change.from) {
+		return `- ${change.dependency}: ${change.from} → ${change.to}`;
+	}
+	return `- ${change.dependency}: ${change.to} (new)`;
+};
+
+/**
  * Format changeset summary from dependency changes.
+ *
+ * Uses the section-aware format from @savvy-web/changesets:
+ * - h2 `## Dependencies` heading (recognized category, priority 10)
+ * - h3 sub-headings when both config and regular changes are present
+ *
+ * @see https://github.com/savvy-web/changesets/blob/main/docs/changeset-format.md
  */
 export const formatChangesetSummary = (changes: ReadonlyArray<LockfileChange>): string => {
 	const configChanges = changes.filter((c) => c.type === "config");
 	const regularChanges = changes.filter((c) => c.type === "regular");
 
-	const lines: string[] = ["Update dependencies:"];
+	const lines: string[] = ["## Dependencies"];
 	lines.push("");
 
+	const hasBoth = configChanges.length > 0 && regularChanges.length > 0;
+
 	if (configChanges.length > 0) {
-		lines.push("**Config dependencies:**");
+		if (hasBoth) {
+			lines.push("### Config");
+			lines.push("");
+		}
 		for (const change of configChanges) {
-			if (change.from) {
-				lines.push(`- ${change.dependency}: ${change.from} → ${change.to}`);
-			} else {
-				lines.push(`- ${change.dependency}: ${change.to} (new)`);
-			}
+			lines.push(formatDependencyLine(change));
 		}
 		lines.push("");
 	}
 
 	if (regularChanges.length > 0) {
-		lines.push("**Dependencies:**");
-		for (const change of regularChanges) {
-			if (change.from) {
-				lines.push(`- ${change.dependency}: ${change.from} → ${change.to}`);
-			} else {
-				lines.push(`- ${change.dependency}: ${change.to} (new)`);
-			}
+		if (hasBoth) {
+			lines.push("### Packages");
+			lines.push("");
 		}
+		for (const change of regularChanges) {
+			lines.push(formatDependencyLine(change));
+		}
+		lines.push("");
 	}
 
 	return lines.join("\n").trim();

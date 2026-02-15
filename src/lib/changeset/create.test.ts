@@ -213,6 +213,16 @@ describe("analyzeAffectedPackages", () => {
 });
 
 describe("formatChangesetSummary", () => {
+	it("starts with ## Dependencies heading", () => {
+		const changes: LockfileChange[] = [
+			{ type: "regular", dependency: "effect", from: "3.0.0", to: "3.1.0", affectedPackages: ["@savvy-web/core"] },
+		];
+
+		const result = formatChangesetSummary(changes);
+
+		expect(result).toMatch(/^## Dependencies/);
+	});
+
 	it("formats config dependency changes with arrows", () => {
 		const changes: LockfileChange[] = [
 			{ type: "config", dependency: "typescript", from: "5.3.3", to: "5.4.0", affectedPackages: [] },
@@ -220,7 +230,7 @@ describe("formatChangesetSummary", () => {
 
 		const result = formatChangesetSummary(changes);
 
-		expect(result).toContain("**Config dependencies:**");
+		expect(result).toContain("## Dependencies");
 		expect(result).toContain("- typescript: 5.3.3 → 5.4.0");
 	});
 
@@ -231,7 +241,7 @@ describe("formatChangesetSummary", () => {
 
 		const result = formatChangesetSummary(changes);
 
-		expect(result).toContain("**Dependencies:**");
+		expect(result).toContain("## Dependencies");
 		expect(result).toContain("- effect: 3.0.0 → 3.1.0");
 	});
 
@@ -251,7 +261,7 @@ describe("formatChangesetSummary", () => {
 		expect(result).toContain("- @effect/schema: 0.61.0 (new)");
 	});
 
-	it("formats mixed config and regular changes", () => {
+	it("uses h3 sub-headings when both config and regular changes present", () => {
 		const changes: LockfileChange[] = [
 			{ type: "config", dependency: "typescript", from: "5.3.3", to: "5.4.0", affectedPackages: [] },
 			{ type: "regular", dependency: "effect", from: "3.0.0", to: "3.1.0", affectedPackages: ["@savvy-web/core"] },
@@ -259,20 +269,22 @@ describe("formatChangesetSummary", () => {
 
 		const result = formatChangesetSummary(changes);
 
-		expect(result).toContain("**Config dependencies:**");
-		expect(result).toContain("**Dependencies:**");
+		expect(result).toContain("## Dependencies");
+		expect(result).toContain("### Config");
+		expect(result).toContain("### Packages");
 		expect(result).toContain("- typescript: 5.3.3 → 5.4.0");
 		expect(result).toContain("- effect: 3.0.0 → 3.1.0");
 	});
 
-	it("starts with Update dependencies header", () => {
+	it("omits h3 sub-headings when only one change type", () => {
 		const changes: LockfileChange[] = [
-			{ type: "regular", dependency: "effect", from: "3.0.0", to: "3.1.0", affectedPackages: ["@savvy-web/core"] },
+			{ type: "config", dependency: "typescript", from: "5.3.3", to: "5.4.0", affectedPackages: [] },
 		];
 
 		const result = formatChangesetSummary(changes);
 
-		expect(result).toMatch(/^Update dependencies:/);
+		expect(result).not.toContain("### Config");
+		expect(result).not.toContain("### Packages");
 	});
 
 	it("handles config-only changes with new dependency", () => {

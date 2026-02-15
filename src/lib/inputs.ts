@@ -149,6 +149,16 @@ export const isDryRun = (): boolean => {
 };
 
 /**
+ * Get the action timeout in seconds.
+ * Defaults to 180 seconds (3 minutes).
+ */
+export const getTimeout = (): number => {
+	const raw = getInput("timeout") || "180";
+	const parsed = Number.parseInt(raw, 10);
+	return Number.isNaN(parsed) || parsed <= 0 ? 180 : parsed;
+};
+
+/**
  * Check if token revocation should be skipped.
  */
 export const shouldSkipTokenRevoke = (): boolean => {
