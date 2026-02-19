@@ -18,7 +18,7 @@ import { shouldSkipTokenRevoke } from "./lib/inputs.js";
 /**
  * Pre-action program.
  */
-const program = Effect.gen(function* () {
+export const program = Effect.gen(function* () {
 	yield* Effect.logInfo("Running pre-action script");
 
 	// Store start time for duration logging in post.ts

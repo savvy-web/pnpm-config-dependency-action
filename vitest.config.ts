@@ -7,7 +7,7 @@ export default VitestConfig.create(({ projects, coverage, reporters }) => ({
 		coverage: {
 			provider: "v8",
 			...coverage,
-			exclude: [...coverage.exclude, "src/types/**/*.ts", "**/*.d.ts"],
+			exclude: [...coverage.exclude, "src/types/**/*.ts", "**/*.d.ts", "src/lib/errors/types.ts"],
 		},
 	},
 }));

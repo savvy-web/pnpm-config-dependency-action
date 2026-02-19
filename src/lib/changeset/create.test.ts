@@ -1,11 +1,17 @@
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Effect } from "effect";
+import { Effect, LogLevel, Logger } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { LockfileChange } from "../../types/index.js";
 import { analyzeAffectedPackages, createChangesets, formatChangesetSummary, hasChangesets } from "./create.js";
+
+/**
+ * Run an Effect with logging suppressed.
+ */
+const runEffect = <A>(effect: Effect.Effect<A>) =>
+	Effect.runPromise(effect.pipe(Logger.withMinimumLogLevel(LogLevel.None)));
 
 describe("hasChangesets", () => {
 	let tempDir: string;
@@ -44,14 +50,14 @@ describe("createChangesets", () => {
 			{ type: "regular", dependency: "effect", from: "3.0.0", to: "3.1.0", affectedPackages: ["@savvy-web/core"] },
 		];
 
-		const result = await Effect.runPromise(createChangesets(changes, tempDir));
+		const result = await runEffect(createChangesets(changes, tempDir));
 		expect(result).toEqual([]);
 	});
 
 	it("returns empty array when no changes", async () => {
 		mkdirSync(join(tempDir, ".changeset"));
 
-		const result = await Effect.runPromise(createChangesets([], tempDir));
+		const result = await runEffect(createChangesets([], tempDir));
 		expect(result).toEqual([]);
 	});
 
@@ -62,7 +68,7 @@ describe("createChangesets", () => {
 			{ type: "regular", dependency: "effect", from: "3.0.0", to: "3.1.0", affectedPackages: ["@savvy-web/core"] },
 		];
 
-		const result = await Effect.runPromise(createChangesets(changes, tempDir));
+		const result = await runEffect(createChangesets(changes, tempDir));
 
 		expect(result).toHaveLength(1);
 		expect(result[0].packages).toEqual(["@savvy-web/core"]);
@@ -85,7 +91,7 @@ describe("createChangesets", () => {
 			{ type: "config", dependency: "typescript", from: "5.3.3", to: "5.4.0", affectedPackages: [] },
 		];
 
-		const result = await Effect.runPromise(createChangesets(changes, tempDir));
+		const result = await runEffect(createChangesets(changes, tempDir));
 
 		expect(result).toHaveLength(1);
 		expect(result[0].packages).toEqual([]);
@@ -101,7 +107,7 @@ describe("createChangesets", () => {
 			{ type: "config", dependency: "typescript", from: "5.3.3", to: "5.4.0", affectedPackages: [] },
 		];
 
-		const result = await Effect.runPromise(createChangesets(changes, tempDir));
+		const result = await runEffect(createChangesets(changes, tempDir));
 
 		expect(result).toHaveLength(1);
 		expect(result[0].packages).toEqual([]);
@@ -119,7 +125,7 @@ describe("createChangesets", () => {
 			{ type: "regular", dependency: "effect", from: "3.0.0", to: "3.1.0", affectedPackages: ["@savvy-web/core"] },
 		];
 
-		const result = await Effect.runPromise(createChangesets(changes, tempDir));
+		const result = await runEffect(createChangesets(changes, tempDir));
 
 		expect(result).toHaveLength(2);
 		// Should have one package changeset and one root/empty changeset
@@ -142,7 +148,7 @@ describe("createChangesets", () => {
 			},
 		];
 
-		const result = await Effect.runPromise(createChangesets(changes, tempDir));
+		const result = await runEffect(createChangesets(changes, tempDir));
 
 		// Each affected package gets its own changeset
 		expect(result).toHaveLength(2);

@@ -1,5 +1,5 @@
 import type { ParseResult } from "effect";
-import { Effect } from "effect";
+import { Effect, LogLevel, Logger } from "effect";
 import { describe, expect, it, vi } from "vitest";
 
 // Mock @actions/core before importing anything that uses it
@@ -27,6 +27,10 @@ import {
 	parseMultilineInput,
 	shouldSkipTokenRevoke,
 } from "./inputs.js";
+
+/** Run an Effect with logging suppressed. */
+const runEffect = <A>(effect: Effect.Effect<A>) =>
+	Effect.runPromise(effect.pipe(Logger.withMinimumLogLevel(LogLevel.None)));
 
 // Helper to set up mocked inputs
 const mockInputs = (inputs: Record<string, string>) => {
@@ -92,7 +96,7 @@ describe("parseInputs", () => {
 		});
 		mockBooleanInputs({ "update-pnpm": true, changesets: true });
 
-		const result = await Effect.runPromise(parseInputs);
+		const result = await runEffect(parseInputs);
 
 		expect(result.appId).toBe("12345");
 		expect(result.branch).toBe("pnpm/config-deps");
@@ -113,7 +117,7 @@ describe("parseInputs", () => {
 			run: "",
 		});
 
-		const result = await Effect.runPromise(parseInputs);
+		const result = await runEffect(parseInputs);
 		expect(result.branch).toBe("pnpm/config-deps");
 	});
 
@@ -128,7 +132,7 @@ describe("parseInputs", () => {
 		});
 		mockBooleanInputs({ "update-pnpm": false });
 
-		const result = await Effect.runPromise(Effect.either(parseInputs));
+		const result = await runEffect(Effect.either(parseInputs));
 		expect(result._tag).toBe("Left");
 	});
 
@@ -143,7 +147,7 @@ describe("parseInputs", () => {
 		});
 		mockBooleanInputs({ "update-pnpm": true, changesets: true });
 
-		const result = await Effect.runPromise(parseInputs);
+		const result = await runEffect(parseInputs);
 		expect(result.updatePnpm).toBe(true);
 		expect(result.configDependencies).toEqual([]);
 		expect(result.dependencies).toEqual([]);
@@ -159,7 +163,7 @@ describe("parseInputs", () => {
 			run: "",
 		});
 
-		const result = await Effect.runPromise(Effect.either(parseInputs));
+		const result = await runEffect(Effect.either(parseInputs));
 		expect(result._tag).toBe("Left");
 	});
 
@@ -173,7 +177,7 @@ describe("parseInputs", () => {
 			run: "",
 		});
 
-		const result = await Effect.runPromise(Effect.either(parseInputs));
+		const result = await runEffect(Effect.either(parseInputs));
 		expect(result._tag).toBe("Left");
 	});
 
@@ -187,7 +191,7 @@ describe("parseInputs", () => {
 			run: "",
 		});
 
-		const result = await Effect.runPromise(Effect.either(parseInputs));
+		const result = await runEffect(Effect.either(parseInputs));
 		expect(result._tag).toBe("Left");
 		if (result._tag === "Left") {
 			// The error should be an InvalidInputError with useful field info
@@ -205,7 +209,7 @@ describe("parseInputs", () => {
 			run: "",
 		});
 
-		const result = await Effect.runPromise(Effect.either(parseInputs));
+		const result = await runEffect(Effect.either(parseInputs));
 		expect(result._tag).toBe("Left");
 	});
 
@@ -219,7 +223,7 @@ describe("parseInputs", () => {
 			run: "pnpm lint:fix\npnpm test",
 		});
 
-		const result = await Effect.runPromise(parseInputs);
+		const result = await runEffect(parseInputs);
 		expect(result.run).toEqual(["pnpm lint:fix", "pnpm test"]);
 	});
 
@@ -235,7 +239,7 @@ describe("parseInputs", () => {
 		});
 		mockBooleanInputs({ "update-pnpm": true, changesets: true });
 
-		const result = await Effect.runPromise(parseInputs);
+		const result = await runEffect(parseInputs);
 		expect(result.autoMerge).toBe("");
 	});
 
@@ -251,7 +255,7 @@ describe("parseInputs", () => {
 		});
 		mockBooleanInputs({ "update-pnpm": true, changesets: true });
 
-		const result = await Effect.runPromise(parseInputs);
+		const result = await runEffect(parseInputs);
 		expect(result.autoMerge).toBe("squash");
 	});
 
@@ -266,7 +270,7 @@ describe("parseInputs", () => {
 		});
 		mockBooleanInputs({ "update-pnpm": true, changesets: false });
 
-		const result = await Effect.runPromise(parseInputs);
+		const result = await runEffect(parseInputs);
 		expect(result.changesets).toBe(false);
 	});
 });

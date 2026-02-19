@@ -414,6 +414,7 @@ export class GitExecutor extends Context.Tag("GitExecutor")<GitExecutor, GitExec
 /**
  * Execute a git command and capture output.
  */
+/* v8 ignore start - shell command infrastructure, tested via integration */
 const execGit = (args: ReadonlyArray<string>, operation: GitError["operation"]): Effect.Effect<string, GitError> =>
 	Effect.gen(function* () {
 		const command = Command.make("git", ...args);
@@ -430,10 +431,12 @@ const execGit = (args: ReadonlyArray<string>, operation: GitError["operation"]):
 		);
 		return result;
 	});
+/* v8 ignore stop */
 
 /**
  * Live Git executor layer.
  */
+/* v8 ignore start - shell command infrastructure, tested via integration */
 export const GitExecutorLive: Layer.Layer<GitExecutor> = Layer.succeed(GitExecutor, {
 	checkout: (branch, create = false) =>
 		execGit(create ? ["checkout", "-b", branch] : ["checkout", branch], "checkout").pipe(Effect.asVoid),
@@ -492,6 +495,7 @@ export const GitExecutorLive: Layer.Layer<GitExecutor> = Layer.succeed(GitExecut
 			yield* execGit(["config", "user.email", email], "status");
 		}),
 });
+/* v8 ignore stop */
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Pnpm Executor Service
@@ -515,6 +519,7 @@ export class PnpmExecutor extends Context.Tag("PnpmExecutor")<PnpmExecutor, Pnpm
 /**
  * Execute a pnpm command and capture output.
  */
+/* v8 ignore start - shell command infrastructure, tested via integration */
 const execPnpm = (
 	args: ReadonlyArray<string>,
 	command: string,
@@ -536,10 +541,12 @@ const execPnpm = (
 		);
 		return result;
 	});
+/* v8 ignore stop */
 
 /**
  * Execute an arbitrary shell command.
  */
+/* v8 ignore start - shell command infrastructure, tested via integration */
 const execShell = (command: string): Effect.Effect<string, PnpmError> =>
 	Effect.gen(function* () {
 		// Use sh -c to properly handle shell commands
@@ -557,10 +564,12 @@ const execShell = (command: string): Effect.Effect<string, PnpmError> =>
 		);
 		return result;
 	});
+/* v8 ignore stop */
 
 /**
  * Live pnpm executor layer.
  */
+/* v8 ignore start - shell command infrastructure, tested via integration */
 export const PnpmExecutorLive: Layer.Layer<PnpmExecutor> = Layer.succeed(PnpmExecutor, {
 	addConfig: (dependency) => execPnpm(["add", "--config", dependency], "add --config", dependency),
 
@@ -570,6 +579,7 @@ export const PnpmExecutorLive: Layer.Layer<PnpmExecutor> = Layer.succeed(PnpmExe
 
 	run: (command) => execShell(command),
 });
+/* v8 ignore stop */
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Combined Application Layer
@@ -578,5 +588,7 @@ export const PnpmExecutorLive: Layer.Layer<PnpmExecutor> = Layer.succeed(PnpmExe
 /**
  * Create the combined application layer with all services.
  */
+/* v8 ignore start - composition of live layers */
 export const makeAppLayer = (token: string): Layer.Layer<GitHubClient | GitExecutor | PnpmExecutor> =>
 	Layer.mergeAll(makeGitHubClientLayer(token), GitExecutorLive, PnpmExecutorLive);
+/* v8 ignore stop */
