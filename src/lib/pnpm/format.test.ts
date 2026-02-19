@@ -1,8 +1,11 @@
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Effect } from "effect";
+import { Effect, LogLevel, Logger } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+
+const runEffect = <A>(effect: Effect.Effect<A>) =>
+	Effect.runPromise(effect.pipe(Logger.withMinimumLogLevel(LogLevel.None)));
 
 import type { PnpmWorkspaceContent } from "./format.js";
 import { formatWorkspaceYaml, getConfigDependencyVersion, readWorkspaceYaml, sortContent } from "./format.js";
@@ -105,9 +108,9 @@ describe("formatWorkspaceYaml", () => {
 			`onlyBuiltDependencies:\n  - sharp\n  - argon2\npackages:\n  - "pkgs/*"\n  - "apps/*"\n`,
 		);
 
-		await Effect.runPromise(formatWorkspaceYaml(tempDir));
+		await runEffect(formatWorkspaceYaml(tempDir));
 
-		const result = await Effect.runPromise(readWorkspaceYaml(tempDir));
+		const result = await runEffect(readWorkspaceYaml(tempDir));
 		expect(result).not.toBeNull();
 		// After formatting, packages should be first and sorted
 		const keys = Object.keys(result ?? {});
@@ -118,13 +121,13 @@ describe("formatWorkspaceYaml", () => {
 
 	it("handles missing pnpm-workspace.yaml gracefully", async () => {
 		// Should not throw when file doesn't exist
-		await Effect.runPromise(formatWorkspaceYaml(tempDir));
+		await runEffect(formatWorkspaceYaml(tempDir));
 	});
 
 	it("handles invalid YAML gracefully", async () => {
 		writeFileSync(join(tempDir, "pnpm-workspace.yaml"), ": invalid: yaml: {{{}");
 
-		const result = await Effect.runPromise(formatWorkspaceYaml(tempDir).pipe(Effect.either));
+		const result = await runEffect(formatWorkspaceYaml(tempDir).pipe(Effect.either));
 
 		expect(result._tag).toBe("Left");
 	});
@@ -134,7 +137,7 @@ describe("formatWorkspaceYaml", () => {
 		writeFileSync(filepath, `packages:\n  - "pkgs/*"\n`);
 		chmodSync(filepath, 0o000);
 
-		const result = await Effect.runPromise(formatWorkspaceYaml(tempDir).pipe(Effect.either));
+		const result = await runEffect(formatWorkspaceYaml(tempDir).pipe(Effect.either));
 
 		expect(result._tag).toBe("Left");
 		// Restore perms for cleanup
@@ -147,7 +150,7 @@ describe("formatWorkspaceYaml", () => {
 		// Make file readable but not writable
 		chmodSync(filepath, 0o444);
 
-		const result = await Effect.runPromise(formatWorkspaceYaml(tempDir).pipe(Effect.either));
+		const result = await runEffect(formatWorkspaceYaml(tempDir).pipe(Effect.either));
 
 		expect(result._tag).toBe("Left");
 		// Restore perms for cleanup
@@ -172,7 +175,7 @@ describe("readWorkspaceYaml", () => {
 			`packages:\n  - "pkgs/*"\nconfigDependencies:\n  typescript: "5.4.0"\n`,
 		);
 
-		const result = await Effect.runPromise(readWorkspaceYaml(tempDir));
+		const result = await runEffect(readWorkspaceYaml(tempDir));
 
 		expect(result).not.toBeNull();
 		expect(result?.packages).toEqual(["pkgs/*"]);
@@ -180,7 +183,7 @@ describe("readWorkspaceYaml", () => {
 	});
 
 	it("returns null when file does not exist", async () => {
-		const result = await Effect.runPromise(readWorkspaceYaml(tempDir));
+		const result = await runEffect(readWorkspaceYaml(tempDir));
 		expect(result).toBeNull();
 	});
 });
@@ -199,26 +202,26 @@ describe("getConfigDependencyVersion", () => {
 	it("returns version for existing config dependency", async () => {
 		writeFileSync(join(tempDir, "pnpm-workspace.yaml"), `configDependencies:\n  typescript: "5.4.0+sha512-abc123"\n`);
 
-		const result = await Effect.runPromise(getConfigDependencyVersion("typescript", tempDir));
+		const result = await runEffect(getConfigDependencyVersion("typescript", tempDir));
 		expect(result).toBe("5.4.0");
 	});
 
 	it("returns null for nonexistent dependency", async () => {
 		writeFileSync(join(tempDir, "pnpm-workspace.yaml"), `configDependencies:\n  typescript: "5.4.0"\n`);
 
-		const result = await Effect.runPromise(getConfigDependencyVersion("biome", tempDir));
+		const result = await runEffect(getConfigDependencyVersion("biome", tempDir));
 		expect(result).toBeNull();
 	});
 
 	it("returns null when no configDependencies key", async () => {
 		writeFileSync(join(tempDir, "pnpm-workspace.yaml"), `packages:\n  - "pkgs/*"\n`);
 
-		const result = await Effect.runPromise(getConfigDependencyVersion("typescript", tempDir));
+		const result = await runEffect(getConfigDependencyVersion("typescript", tempDir));
 		expect(result).toBeNull();
 	});
 
 	it("returns null when file does not exist", async () => {
-		const result = await Effect.runPromise(getConfigDependencyVersion("typescript", tempDir));
+		const result = await runEffect(getConfigDependencyVersion("typescript", tempDir));
 		expect(result).toBeNull();
 	});
 });

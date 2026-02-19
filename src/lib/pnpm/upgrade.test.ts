@@ -36,6 +36,23 @@ const runWithPnpm = <A, E>(effect: Effect.Effect<A, E, PnpmExecutor>, overrides:
 	return Effect.runPromise(effect.pipe(Effect.provide(layer), Logger.withMinimumLogLevel(LogLevel.None)));
 };
 
+const runWithPnpmEither = <A, E>(
+	effect: Effect.Effect<A, E, PnpmExecutor>,
+	overrides: Partial<PnpmExecutorService> = {},
+) => {
+	const service: PnpmExecutorService = {
+		addConfig: (_dep) => Effect.succeed("ok"),
+		update: (_pattern) => Effect.succeed("ok"),
+		install: () => Effect.void,
+		run: (_cmd) => Effect.succeed("ok"),
+		...overrides,
+	};
+	const layer = Layer.succeed(PnpmExecutor, service);
+	return Effect.runPromise(
+		Effect.either(effect).pipe(Effect.provide(layer), Logger.withMinimumLogLevel(LogLevel.None)),
+	);
+};
+
 // ══════════════════════════════════════════════════════════════════════════════
 // parsePnpmVersion
 // ══════════════════════════════════════════════════════════════════════════════
@@ -431,5 +448,64 @@ describe("upgradePnpm", () => {
 
 		// 11.0.0 is the only stable version in 11.x range, so it's already latest
 		expect(result).toBeNull();
+	});
+
+	it("returns null when no versions satisfy the range", async () => {
+		const dir = makeTempDir();
+		writePackageJson(dir, { name: "test", packageManager: "pnpm@12.0.0" });
+
+		const result = await runWithPnpm(upgradePnpm(dir), {
+			run: (cmd) => {
+				if (cmd.includes("npm view")) {
+					return Effect.succeed(versions);
+				}
+				return Effect.succeed("ok");
+			},
+		});
+
+		expect(result).toBeNull();
+	});
+
+	it("fails when package.json does not exist", async () => {
+		const dir = makeTempDir();
+		// No package.json written
+
+		const result = await runWithPnpmEither(upgradePnpm(dir));
+
+		expect(result._tag).toBe("Left");
+		if (result._tag === "Left") {
+			expect(result.left._tag).toBe("FileSystemError");
+		}
+	});
+
+	it("fails when package.json has invalid JSON", async () => {
+		const dir = makeTempDir();
+		writeFileSync(join(dir, "package.json"), "{ not valid json");
+
+		const result = await runWithPnpmEither(upgradePnpm(dir));
+
+		expect(result._tag).toBe("Left");
+		if (result._tag === "Left") {
+			expect(result.left._tag).toBe("FileSystemError");
+		}
+	});
+
+	it("fails when npm view returns invalid JSON", async () => {
+		const dir = makeTempDir();
+		writePackageJson(dir, { name: "test", packageManager: "pnpm@10.28.2" });
+
+		const result = await runWithPnpmEither(upgradePnpm(dir), {
+			run: (cmd) => {
+				if (cmd.includes("npm view")) {
+					return Effect.succeed("not json");
+				}
+				return Effect.succeed("ok");
+			},
+		});
+
+		expect(result._tag).toBe("Left");
+		if (result._tag === "Left") {
+			expect(result.left._tag).toBe("FileSystemError");
+		}
 	});
 });

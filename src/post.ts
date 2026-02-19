@@ -18,7 +18,7 @@ import { revokeInstallationToken } from "./lib/github/auth.js";
 /**
  * Post-action cleanup program.
  */
-const program = Effect.gen(function* () {
+export const program = Effect.gen(function* () {
 	yield* Effect.logInfo("Running post-action cleanup");
 
 	// Check if token revocation should be skipped
