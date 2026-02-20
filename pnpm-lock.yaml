@@ -10,7 +10,7 @@ overrides:
   markdown-it: ^14.1.1
   tmp: ^0.2.4
 
-pnpmfileChecksum: sha256-wnzUpXokR4JF62qqMX46aL4o63/em2rRxRn1if8uIQw=
+pnpmfileChecksum: sha256-OAW9KLuPqZEQqKI2mr/nOHEAd4cGpLVWVrvCrChdI3s=
 
 importers:
 
