@@ -29,6 +29,7 @@ import { getTimeout, isDryRun, parseInputs } from "./lib/inputs.js";
 import { captureLockfileState, compareLockfiles } from "./lib/lockfile/compare.js";
 import { logDebug, logDebugState } from "./lib/logging.js";
 import { formatWorkspaceYaml, getConfigDependencyVersion, readWorkspaceYaml } from "./lib/pnpm/format.js";
+import { updateRegularDeps } from "./lib/pnpm/regular.js";
 import { upgradePnpm } from "./lib/pnpm/upgrade.js";
 import { GitExecutor, GitHubClient, PnpmExecutor, makeAppLayer } from "./lib/services/index.js";
 import type { ChangesetFile, DependencyUpdateResult, PullRequest } from "./types/index.js";
@@ -115,12 +116,12 @@ const program = Effect.gen(function* () {
 		const configUpdates = yield* updateConfigDependencies(inputs.configDependencies);
 		yield* logDebugState("Config dependency updates", configUpdates);
 
-		// Step 5: Update regular dependencies
+		// Step 5: Update regular dependencies (query npm + update package.json directly)
 		yield* Effect.logInfo("Step 5: Updating regular dependencies");
-		yield* updateRegularDependencies(inputs.dependencies);
+		const regularUpdates = yield* updateRegularDeps(inputs.dependencies);
 
 		// Step 6: Clean install (rm -rf node_modules pnpm-lock.yaml + pnpm install)
-		if (configUpdates.length > 0 || inputs.dependencies.length > 0 || configUpdatesFromPnpm.length > 0) {
+		if (configUpdates.length > 0 || regularUpdates.length > 0 || configUpdatesFromPnpm.length > 0) {
 			yield* Effect.logInfo("Step 6: Running clean install");
 			const pnpm = yield* PnpmExecutor;
 			yield* pnpm.run("rm -rf node_modules pnpm-lock.yaml");
@@ -174,26 +175,10 @@ const program = Effect.gen(function* () {
 		const changes = yield* compareLockfiles(lockfileBefore, lockfileAfter);
 		yield* logDebugState("Detected changes", changes);
 
-		// Build regular dependency updates from lockfile changes (actual packages, not glob patterns)
-		const regularChanges = changes.filter((c) => c.type === "regular");
-		const deduped = new Map<string, DependencyUpdateResult>();
-		for (const change of regularChanges) {
-			const key = `${change.dependency}:${change.from}:${change.to}`;
-			if (!deduped.has(key)) {
-				deduped.set(key, {
-					dependency: change.dependency,
-					from: change.from,
-					to: change.to,
-					type: "regular",
-					package: change.affectedPackages[0] ?? null,
-				});
-			}
-		}
-		const regularUpdatesFromLockfile = [...deduped.values()];
-
-		const allUpdates = [...configUpdatesFromPnpm, ...configUpdates, ...regularUpdatesFromLockfile];
+		// Regular updates come directly from step 5 (npm query + package.json updates)
+		const allUpdates = [...configUpdatesFromPnpm, ...configUpdates, ...regularUpdates];
 		yield* logDebug(
-			`Total updates: ${allUpdates.length} (config: ${configUpdates.length}, regular: ${regularUpdatesFromLockfile.length})`,
+			`Total updates: ${allUpdates.length} (config: ${configUpdates.length + configUpdatesFromPnpm.length}, regular: ${regularUpdates.length})`,
 		);
 
 		// Check if there are any changes
@@ -362,32 +347,6 @@ export const updateConfigDependencies = (
 		}
 
 		return results;
-	});
-
-/**
- * Update regular dependencies with error accumulation.
- *
- * Actual version changes are detected later via lockfile comparison,
- * so this function only needs to execute the updates (not track versions).
- */
-export const updateRegularDependencies = (
-	dependencies: ReadonlyArray<string>,
-): Effect.Effect<void, never, PnpmExecutor> =>
-	Effect.gen(function* () {
-		if (dependencies.length === 0) {
-			return;
-		}
-
-		const pnpm = yield* PnpmExecutor;
-
-		for (const pattern of dependencies) {
-			yield* Effect.logInfo(`Updating dependencies matching: ${pattern}`);
-
-			yield* pnpm.update(pattern).pipe(
-				Effect.tap(() => Effect.logInfo(`Updated dependencies matching: ${pattern}`)),
-				Effect.catchAll((error) => Effect.logWarning(`Failed to update ${pattern}: ${error.stderr}`)),
-			);
-		}
 	});
 
 /**

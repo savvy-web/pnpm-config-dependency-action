@@ -263,7 +263,7 @@ export const upgradePnpm = (
 /**
  * Detect indentation used in a JSON file (tab or N spaces).
  */
-const detectIndent = (content: string): string | number => {
+export const detectIndent = (content: string): string | number => {
 	const match = content.match(/^(\s+)"/m);
 	if (match) {
 		const indent = match[1];
