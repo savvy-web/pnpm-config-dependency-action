@@ -295,8 +295,9 @@ The action executes in **14 distinct steps** (implemented in `src/main.ts`):
 
 #### Step 8: Format pnpm-workspace.yaml
 
-- Format workspace YAML to match lint-staged requirements
+- Format workspace YAML to match `@savvy-web/lint-staged` PnpmWorkspace handler
 - Sort arrays alphabetically (packages, onlyBuiltDependencies, publicHoistPattern)
+- Sort `configDependencies` object keys alphabetically
 - Sort top-level keys alphabetically (packages first)
 - Use consistent YAML stringify options (indent: 2, lineWidth: 0, singleQuote: false)
 
@@ -998,8 +999,10 @@ no changes are made by the pre-commit hook after our action commits.
 **Formatting Rules:**
 
 1. **Sort arrays alphabetically:** `packages`, `onlyBuiltDependencies`, `publicHoistPattern`
-2. **Sort top-level keys alphabetically**, but keep `packages` first
-3. **YAML stringify options:**
+2. **Sort `configDependencies` object keys alphabetically** (entries inserted by
+   `pnpm add --config` may not be in order)
+3. **Sort top-level keys alphabetically**, but keep `packages` first
+4. **YAML stringify options:**
    - `indent: 2` - Two-space indentation
    - `lineWidth: 0` - Disable line wrapping
    - `singleQuote: false` - Use double quotes
@@ -1011,6 +1014,7 @@ import { parse, stringify } from "yaml";
 import { Effect } from "effect";
 
 const SORTABLE_ARRAY_KEYS = new Set(["packages", "onlyBuiltDependencies", "publicHoistPattern"]);
+const SORTABLE_MAP_KEYS = new Set(["configDependencies"]);
 
 const STRINGIFY_OPTIONS = {
  indent: 2,
@@ -1038,9 +1042,14 @@ const sortContent = (content: PnpmWorkspaceContent): PnpmWorkspaceContent => {
 
  for (const key of keys) {
   const value = content[key];
-  // Sort array values for known sortable keys
   if (SORTABLE_ARRAY_KEYS.has(key) && Array.isArray(value)) {
    result[key] = [...value].sort();
+  } else if (SORTABLE_MAP_KEYS.has(key) && value && typeof value === "object" && !Array.isArray(value)) {
+   const sorted: Record<string, unknown> = {};
+   for (const k of Object.keys(value as Record<string, unknown>).sort()) {
+    sorted[k] = (value as Record<string, unknown>)[k];
+   }
+   result[key] = sorted;
   } else {
    result[key] = value;
   }
