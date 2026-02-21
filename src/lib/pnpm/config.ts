@@ -15,20 +15,7 @@ import { stringify } from "yaml";
 import type { DependencyUpdateResult } from "../../types/index.js";
 import { FileSystemError } from "../errors/types.js";
 import { PnpmExecutor } from "../services/index.js";
-import { readWorkspaceYaml, sortContent } from "./format.js";
-
-// ══════════════════════════════════════════════════════════════════════════════
-// Constants
-// ══════════════════════════════════════════════════════════════════════════════
-
-/**
- * YAML stringify options matching format.ts for consistent output.
- */
-const STRINGIFY_OPTIONS = {
-	indent: 2,
-	lineWidth: 0,
-	singleQuote: false,
-} as const;
+import { STRINGIFY_OPTIONS, readWorkspaceYaml, sortContent } from "./format.js";
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Pure Helpers (exported for testing)
