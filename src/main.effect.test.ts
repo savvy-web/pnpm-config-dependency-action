@@ -21,25 +21,13 @@ vi.mock("@actions/github", () => ({
 	},
 }));
 
-// Mock pnpm/format to control getConfigDependencyVersion in tests
-vi.mock("./lib/pnpm/format.js", async (importOriginal) => {
-	const original = await importOriginal<typeof import("./lib/pnpm/format.js")>();
-	const { Effect } = await import("effect");
-	return {
-		...original,
-		// Default: returns null (simulates no workspace yaml / dep not found)
-		getConfigDependencyVersion: vi.fn(() => Effect.succeed(null)),
-	};
-});
-
 import type { Octokit } from "@octokit/rest";
 import { Effect, Layer, LogLevel, Logger } from "effect";
 import { pnpmUpgradeUpdate } from "./lib/__test__/fixtures.js";
-import { getConfigDependencyVersion } from "./lib/pnpm/format.js";
 import { GitHubApiError, PnpmError } from "./lib/schemas/errors.js";
 import type { GitHubClientService, PnpmExecutorService } from "./lib/services/index.js";
 import { GitHubClient, PnpmExecutor } from "./lib/services/index.js";
-import { createOrUpdatePR, generatePRBody, runCommands, updateConfigDependencies } from "./main.js";
+import { createOrUpdatePR, generatePRBody, runCommands } from "./main.js";
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Test Helpers
@@ -93,63 +81,6 @@ const makeTestGitHubClient = (overrides: Partial<GitHubClientService> = {}): Lay
 // ══════════════════════════════════════════════════════════════════════════════
 // Tests
 // ══════════════════════════════════════════════════════════════════════════════
-
-describe("updateConfigDependencies", () => {
-	it("returns empty array for empty dependencies", async () => {
-		const result = await runWithPnpm(updateConfigDependencies([]));
-		expect(result).toEqual([]);
-	});
-
-	it("calls addConfig for each dependency", async () => {
-		const addConfigCalls: string[] = [];
-
-		const result = await runWithPnpm(updateConfigDependencies(["typescript", "@biomejs/biome"]), {
-			addConfig: (dep) => {
-				addConfigCalls.push(dep);
-				return Effect.succeed("ok");
-			},
-		});
-
-		expect(addConfigCalls).toEqual(["typescript", "@biomejs/biome"]);
-		expect(result).toHaveLength(2);
-	});
-
-	it("continues on individual failures (logs warning)", async () => {
-		const result = await runWithPnpm(updateConfigDependencies(["typescript", "nonexistent"]), {
-			addConfig: (dep) => {
-				if (dep === "nonexistent") {
-					return Effect.fail(
-						new PnpmError({ command: "add --config", dependency: dep, exitCode: 1, stderr: "not found" }),
-					);
-				}
-				return Effect.succeed("ok");
-			},
-		});
-
-		// Only the successful one should be returned
-		expect(result).toHaveLength(1);
-		expect(result[0].dependency).toBe("typescript");
-	});
-
-	it("returns result with type config", async () => {
-		const result = await runWithPnpm(updateConfigDependencies(["typescript"]));
-
-		expect(result[0].type).toBe("config");
-		expect(result[0].package).toBe(null);
-	});
-
-	it("excludes no-op updates where version did not change", async () => {
-		// Mock getConfigDependencyVersion to return the same version before and after
-		vi.mocked(getConfigDependencyVersion).mockReturnValue(Effect.succeed("0.4.1"));
-
-		const result = await runWithPnpm(updateConfigDependencies(["@savvy-web/pnpm-plugin-silk"]));
-
-		expect(result).toHaveLength(0);
-
-		// Restore default mock
-		vi.mocked(getConfigDependencyVersion).mockReturnValue(Effect.succeed(null));
-	});
-});
 
 describe("runCommands", () => {
 	it("returns empty result for empty commands", async () => {

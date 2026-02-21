@@ -9,12 +9,22 @@ This is a **GitHub Action** for updating pnpm config dependencies and regular
 dependencies. It runs in three phases (pre/main/post) using Effect-TS for
 typed error handling, service injection, and retry logic.
 
-For architecture and implementation details:
-→ @./.claude/design/pnpm-config-dependency-action.md
+For architecture and implementation details, load sections as needed:
+→ @./.claude/design/pnpm-config-dependency-action/_index.md
 
-Load when working on action phases (pre/main/post), Effect service architecture,
-GitHub API integration, or dependency update logic. Skip for simple bug fixes
-or test-only changes.
+Load the index first, then follow its navigation guide to load specific
+sections based on what you are working on. Do not load all sections at once.
+
+Key sections:
+
+- Action phases (pre/main/post): → @./04-module-entry-points.md
+- Library modules (pnpm, github, lockfile): → @./05-module-library.md
+- Effect-TS patterns and services: → @./06-effect-patterns.md
+- GitHub API integration: → @./07-github-integration.md
+- Type definitions: → @./03-type-definitions.md
+- Architecture overview: → @./02-architecture.md
+
+Skip for simple bug fixes or test-only changes.
 
 ## Commands
 
