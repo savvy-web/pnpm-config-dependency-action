@@ -3,8 +3,8 @@ status: current
 module: pnpm-config-dependency-action
 category: architecture
 created: 2026-02-06
-updated: 2026-02-10
-last-synced: 2026-02-10
+updated: 2026-02-20
+last-synced: 2026-02-20
 completeness: 90
 related: []
 dependencies: []
@@ -121,7 +121,7 @@ declared in `pnpm-workspace.yaml` for centralized version management across a mo
 
 - Upgrades pnpm itself to the latest version within the `^` semver range via `corepack use`
 - Updates config dependencies via `pnpm add --config`
-- Updates regular dependencies via `pnpm up --latest`
+- Updates regular dependencies via direct npm registry queries (avoids `catalogMode: strict` issues)
 - Supports glob patterns for dependency matching
 - Runs custom commands after updates (linting, testing, building)
 - Integrates with Changesets for versioning
@@ -167,7 +167,7 @@ src/
 │   │   └── commit.ts    # Commit creation with DCO signoff
 │   ├── pnpm/
 │   │   ├── config.ts    # Config dependency updates
-│   │   ├── regular.ts   # Regular dependency updates
+│   │   ├── regular.ts   # Regular dependency updates (npm query + package.json)
 │   │   ├── install.ts   # pnpm install execution
 │   │   ├── format.ts    # pnpm-workspace.yaml formatting
 │   │   └── upgrade.ts   # pnpm self-upgrade via corepack
@@ -275,21 +275,29 @@ The action executes in **14 distinct steps** (implemented in `src/main.ts`):
 
 #### Step 6: Update Regular Dependencies
 
-- Update regular dependencies via `pnpm up --latest` with pattern matching
-- Support glob patterns like `effect`, `@effect/*`, `@savvy-web/*`
-- Actual version changes are detected later via lockfile comparison (not from pnpm output)
+- Query npm registry directly for latest versions (avoids `pnpm up --latest` which
+  promotes deps to catalogs when `catalogMode: strict` is enabled)
+- Find all workspace `package.json` files via `workspace-tools` `getPackageInfosAsync()`
+- Match dependency names against glob patterns like `effect`, `@effect/*`, `@savvy-web/*`
+- Skip `catalog:` and `workspace:` specifiers (leave catalog-managed deps untouched)
+- Query `npm view <pkg> dist-tags.latest --json` for each unique matching dependency
+- Compare current version with latest; if newer, construct new specifier preserving
+  prefix (`^`, `~`, or exact) and update `package.json` files directly
+- Preserve `package.json` indentation (tabs/spaces) via `detectIndent`
+- Returns `DependencyUpdateResult[]` directly (no lockfile inference needed)
 
 #### Step 7: Clean Install
 
-- Triggered when config updates, regular dependency patterns, or pnpm upgrade produced changes
+- Triggered when config updates, regular dependency updates, or pnpm upgrade produced changes
 - Remove `node_modules` and `pnpm-lock.yaml` for a fresh lockfile
 - Execute `pnpm install` to regenerate lockfile from scratch
 - Ensures a fully coherent lockfile after all dependency updates
 
 #### Step 8: Format pnpm-workspace.yaml
 
-- Format workspace YAML to match lint-staged requirements
+- Format workspace YAML to match `@savvy-web/lint-staged` PnpmWorkspace handler
 - Sort arrays alphabetically (packages, onlyBuiltDependencies, publicHoistPattern)
+- Sort `configDependencies` object keys alphabetically
 - Sort top-level keys alphabetically (packages first)
 - Use consistent YAML stringify options (indent: 2, lineWidth: 0, singleQuote: false)
 
@@ -308,12 +316,9 @@ The action executes in **14 distinct steps** (implemented in `src/main.ts`):
 
 #### Step 11: Detect Changes
 
-- Compare lockfile snapshots (before vs after)
-- Detect catalog changes (catalog:silk, etc.) and trace affected packages
-- Detect regular dependency specifier changes (non-catalog)
-- Build regular dependency update list from lockfile changes (actual packages, not glob patterns)
-- Deduplicate by dependency + from + to version
-- Prepend pnpm upgrade result (if any) to config updates list
+- Compare lockfile snapshots (before vs after) for catalog and specifier changes
+- Regular dependency updates come directly from step 6 (not inferred from lockfile diff)
+- Combine pnpm upgrade result, config updates, and regular updates into `allUpdates`
 - Check git status for modified files
 - Exit early if no changes detected
 
@@ -994,8 +999,10 @@ no changes are made by the pre-commit hook after our action commits.
 **Formatting Rules:**
 
 1. **Sort arrays alphabetically:** `packages`, `onlyBuiltDependencies`, `publicHoistPattern`
-2. **Sort top-level keys alphabetically**, but keep `packages` first
-3. **YAML stringify options:**
+2. **Sort `configDependencies` object keys alphabetically** (entries inserted by
+   `pnpm add --config` may not be in order)
+3. **Sort top-level keys alphabetically**, but keep `packages` first
+4. **YAML stringify options:**
    - `indent: 2` - Two-space indentation
    - `lineWidth: 0` - Disable line wrapping
    - `singleQuote: false` - Use double quotes
@@ -1007,6 +1014,7 @@ import { parse, stringify } from "yaml";
 import { Effect } from "effect";
 
 const SORTABLE_ARRAY_KEYS = new Set(["packages", "onlyBuiltDependencies", "publicHoistPattern"]);
+const SORTABLE_MAP_KEYS = new Set(["configDependencies"]);
 
 const STRINGIFY_OPTIONS = {
  indent: 2,
@@ -1034,9 +1042,14 @@ const sortContent = (content: PnpmWorkspaceContent): PnpmWorkspaceContent => {
 
  for (const key of keys) {
   const value = content[key];
-  // Sort array values for known sortable keys
   if (SORTABLE_ARRAY_KEYS.has(key) && Array.isArray(value)) {
    result[key] = [...value].sort();
+  } else if (SORTABLE_MAP_KEYS.has(key) && value && typeof value === "object" && !Array.isArray(value)) {
+   const sorted: Record<string, unknown> = {};
+   for (const k of Object.keys(value as Record<string, unknown>).sort()) {
+    sorted[k] = (value as Record<string, unknown>)[k];
+   }
+   result[key] = sorted;
   } else {
    result[key] = value;
   }
@@ -1170,6 +1183,58 @@ const updateConfigDependency = (dependency: string): Effect.Effect<DependencyUpd
   };
  });
 ```
+
+#### src/lib/pnpm/regular.ts
+
+**Purpose:** Update regular (non-config) dependencies by querying npm directly instead of
+using `pnpm up --latest`. This avoids the `catalogMode: strict` issue where `pnpm up`
+promotes non-catalog dependencies to the default catalog and rewrites specifiers to
+`catalog:` references.
+
+**Exported Functions:**
+
+- `matchesPattern(depName, pattern)` - Glob matching via Node's native `path.matchesGlob`
+- `parseSpecifier(specifier)` - Parse version specifier into `{ prefix, version }`,
+  returns `null` for `catalog:` and `workspace:` specifiers
+- `updateRegularDeps(patterns, workspaceRoot?)` - Main Effect function
+
+**Algorithm:**
+
+1. Find all workspace `package.json` paths via `workspace-tools` `getPackageInfosAsync()`
+   plus the root `package.json`
+2. For each `package.json`, scan `dependencies`, `devDependencies`, `optionalDependencies`
+   for deps matching any pattern
+3. Skip deps with `catalog:` or `workspace:` specifiers
+4. Deduplicate entries per path+dep (a dep may appear in both `dependencies` and
+   `devDependencies` of the same file)
+5. Collect unique dependency names across all files
+6. For each unique dep, query `npm view <pkg> dist-tags.latest --json` via `PnpmExecutor.run()`
+7. Compare latest vs current: if newer, construct new specifier (preserve prefix + latest)
+8. Update each `package.json` with new specifiers (preserve indentation via `detectIndent`
+   from `upgrade.ts`)
+9. Return `DependencyUpdateResult[]` with from/to specifiers and affected packages
+
+**Effect Signature:**
+
+```typescript
+export const updateRegularDeps = (
+ patterns: ReadonlyArray<string>,
+ workspaceRoot?: string,
+): Effect.Effect<ReadonlyArray<DependencyUpdateResult>, never, PnpmExecutor>
+```
+
+**Key Design Decisions:**
+
+- Queries npm registry directly instead of relying on `pnpm up` to avoid catalog promotion
+- Uses Node's native `path.matchesGlob` for pattern matching (avoids regex metacharacter
+  injection with package names containing `.`, `+`, etc.)
+- Preserves specifier prefix (`^`, `~`, or exact) from existing `package.json`
+- Skips `catalog:` and `workspace:` specifiers entirely (leave catalog-managed deps to
+  the config dependency update path)
+- Deduplicates per path+dep to avoid duplicate PR table rows when a dep appears in
+  multiple dep fields of the same `package.json`
+- Gracefully handles npm query failures per-dependency (logs warning, continues with others)
+- Reuses `detectIndent` from `upgrade.ts` for consistent `package.json` formatting
 
 #### src/lib/lockfile/compare.ts
 
@@ -2000,19 +2065,27 @@ _This PR was automatically created by [pnpm-config-dependency-action](link)_
    - Handle conflicts
    - Already up-to-date
 
-5. **Dependency Updates** (`src/lib/pnpm/config.test.ts`, `src/lib/pnpm/regular.test.ts`)
+5. **Config Dependency Updates** (`src/lib/pnpm/config.test.ts`)
    - Successful updates
    - Update failures
    - Version parsing
    - Error accumulation
 
-6. **pnpm Self-Upgrade** (`src/lib/pnpm/upgrade.test.ts`) - 30 tests
+6. **Regular Dependency Updates** (`src/lib/pnpm/regular.test.ts`) - 22 tests
+   - `matchesPattern` (6 tests): exact match, exact mismatch, scoped wildcard, scoped mismatch, bare wildcard, dot metacharacter safety
+   - `parseSpecifier` (6 tests): caret, tilde, exact, catalog:, catalog:named, workspace:
+   - `updateRegularDeps` Effect integration (10 tests): empty patterns, single dep newer version,
+     already latest, wildcard matching multiple deps, catalog: skip, multi-file updates,
+     npm query failure resilience, tilde prefix preservation, exact version preservation,
+     deduplication across dep fields
+
+7. **pnpm Self-Upgrade** (`src/lib/pnpm/upgrade.test.ts`) - 30 tests
    - `parsePnpmVersion` (11 tests): exact version, sha suffix, caret prefix, caret+sha, non-pnpm packageManager, empty string, invalid semver; devEngines exact, caret, empty, invalid
    - `formatPnpmVersion` (2 tests): with and without caret
    - `resolveLatestInRange` (6 tests): highest in range, already latest, pre-release filtering, no match, empty versions, no major jump
    - `upgradePnpm` Effect integration (11 tests): no pnpm fields, non-pnpm packageManager, newer version available, already latest, devEngines update, caret preservation, devEngines-only (no packageManager), non-pnpm devEngines skip, tab indentation preservation, space indentation preservation, no newer version
 
-7. **PR Body Generation** (`src/main.effect.test.ts`)
+8. **PR Body Generation** (`src/main.effect.test.ts`)
    - Includes tests for pnpm upgrade appearing in Config Dependencies table
 
 **Coverage Exclusions:**
@@ -2233,7 +2306,7 @@ changeset creation, and GitHub PR management via App authentication.
 - GitHub App token generation (pre.ts) and revocation (post.ts)
 - Branch management with create/rebase
 - Config dependency updates via `pnpm add --config`
-- Regular dependency updates via `pnpm up --latest`
+- Regular dependency updates via direct npm queries (compatible with `catalogMode: strict`)
 - pnpm self-upgrade via `corepack use` with `packageManager` and `devEngines` field support
 - Clean install after updates
 - Workspace YAML formatting

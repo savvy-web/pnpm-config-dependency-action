@@ -6,11 +6,15 @@ code in this repository.
 ## Project Status
 
 This is a **GitHub Action** for updating pnpm config dependencies and regular
-dependencies. The design documentation system is active with a comprehensive
-architecture design document.
+dependencies. It runs in three phases (pre/main/post) using Effect-TS for
+typed error handling, service injection, and retry logic.
 
 For architecture and implementation details:
 → @./.claude/design/pnpm-config-dependency-action.md
+
+Load when working on action phases (pre/main/post), Effect service architecture,
+GitHub API integration, or dependency update logic. Skip for simple bug fixes
+or test-only changes.
 
 ## Commands
 
@@ -19,7 +23,7 @@ For architecture and implementation details:
 ```bash
 pnpm run lint              # Check code with Biome
 pnpm run lint:fix          # Auto-fix lint issues
-pnpm run typecheck         # Type-check all workspaces via Turbo
+pnpm run typecheck         # Type-check via Turbo
 pnpm run test              # Run all tests
 pnpm run test:watch        # Run tests in watch mode
 pnpm run test:coverage     # Run tests with coverage report
@@ -36,35 +40,35 @@ pnpm run build:prod        # Build production/npm output only
 ### Running a Single Test
 
 ```bash
-# Run tests for a specific package
-pnpm run test -- --filter=@savvy-web/ecma-module
-
 # Run a specific test file
-pnpm vitest run pkgs/ecma-module/src/index.test.ts
+pnpm vitest run src/lib/pnpm/regular.test.ts
+
+# Run tests matching a pattern
+pnpm vitest run --testNamePattern="parsePnpmVersion"
 ```
 
 ## Architecture
 
-### Monorepo Structure
+### Repository Structure
 
-- **Package Manager**: pnpm with workspaces
-- **Build Orchestration**: Turbo for caching and task dependencies
-- **Packages**: Located in `pkgs/` directory
-- **Shared Configs**: Located in `lib/configs/`
+- **Type**: Single-package GitHub Action (not a multi-package monorepo)
+- **Entry points**: `src/pre.ts`, `src/main.ts`, `src/post.ts`
+- **Modules**: `src/lib/` (github/, pnpm/, lockfile/, changeset/, errors/, services/)
+- **Shared Configs**: `lib/configs/`
+- **Build**: Turbo for caching; `typecheck` depends on `build`
 
-### Package Build Pipeline
+### Effect-TS Patterns
 
-Each package uses Rslib with dual output:
-
-1. `dist/dev/` - Development build with source maps
-2. `dist/npm/` - Production build for npm publishing
-
-Turbo tasks define dependencies: `typecheck` depends on `build` completing first.
+- **Services**: `GitHubClient`, `PnpmExecutor`, `GitExecutor` via `Context.Tag`
+- **Errors**: `Data.TaggedError` (`PnpmError`, `GitHubApiError`, `FileSystemError`)
+- **Async**: `Effect.tryPromise` wraps Octokit and shell calls
+- **Tests**: Mock services via Effect `Layer.succeed`; `vi.mock()` for
+  `@actions/core` and `@actions/github`
 
 ### Code Quality
 
-- **Biome**: Unified linting and formatting (replaces ESLint + Prettier)
-- **Commitlint**: Enforces conventional commits with DCO signoff
+- **Biome**: Unified linting and formatting (tabs for indentation)
+- **Commitlint**: Conventional commits with DCO signoff
 - **Husky Hooks**:
   - `pre-commit`: Runs lint-staged
   - `commit-msg`: Validates commit message format
@@ -98,7 +102,16 @@ All commits require:
 
 1. Conventional commit format (feat, fix, chore, etc.)
 2. DCO signoff: `Signed-off-by: Name <email>`
+3. No markdown in commit body (commitlint `silk/body-no-markdown` rule)
 
 ### Publishing
 
 Packages publish to both GitHub Packages and npm with provenance.
+
+## Gotchas
+
+- Biome enforces **tabs** for indentation (not spaces)
+- Schema test `validInputs` must include **all** fields when adding new inputs
+- `makeTestGitHubClient` in test helpers must include **all** interface methods
+- GraphQL API required for auto-merge (no REST endpoint exists)
+- `PullRequest` type includes `nodeId` for GraphQL API calls

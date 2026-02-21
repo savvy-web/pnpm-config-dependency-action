@@ -30,6 +30,11 @@ export interface PnpmWorkspaceContent {
 const SORTABLE_ARRAY_KEYS = new Set(["packages", "onlyBuiltDependencies", "publicHoistPattern"]);
 
 /**
+ * Keys whose object entries should be sorted alphabetically by key.
+ */
+const SORTABLE_MAP_KEYS = new Set(["configDependencies"]);
+
+/**
  * Default YAML stringify options for consistent formatting.
  * Must match @savvy-web/lint-staged PnpmWorkspace handler.
  */
@@ -42,11 +47,16 @@ const STRINGIFY_OPTIONS = {
 /**
  * Sort pnpm-workspace.yaml content.
  *
+ * Matches @savvy-web/lint-staged PnpmWorkspace.sortContent pattern, extended
+ * with configDependencies key sorting since our action inserts entries via
+ * `pnpm add --config` which may not preserve alphabetical order.
+ *
  * Sorts:
  * - `packages` array alphabetically
  * - `onlyBuiltDependencies` array (if present)
  * - `publicHoistPattern` array (if present)
- * - All keys alphabetically, keeping `packages` first
+ * - `configDependencies` object keys alphabetically
+ * - All top-level keys alphabetically, keeping `packages` first
  */
 export const sortContent = (content: PnpmWorkspaceContent): PnpmWorkspaceContent => {
 	const result: PnpmWorkspaceContent = {};
@@ -64,6 +74,13 @@ export const sortContent = (content: PnpmWorkspaceContent): PnpmWorkspaceContent
 		// Sort array values for known sortable keys
 		if (SORTABLE_ARRAY_KEYS.has(key) && Array.isArray(value)) {
 			result[key] = [...value].sort();
+		} else if (SORTABLE_MAP_KEYS.has(key) && value && typeof value === "object" && !Array.isArray(value)) {
+			// Sort object keys alphabetically for known map keys
+			const sorted: Record<string, unknown> = {};
+			for (const k of Object.keys(value as Record<string, unknown>).sort()) {
+				sorted[k] = (value as Record<string, unknown>)[k];
+			}
+			result[key] = sorted;
 		} else {
 			result[key] = value;
 		}

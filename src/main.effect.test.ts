@@ -39,13 +39,7 @@ import { getConfigDependencyVersion } from "./lib/pnpm/format.js";
 import { GitHubApiError, PnpmError } from "./lib/schemas/errors.js";
 import type { GitHubClientService, PnpmExecutorService } from "./lib/services/index.js";
 import { GitHubClient, PnpmExecutor } from "./lib/services/index.js";
-import {
-	createOrUpdatePR,
-	generatePRBody,
-	runCommands,
-	updateConfigDependencies,
-	updateRegularDependencies,
-} from "./main.js";
+import { createOrUpdatePR, generatePRBody, runCommands, updateConfigDependencies } from "./main.js";
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Test Helpers
@@ -154,44 +148,6 @@ describe("updateConfigDependencies", () => {
 
 		// Restore default mock
 		vi.mocked(getConfigDependencyVersion).mockReturnValue(Effect.succeed(null));
-	});
-});
-
-describe("updateRegularDependencies", () => {
-	it("completes without error for empty dependencies", async () => {
-		await runWithPnpm(updateRegularDependencies([]));
-	});
-
-	it("calls update for each pattern", async () => {
-		const updateCalls: string[] = [];
-
-		await runWithPnpm(updateRegularDependencies(["effect", "@effect/*"]), {
-			update: (pattern) => {
-				updateCalls.push(pattern);
-				return Effect.succeed("ok");
-			},
-		});
-
-		expect(updateCalls).toEqual(["effect", "@effect/*"]);
-	});
-
-	it("continues on failures", async () => {
-		const updateCalls: string[] = [];
-
-		await runWithPnpm(updateRegularDependencies(["effect", "broken-pkg"]), {
-			update: (pattern) => {
-				updateCalls.push(pattern);
-				if (pattern === "broken-pkg") {
-					return Effect.fail(
-						new PnpmError({ command: "up --latest", dependency: pattern, exitCode: 1, stderr: "error" }),
-					);
-				}
-				return Effect.succeed("ok");
-			},
-		});
-
-		// Both patterns should have been attempted
-		expect(updateCalls).toEqual(["effect", "broken-pkg"]);
 	});
 });
 

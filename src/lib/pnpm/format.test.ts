@@ -39,15 +39,20 @@ describe("sortContent", () => {
 		expect(result.publicHoistPattern).toEqual(["@biomejs/*", "@types/*"]);
 	});
 
-	it("preserves non-sortable values like configDependencies", () => {
+	it("sorts configDependencies keys alphabetically", () => {
 		const input: PnpmWorkspaceContent = {
-			configDependencies: { typescript: "5.4.0", biome: "1.6.1" },
+			configDependencies: { typescript: "5.4.0", "@biomejs/biome": "1.6.1", "@savvy-web/silk": "0.6.3" },
 			customKey: "some-value",
 		};
 
 		const result = sortContent(input);
 
-		expect(result.configDependencies).toEqual({ typescript: "5.4.0", biome: "1.6.1" });
+		expect(Object.keys(result.configDependencies ?? {})).toEqual(["@biomejs/biome", "@savvy-web/silk", "typescript"]);
+		expect(result.configDependencies).toEqual({
+			"@biomejs/biome": "1.6.1",
+			"@savvy-web/silk": "0.6.3",
+			typescript: "5.4.0",
+		});
 		expect(result.customKey).toBe("some-value");
 	});
 
@@ -69,14 +74,15 @@ describe("sortContent", () => {
 
 	it("handles input with no sortable arrays", () => {
 		const input: PnpmWorkspaceContent = {
-			configDependencies: { typescript: "5.4.0" },
+			configDependencies: { zlib: "1.0.0", acorn: "8.0.0" },
 			customField: 42,
 		};
 
 		const result = sortContent(input);
 
 		expect(Object.keys(result)).toEqual(["configDependencies", "customField"]);
-		expect(result.configDependencies).toEqual({ typescript: "5.4.0" });
+		// configDependencies keys should be sorted
+		expect(Object.keys(result.configDependencies ?? {})).toEqual(["acorn", "zlib"]);
 	});
 
 	it("does not mutate the input object", () => {
