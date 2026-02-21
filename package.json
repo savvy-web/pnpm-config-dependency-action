@@ -1,6 +1,6 @@
 {
 	"name": "pnpm-config-dependency-action",
-	"version": "0.5.1",
+	"version": "0.6.0",
 	"private": true,
 	"description": "GitHub Action for updating pnpm config dependencies and regular dependencies with automated PR creation",
 	"keywords": ["github-action", "pnpm", "config-dependencies", "dependency-updates", "monorepo", "changesets"],
