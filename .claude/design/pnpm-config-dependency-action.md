@@ -1226,9 +1226,13 @@ export const updateRegularDeps = (
 **Key Design Decisions:**
 
 - Queries npm registry directly instead of relying on `pnpm up` to avoid catalog promotion
+- Uses Node's native `path.matchesGlob` for pattern matching (avoids regex metacharacter
+  injection with package names containing `.`, `+`, etc.)
 - Preserves specifier prefix (`^`, `~`, or exact) from existing `package.json`
 - Skips `catalog:` and `workspace:` specifiers entirely (leave catalog-managed deps to
   the config dependency update path)
+- Deduplicates per path+dep to avoid duplicate PR table rows when a dep appears in
+  multiple dep fields of the same `package.json`
 - Gracefully handles npm query failures per-dependency (logs warning, continues with others)
 - Reuses `detectIndent` from `upgrade.ts` for consistent `package.json` formatting
 
@@ -2067,12 +2071,13 @@ _This PR was automatically created by [pnpm-config-dependency-action](link)_
    - Version parsing
    - Error accumulation
 
-6. **Regular Dependency Updates** (`src/lib/pnpm/regular.test.ts`) - 20 tests
-   - `matchesPattern` (5 tests): exact match, exact mismatch, scoped wildcard, scoped mismatch, bare wildcard
+6. **Regular Dependency Updates** (`src/lib/pnpm/regular.test.ts`) - 22 tests
+   - `matchesPattern` (6 tests): exact match, exact mismatch, scoped wildcard, scoped mismatch, bare wildcard, dot metacharacter safety
    - `parseSpecifier` (6 tests): caret, tilde, exact, catalog:, catalog:named, workspace:
-   - `updateRegularDeps` Effect integration (9 tests): empty patterns, single dep newer version,
+   - `updateRegularDeps` Effect integration (10 tests): empty patterns, single dep newer version,
      already latest, wildcard matching multiple deps, catalog: skip, multi-file updates,
-     npm query failure resilience, tilde prefix preservation, exact version preservation
+     npm query failure resilience, tilde prefix preservation, exact version preservation,
+     deduplication across dep fields
 
 7. **pnpm Self-Upgrade** (`src/lib/pnpm/upgrade.test.ts`) - 30 tests
    - `parsePnpmVersion` (11 tests): exact version, sha suffix, caret prefix, caret+sha, non-pnpm packageManager, empty string, invalid semver; devEngines exact, caret, empty, invalid
