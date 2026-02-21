@@ -1,5 +1,11 @@
 # pnpm-config-dependency-action
 
+## 0.6.0
+
+### Minor Changes
+
+* [`ec30b5a`](https://github.com/savvy-web/pnpm-config-dependency-action/commit/ec30b5a96bcf93602b850d32344f2c0c4a69e2b4) Replace `pnpm up --latest` with direct npm queries for regular dependency updates to avoid promoting dependencies to catalogs when `catalogMode: strict` is enabled
+
 ## 0.5.1
 
 ### Bug Fixes
