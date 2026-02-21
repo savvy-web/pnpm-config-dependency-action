@@ -28,7 +28,8 @@ import { commitChanges, manageBranch } from "./lib/github/branch.js";
 import { getTimeout, isDryRun, parseInputs } from "./lib/inputs.js";
 import { captureLockfileState, compareLockfiles } from "./lib/lockfile/compare.js";
 import { logDebug, logDebugState } from "./lib/logging.js";
-import { formatWorkspaceYaml, getConfigDependencyVersion, readWorkspaceYaml } from "./lib/pnpm/format.js";
+import { updateConfigDeps } from "./lib/pnpm/config.js";
+import { formatWorkspaceYaml, readWorkspaceYaml } from "./lib/pnpm/format.js";
 import { updateRegularDeps } from "./lib/pnpm/regular.js";
 import { upgradePnpm } from "./lib/pnpm/upgrade.js";
 import { GitExecutor, GitHubClient, PnpmExecutor, makeAppLayer } from "./lib/services/index.js";
@@ -113,7 +114,7 @@ const program = Effect.gen(function* () {
 		const workspaceBefore = yield* readWorkspaceYaml().pipe(Effect.catchAll(() => Effect.succeed(null)));
 		yield* logDebugState("pnpm-workspace.yaml (before)", workspaceBefore);
 
-		const configUpdates = yield* updateConfigDependencies(inputs.configDependencies);
+		const configUpdates = yield* updateConfigDeps(inputs.configDependencies);
 		yield* logDebugState("Config dependency updates", configUpdates);
 
 		// Step 5: Update regular dependencies (query npm + update package.json directly)
@@ -290,64 +291,6 @@ const program = Effect.gen(function* () {
 		throw error;
 	}
 });
-
-/**
- * Update config dependencies with error accumulation.
- */
-export const updateConfigDependencies = (
-	dependencies: ReadonlyArray<string>,
-): Effect.Effect<ReadonlyArray<DependencyUpdateResult>, never, PnpmExecutor> =>
-	Effect.gen(function* () {
-		if (dependencies.length === 0) {
-			return [];
-		}
-
-		const pnpm = yield* PnpmExecutor;
-		const results: DependencyUpdateResult[] = [];
-
-		for (const dep of dependencies) {
-			yield* Effect.logInfo(`Updating config dependency: ${dep}`);
-
-			// Get version before update
-			const versionBefore = yield* getConfigDependencyVersion(dep).pipe(Effect.catchAll(() => Effect.succeed(null)));
-
-			// Run pnpm add --config
-			const result = yield* pnpm.addConfig(dep).pipe(
-				Effect.map(() => ({ success: true as const, output: "" })),
-				Effect.catchAll((error) =>
-					Effect.gen(function* () {
-						yield* Effect.logWarning(`Failed to update ${dep}: ${error.stderr}`);
-						return { success: false as const, output: error.stderr };
-					}),
-				),
-			);
-
-			if (result.success) {
-				// Get version after update
-				const versionAfter = yield* getConfigDependencyVersion(dep).pipe(
-					Effect.catchAll(() => Effect.succeed("unknown")),
-				);
-
-				// Skip no-op updates where version didn't change
-				if (versionBefore !== null && versionAfter === versionBefore) {
-					yield* Effect.logInfo(`${dep} is already up-to-date at ${versionBefore}`);
-					continue;
-				}
-
-				results.push({
-					dependency: dep,
-					from: versionBefore,
-					to: versionAfter ?? "unknown",
-					type: "config",
-					package: null,
-				});
-
-				yield* Effect.logInfo(`Updated ${dep}: ${versionBefore ?? "new"} -> ${versionAfter}`);
-			}
-		}
-
-		return results;
-	});
 
 /**
  * Result of running custom commands.

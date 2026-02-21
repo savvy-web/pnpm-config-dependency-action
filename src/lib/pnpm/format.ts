@@ -38,7 +38,7 @@ const SORTABLE_MAP_KEYS = new Set(["configDependencies"]);
  * Default YAML stringify options for consistent formatting.
  * Must match @savvy-web/lint-staged PnpmWorkspace handler.
  */
-const STRINGIFY_OPTIONS = {
+export const STRINGIFY_OPTIONS = {
 	indent: 2,
 	lineWidth: 0, // Disable line wrapping
 	singleQuote: false,
@@ -48,8 +48,8 @@ const STRINGIFY_OPTIONS = {
  * Sort pnpm-workspace.yaml content.
  *
  * Matches @savvy-web/lint-staged PnpmWorkspace.sortContent pattern, extended
- * with configDependencies key sorting since our action inserts entries via
- * `pnpm add --config` which may not preserve alphabetical order.
+ * with configDependencies key sorting since updated entries may not preserve
+ * alphabetical order.
  *
  * Sorts:
  * - `packages` array alphabetically
