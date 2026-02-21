@@ -1,5 +1,11 @@
 # pnpm-config-dependency-action
 
+## 0.7.0
+
+### Features
+
+* [`babbee1`](https://github.com/savvy-web/pnpm-config-dependency-action/commit/babbee17435d86dbd7f652cffee07e3f088105e4) Replace `pnpm add --config` with direct npm registry queries and YAML editing for config dependency updates, avoiding catalog promotion when `catalogMode: strict` is enabled
+
 ## 0.6.0
 
 ### Minor Changes
