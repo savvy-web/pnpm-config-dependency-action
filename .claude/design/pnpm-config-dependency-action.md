@@ -1193,7 +1193,7 @@ promotes non-catalog dependencies to the default catalog and rewrites specifiers
 
 **Exported Functions:**
 
-- `matchesPattern(depName, pattern)` - Glob matching for dependency names (`*` → `[^/]*`)
+- `matchesPattern(depName, pattern)` - Glob matching via Node's native `path.matchesGlob`
 - `parseSpecifier(specifier)` - Parse version specifier into `{ prefix, version }`,
   returns `null` for `catalog:` and `workspace:` specifiers
 - `updateRegularDeps(patterns, workspaceRoot?)` - Main Effect function
@@ -1205,12 +1205,14 @@ promotes non-catalog dependencies to the default catalog and rewrites specifiers
 2. For each `package.json`, scan `dependencies`, `devDependencies`, `optionalDependencies`
    for deps matching any pattern
 3. Skip deps with `catalog:` or `workspace:` specifiers
-4. Collect unique dependency names across all files
-5. For each unique dep, query `npm view <pkg> dist-tags.latest --json` via `PnpmExecutor.run()`
-6. Compare latest vs current: if newer, construct new specifier (preserve prefix + latest)
-7. Update each `package.json` with new specifiers (preserve indentation via `detectIndent`
+4. Deduplicate entries per path+dep (a dep may appear in both `dependencies` and
+   `devDependencies` of the same file)
+5. Collect unique dependency names across all files
+6. For each unique dep, query `npm view <pkg> dist-tags.latest --json` via `PnpmExecutor.run()`
+7. Compare latest vs current: if newer, construct new specifier (preserve prefix + latest)
+8. Update each `package.json` with new specifiers (preserve indentation via `detectIndent`
    from `upgrade.ts`)
-8. Return `DependencyUpdateResult[]` with from/to specifiers and affected packages
+9. Return `DependencyUpdateResult[]` with from/to specifiers and affected packages
 
 **Effect Signature:**
 

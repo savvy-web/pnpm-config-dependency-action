@@ -67,6 +67,12 @@ describe("matchesPattern", () => {
 	it("matches bare wildcard", () => {
 		expect(matchesPattern("anything", "*")).toBe(true);
 	});
+
+	it("handles dots in package names safely", () => {
+		expect(matchesPattern("jquery.form", "jquery.form")).toBe(true);
+		// Dot should NOT act as regex wildcard
+		expect(matchesPattern("jqueryXform", "jquery.form")).toBe(false);
+	});
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -311,6 +317,34 @@ describe("updateRegularDeps", () => {
 
 		const pkg = readPackageJson(dir);
 		expect(pkg.dependencies.effect).toBe("~3.1.0");
+	});
+
+	it("deduplicates when dep appears in both dependencies and devDependencies", async () => {
+		const dir = makeTempDir();
+		writePackageJson(dir, {
+			name: "root",
+			dependencies: { effect: "^3.0.0" },
+			devDependencies: { effect: "^3.0.0" },
+		});
+
+		mockGetPackageInfosAsync.mockResolvedValue({});
+
+		const result = await runWithPnpm(updateRegularDeps(["effect"], dir), {
+			run: (cmd) => {
+				if (cmd.includes("npm view effect")) {
+					return Effect.succeed('"3.1.0"');
+				}
+				return Effect.succeed("ok");
+			},
+		});
+
+		// Should only have 1 result, not 2
+		expect(result).toHaveLength(1);
+		expect(result[0]).toMatchObject({
+			dependency: "effect",
+			from: "^3.0.0",
+			to: "^3.1.0",
+		});
 	});
 
 	it("preserves exact version (no prefix)", async () => {

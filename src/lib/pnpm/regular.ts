@@ -9,7 +9,7 @@
  */
 
 import { readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, matchesGlob } from "node:path";
 import { Effect } from "effect";
 import { getPackageInfosAsync } from "workspace-tools";
 
@@ -25,15 +25,15 @@ import { detectIndent } from "./upgrade.js";
 /**
  * Check if a dependency name matches a glob pattern.
  *
+ * Uses Node's native `path.matchesGlob` for safe pattern matching
+ * without regex metacharacter injection issues.
+ *
  * - Exact match: `effect` matches `effect`
  * - Scoped wildcard: `@savvy-web/*` matches `@savvy-web/changesets`
  * - Bare wildcard: `*` matches anything
  */
 export const matchesPattern = (depName: string, pattern: string): boolean => {
-	if (pattern === depName) return true;
-	// Convert glob pattern to regex: * -> [^/]*
-	const regex = new RegExp(`^${pattern.replace(/\*/g, "[^/]*")}$`);
-	return regex.test(depName);
+	return matchesGlob(depName, pattern);
 };
 
 /**
@@ -62,7 +62,7 @@ export const parseSpecifier = (specifier: string): { prefix: string; version: st
 /**
  * Query npm for the latest published version of a package.
  */
-const queryLatestVersion = (packageName: string): Effect.Effect<string | null, FileSystemError, PnpmExecutor> =>
+const queryLatestVersion = (packageName: string): Effect.Effect<string | null, never, PnpmExecutor> =>
 	Effect.gen(function* () {
 		const pnpm = yield* PnpmExecutor;
 
@@ -95,9 +95,9 @@ interface PackageJsonDeps {
 const collectMatchingDeps = (
 	packageJsonPaths: ReadonlyArray<string>,
 	patterns: ReadonlyArray<string>,
-): Effect.Effect<Map<string, Array<{ path: string; field: string; currentSpecifier: string }>>, FileSystemError> =>
+): Effect.Effect<Map<string, Array<{ path: string; currentSpecifier: string }>>, FileSystemError> =>
 	Effect.gen(function* () {
-		const depMap = new Map<string, Array<{ path: string; field: string; currentSpecifier: string }>>();
+		const depMap = new Map<string, Array<{ path: string; currentSpecifier: string }>>();
 		const depFields = ["dependencies", "devDependencies", "optionalDependencies"] as const;
 
 		for (const pkgPath of packageJsonPaths) {
@@ -124,8 +124,11 @@ const collectMatchingDeps = (
 					const parsed = parseSpecifier(specifier);
 					if (!parsed) continue;
 
+					// Deduplicate: skip if this path+dep already tracked
+					// (same dep can appear in dependencies AND devDependencies)
 					const entries = depMap.get(name) ?? [];
-					entries.push({ path: pkgPath, field, currentSpecifier: specifier });
+					if (entries.some((e) => e.path === pkgPath)) continue;
+					entries.push({ path: pkgPath, currentSpecifier: specifier });
 					depMap.set(name, entries);
 				}
 			}
@@ -224,7 +227,7 @@ export const updateRegularDeps = (
 			Effect.catchAll((error) =>
 				Effect.gen(function* () {
 					yield* Effect.logWarning(`Failed to collect matching deps: ${error.reason}`);
-					return new Map<string, Array<{ path: string; field: string; currentSpecifier: string }>>();
+					return new Map<string, Array<{ path: string; currentSpecifier: string }>>();
 				}),
 			),
 		);
