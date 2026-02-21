@@ -62,6 +62,7 @@ jobs:
 | `changesets` | No | `true` | Create changesets for version management when `.changeset/` exists |
 | `dry-run` | No | `false` | Detect changes without committing |
 | `log-level` | No | `info` | Logging verbosity (`info` or `debug`) |
+| `timeout` | No | `180` | Maximum time in seconds before cancelling |
 | `auto-merge` | No | `""` | Enable auto-merge on the PR (`merge`, `squash`, or `rebase`) |
 | `skip-token-revoke` | No | `false` | Skip revoking the GitHub App token on cleanup |
 
