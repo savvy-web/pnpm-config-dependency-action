@@ -1,5 +1,15 @@
 # pnpm-config-dependency-action
 
+## 0.7.1
+
+### Dependencies
+
+* [`b538fde`](https://github.com/savvy-web/pnpm-config-dependency-action/commit/b538fde5724a8de53f5e509163f58cfe424b5f3e) @savvy-web/changesets: ^0.1.1 → ^0.4.1
+* @savvy-web/commitlint: ^0.3.3 → ^0.4.0
+* @savvy-web/github-action-builder: ^0.1.4 → ^0.2.0
+* @savvy-web/lint-staged: ^0.4.5 → ^0.5.0
+* @savvy-web/vitest: ^0.1.0 → ^0.2.0
+
 ## 0.7.0
 
 ### Features
