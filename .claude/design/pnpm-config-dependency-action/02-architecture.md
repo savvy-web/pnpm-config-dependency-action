@@ -6,38 +6,37 @@
 
 ```text
 src/
-├── main.ts              # Main orchestration logic
-├── pre.ts               # GitHub App token generation (runs first)
-├── post.ts              # Cleanup and token revocation (runs last)
+├── main.ts              # Main orchestration logic (uses Action.run)
+├── pre.ts               # GitHub App token generation (uses Action.run)
+├── post.ts              # Cleanup and token revocation (uses Action.run)
 ├── lib/
-│   ├── inputs.ts        # Action input parsing and validation
+│   ├── inputs.ts        # Action input parsing (via ActionInputs service)
+│   ├── schemas/
+│   │   ├── index.ts     # Effect Schema definitions (ActionInputs schema)
+│   │   └── errors.ts    # Typed error definitions (Data.TaggedError)
+│   ├── services/
+│   │   └── index.ts     # Effect services (GitHubClient, GitExecutor, PnpmExecutor)
 │   ├── github/
 │   │   ├── auth.ts      # GitHub App authentication
-│   │   ├── branch.ts    # Branch management (create, rebase, switch)
-│   │   ├── check.ts     # Check run creation and updates
-│   │   ├── pr.ts        # Pull request creation and updates
-│   │   └── commit.ts    # Commit creation with DCO signoff
+│   │   └── branch.ts    # Branch management + commit via GitHub API
 │   ├── pnpm/
 │   │   ├── config.ts    # Config dependency updates
 │   │   ├── regular.ts   # Regular dependency updates (npm query + package.json)
-│   │   ├── install.ts   # pnpm install execution
 │   │   ├── format.ts    # pnpm-workspace.yaml formatting
 │   │   └── upgrade.ts   # pnpm self-upgrade via corepack
 │   ├── changeset/
-│   │   ├── detect.ts    # Detect if repo uses changesets
-│   │   ├── analyze.ts   # Analyze which packages changed
 │   │   └── create.ts    # Create changeset files
-│   ├── git/
-│   │   ├── status.ts    # Git status checking
-│   │   └── diff.ts      # Git diff analysis
-│   ├── errors/
-│   │   └── types.ts     # Typed error definitions
-│   └── utils/
-│       ├── logging.ts   # Structured logging
-│       └── summary.ts   # GitHub Actions summary writing
+│   └── lockfile/
+│       └── compare.ts   # Lockfile state capture and comparison
 └── types/
     └── index.ts         # Shared type definitions
 ```
+
+**Key architectural note:** All GitHub Action plumbing (inputs, outputs, state,
+logging) is provided by `@savvy-web/github-action-effects` services. The
+`@actions/core` package is no longer imported directly by any source file.
+Each entry point uses `Action.run(program, ActionStateLive)` which provides
+`NodeContext.layer` and the `ActionLogger` layer automatically.
 
 ## Data Flow
 

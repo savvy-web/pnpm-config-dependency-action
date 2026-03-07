@@ -68,7 +68,8 @@ Detailed breakdown of the 14-step workflow executed in the main phase.
 ## Step 6: Update Regular Dependencies
 
 - Iterates over each dependency pattern listed in the input
-- Runs `pnpm up <pattern> --latest` for each pattern
+- Queries npm registry directly for latest versions (avoids `pnpm up --latest`
+  which promotes deps to catalogs when `catalogMode: strict` is enabled)
 - Supports glob patterns (e.g., `@effect/*`)
 - Uses the same error accumulation pattern as config dependency updates
 

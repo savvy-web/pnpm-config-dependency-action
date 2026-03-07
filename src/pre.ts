@@ -8,12 +8,20 @@
  * @module pre
  */
 
-import { debug, getInput, info, saveState, setFailed, setOutput, setSecret } from "@actions/core";
-import { NodeRuntime } from "@effect/platform-node";
-import { Effect } from "effect";
+import { Action, ActionInputs, ActionOutputs, ActionState, ActionStateLive } from "@savvy-web/github-action-effects";
+import { Effect, Schema } from "effect";
 
 import { generateInstallationToken } from "./lib/github/auth.js";
-import { shouldSkipTokenRevoke } from "./lib/inputs.js";
+
+/**
+ * Schema for the token state saved for main.ts and post.ts.
+ */
+const TokenState = Schema.Struct({
+	token: Schema.String,
+	expiresAt: Schema.String,
+	installationId: Schema.Number,
+	appSlug: Schema.String,
+});
 
 /**
  * Pre-action program.
@@ -21,45 +29,34 @@ import { shouldSkipTokenRevoke } from "./lib/inputs.js";
 export const program = Effect.gen(function* () {
 	yield* Effect.logInfo("Running pre-action script");
 
+	const inputs = yield* ActionInputs;
+	const outputs = yield* ActionOutputs;
+	const state = yield* ActionState;
+
 	// Store start time for duration logging in post.ts
-	const startTime = Date.now().toString();
-	saveState("startTime", startTime);
+	yield* state.save("startTime", { value: Date.now().toString() }, Schema.Struct({ value: Schema.String }));
 
 	// Get required GitHub App credentials
-	const appId = getInput("app-id", { required: true });
-	const privateKey = getInput("app-private-key", { required: true });
-	const skipTokenRevoke = shouldSkipTokenRevoke();
-
-	if (!appId || !privateKey) {
-		return yield* Effect.fail(new Error("app-id and app-private-key are required"));
-	}
+	const appId = yield* inputs.get("app-id", Schema.String);
+	const privateKey = yield* inputs.getSecret("app-private-key", Schema.String);
+	const skipTokenRevoke = yield* inputs.getBooleanOptional("skip-token-revoke", false);
 
 	// Generate installation token
 	const tokenResult = yield* generateInstallationToken(appId, privateKey);
 
 	// Mark token as secret to mask in logs
-	setSecret(tokenResult.token);
+	yield* outputs.setSecret(tokenResult.token);
 
 	// Save state for main.ts and post.ts
-	saveState("token", tokenResult.token);
-	saveState("expiresAt", tokenResult.expiresAt);
-	saveState("installationId", tokenResult.installationId.toString());
-	saveState("appSlug", tokenResult.appSlug);
-	saveState("skipTokenRevoke", skipTokenRevoke.toString());
+	yield* state.save("tokenState", tokenResult, TokenState);
+	yield* state.save("skipTokenRevoke", { value: skipTokenRevoke.toString() }, Schema.Struct({ value: Schema.String }));
 
 	// Set outputs for use in workflow
-	setOutput("token", tokenResult.token);
+	yield* outputs.set("token", tokenResult.token);
 
-	info(`Token generated for app "${tokenResult.appSlug}" (expires: ${tokenResult.expiresAt})`);
-	debug(`Pre-action completed at ${startTime}`);
-}).pipe(
-	Effect.catchAll((error) =>
-		Effect.sync(() => {
-			const message = error instanceof Error ? error.message : String(error);
-			setFailed(`Pre-action failed: ${message}`);
-		}),
-	),
-);
+	yield* Effect.logInfo(`Token generated for app "${tokenResult.appSlug}" (expires: ${tokenResult.expiresAt})`);
+	yield* Effect.logDebug(`Pre-action completed at ${Date.now()}`);
+});
 
 // Run the pre-action
-NodeRuntime.runMain(program);
+Action.run(program, ActionStateLive);

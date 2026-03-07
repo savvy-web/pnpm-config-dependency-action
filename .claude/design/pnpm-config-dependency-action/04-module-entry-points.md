@@ -8,61 +8,61 @@
 
 **State Persistence:**
 
-The pre.ts phase uses `@actions/core` `saveState()` to persist values for main.ts and post.ts:
+The pre.ts phase uses `ActionState` service (from `@savvy-web/github-action-effects`)
+to persist Schema-validated state for main.ts and post.ts. State is saved as structured
+objects with Effect Schema validation, not raw strings:
 
 ```typescript
-import { getInput, saveState, setSecret, setOutput, info } from "@actions/core";
+import { Action, ActionInputs, ActionOutputs, ActionState, ActionStateLive } from "@savvy-web/github-action-effects";
+import { Effect, Schema } from "effect";
 
-// Values saved in pre.ts are available via getState() in main.ts and post.ts
-saveState("token", token);                    // GitHub App installation token
-saveState("expiresAt", expiresAt);            // Token expiration timestamp
-saveState("installationId", installationId); // For token revocation in post.ts
-saveState("appSlug", appSlug);               // For logging
-saveState("startTime", Date.now().toString()); // For timing
+const TokenState = Schema.Struct({
+ token: Schema.String,
+ expiresAt: Schema.String,
+ installationId: Schema.Number,
+ appSlug: Schema.String,
+});
+
+// State saved via ActionState.save() with Schema validation
+yield* state.save("tokenState", tokenResult, TokenState);
+yield* state.save("startTime", { value: Date.now().toString() }, Schema.Struct({ value: Schema.String }));
+yield* state.save("skipTokenRevoke", { value: skipTokenRevoke.toString() }, Schema.Struct({ value: Schema.String }));
 ```
 
-**Effect Signature:**
+**Program Structure:**
+
+The `program` Effect is exported for testability. It requires `ActionInputs`,
+`ActionOutputs`, and `ActionState` services in its context. The module-level
+`Action.run(program, ActionStateLive)` provides all services and runs the program.
 
 ```typescript
-export const generateToken: Effect.Effect<
- InstallationToken,
- AuthenticationError | GitHubApiError
-> = Effect.gen(function* () {
- // 1. Parse app ID and private key from inputs
- const appId = yield* parseAppId();
- const privateKey = yield* parsePrivateKey();
+export const program = Effect.gen(function* () {
+ const inputs = yield* ActionInputs;
+ const outputs = yield* ActionOutputs;
+ const state = yield* ActionState;
 
- // 2. Create JWT for GitHub App authentication
- const jwt = yield* createJWT(appId, privateKey);
+ // 1. Read app credentials via ActionInputs service
+ const appId = yield* inputs.get("app-id", Schema.String);
+ const privateKey = yield* inputs.getSecret("app-private-key", Schema.String);
 
- // 3. Get installation ID for this repository
- const installationId = yield* getInstallationId(jwt);
+ // 2. Generate installation token
+ const tokenResult = yield* generateInstallationToken(appId, privateKey);
 
- // 4. Generate installation token
- const token = yield* createInstallationToken(jwt, installationId);
-
- // 5. Save state for main.ts and post.ts
- yield* Effect.sync(() => {
-  saveState("token", token.token);
-  saveState("expiresAt", token.expiresAt.toISOString());
-  saveState("installationId", installationId.toString());
-  setSecret(token.token); // Mask in logs
-  setOutput("token", token.token);
- });
-
- return token;
+ // 3. Mark token as secret, save state, set outputs
+ yield* outputs.setSecret(tokenResult.token);
+ yield* state.save("tokenState", tokenResult, TokenState);
+ yield* outputs.set("token", tokenResult.token);
 });
+
+Action.run(program, ActionStateLive);
 ```
 
 **Key Functions:**
 
-- `parseAppId()`: Extract and validate app-id input
-- `parsePrivateKey()`: Extract and validate app-private-key input
-- `createJWT()`: Generate JWT using @octokit/auth-app
-- `getInstallationId()`: Fetch installation ID for the repository
-- `createInstallationToken()`: Generate short-lived token with required permissions
-- `setActionOutput()`: Set token as action output for subsequent steps
-- `setEnvVar()`: Set GITHUB_TOKEN environment variable
+- `generateInstallationToken()`: Create JWT, get installation ID, generate token
+- `ActionInputs.get()` / `getSecret()`: Read action inputs with Schema validation
+- `ActionState.save()`: Persist Schema-validated state for later phases
+- `ActionOutputs.setSecret()` / `set()`: Mask secrets and set outputs
 
 **Required Permissions:**
 
@@ -76,133 +76,74 @@ export const generateToken: Effect.Effect<
 
 **State Retrieval:**
 
-Main.ts retrieves state saved by pre.ts using `@actions/core` `getState()`:
+Main.ts retrieves Schema-validated state saved by pre.ts using `ActionState.getOptional()`:
 
 ```typescript
-import { getState, info } from "@actions/core";
+import { Action, ActionInputs, ActionOutputs, ActionState, ActionStateLive } from "@savvy-web/github-action-effects";
+import { Effect, Option, Schema } from "effect";
 
-// Retrieve values saved by pre.ts
-const token = getState("token");
-const expiresAt = getState("expiresAt");
-const appSlug = getState("appSlug");
+const TokenState = Schema.Struct({
+ token: Schema.String,
+ expiresAt: Schema.String,
+ installationId: Schema.Number,
+ appSlug: Schema.String,
+});
 
-if (!token) {
- throw new Error("No token available. Pre-action should have generated a token.");
+// Retrieve and decode state saved by pre.ts
+const tokenOption = yield* actionState.getOptional("tokenState", TokenState);
+if (Option.isNone(tokenOption)) {
+ return yield* Effect.fail(new Error("No token available. Ensure pre.ts ran successfully."));
 }
-
-info(`Using token for app "${appSlug}" (expires: ${expiresAt})`);
+const tokenState = tokenOption.value;
 ```
 
-**Effect Signature:**
+**Two-Level Program Structure:**
+
+The module exports a `program` Effect (the core orchestration logic) and a `runnable`
+wrapper that retrieves the token, builds the app layer, applies a timeout, and handles
+top-level errors. The module-level `Action.run(runnable, ActionStateLive)` executes
+everything.
+
+- `program` requires `ActionState`, `ActionOutputs`, `ActionInputs`, `GitHubClient`,
+  `GitExecutor`, and `PnpmExecutor` in its context
+- `runnable` retrieves the token from state, constructs the app layer via
+  `makeAppLayer(token)`, provides it to `program`, and wraps with timeout and
+  error handling
+- `generateCommitMessage(updates, appSlug)` takes `appSlug` as a parameter instead
+  of reading from `@actions/core` state
 
 ```typescript
-export const main: Effect.Effect<ActionResult, never> = Effect.gen(function* () {
- // Phase 1: Setup - retrieve token from pre.ts state
- const token = yield* Effect.sync(() => getState("token")).pipe(
-  Effect.filterOrFail(
-   (t) => t.length > 0,
-   () => new AuthenticationError({ reason: "No token in state. Ensure pre.ts ran." })
-  )
+export const program = Effect.gen(function* () {
+ const actionState = yield* ActionState;
+ const outputs = yield* ActionOutputs;
+ const actionInputs = yield* ActionInputs;
+
+ // Token already retrieved and validated by runnable wrapper
+ const tokenOption = yield* actionState.getOptional("tokenState", TokenState);
+ // ... 14-step orchestration using Effect.logInfo/logDebug/logWarning/logError
+ // ... outputs.set(), outputs.summary(), outputs.setFailed() for action I/O
+});
+
+const runnable = Effect.gen(function* () {
+ // Retrieve token, build app layer, provide to program with timeout
+ const appLayer = makeAppLayer(tokenOption.value.token);
+ yield* program.pipe(
+  Effect.provide(appLayer),
+  Effect.timeoutFail({ duration: Duration.seconds(180), ... }),
+  Effect.catchAll((error) => /* outputs.setFailed(...) */),
  );
+});
 
- const inputs = yield* parseInputs().pipe(
-  Effect.catchAll((error) =>
-   Effect.gen(function* () {
-    yield* logError("Input validation failed", error);
-    yield* setFailed(error.reason);
-    return yield* Effect.fail(error);
-   })
-  )
- );
-
- const context = yield* getGitHubContext();
- const client = yield* createAuthenticatedClient();
- const checkRun = yield* createCheckRun(client, context, "pnpm config dependencies");
-
- // Phase 2: Branch Management
- const branchResult = yield* manageBranch(client, context, inputs.branch).pipe(
-  Effect.tap((result) =>
-   logInfo(
-    result.created
-     ? `Created branch ${result.branch} from ${result.baseRef}`
-     : `Rebased ${result.branch} onto ${result.baseRef}`
-   )
-  )
- );
-
- // Phase 3: Dependency Updates (with error accumulation)
- const configUpdates = yield* updateConfigDependencies(inputs.configDependencies).pipe(
-  Effect.catchAll((error) => accumulateErrors(error, []))
- );
-
- yield* runPnpmInstall();
-
- const regularUpdates = yield* updateRegularDependencies(inputs.dependencies).pipe(
-  Effect.catchAll((error) => accumulateErrors(error, configUpdates))
- );
-
- const allUpdates = [...configUpdates, ...regularUpdates];
-
- // Phase 4: Change Detection
- const hasChanges = yield* detectChanges();
- if (!hasChanges) {
-  yield* updateCheckRun(checkRun.id, "completed", "neutral", "No dependency updates available");
-  yield* writeSummary("No changes detected. All dependencies are up-to-date.");
-  return yield* Effect.succeed({ updates: [], changedPackages: [], changesets: [], branch: branchResult });
- }
-
- const changedPackages = yield* analyzeChangedPackages(allUpdates);
-
- // Phase 5: Changeset Creation (conditional on `changesets` input AND .changeset/ directory)
- const changesets = yield* Effect.if(
-  () => inputs.changesets && changesetDirectoryExists(),
-  {
-   onTrue: () => createChangesets(changedPackages),
-   onFalse: () => Effect.succeed([])
-  }
- );
-
- // Phase 6: Commit and Push
- yield* formatWorkspaceYaml();
- yield* commitChanges(allUpdates, changesets);
- yield* pushBranch(branchResult.branch, branchResult.created === false);
-
- // Phase 7: Pull Request
- const pr = yield* createOrUpdatePR(client, context, branchResult.branch, allUpdates, changedPackages);
-
- // Phase 7.5: Enable Auto-merge (if configured)
- if (inputs.autoMerge !== "") {
-  yield* enableAutoMerge(client, pr.nodeId, inputs.autoMerge).pipe(
-   Effect.catchAll((error) =>
-    Effect.gen(function* () {
-     yield* logWarning(`Failed to enable auto-merge: ${error.message}`);
-     return Effect.succeed(void 0);
-    })
-   )
-  );
- }
-
- // Phase 8: Finalization
- yield* updateCheckRun(checkRun.id, "completed", "success", `Updated ${allUpdates.length} dependencies`);
- yield* writeSummary(generateSummaryMarkdown(allUpdates, changedPackages, pr));
-
- return { updates: allUpdates, changedPackages, changesets, branch: branchResult, pr, checkRun };
-}).pipe(
- Effect.catchAll((error) =>
-  Effect.gen(function* () {
-   yield* logError("Action failed", error);
-   yield* setFailed(formatErrorMessage(error));
-   return yield* Effect.fail(error);
-  })
- )
-);
+Action.run(runnable, ActionStateLive);
 ```
 
 **Key Responsibilities:**
 
 - Coordinate phase execution in correct order
 - Handle errors gracefully with accumulation where appropriate
-- Provide detailed logging at each step
+- Provide detailed logging via `Effect.logInfo`/`logDebug`/`logWarning`/`logError`
+  (routed to `@actions/core` by `ActionLoggerLayer`)
+- Set outputs and write summaries via `ActionOutputs` service
 - Exit early if no changes detected
 - Generate comprehensive summaries
 
@@ -212,54 +153,54 @@ export const main: Effect.Effect<ActionResult, never> = Effect.gen(function* () 
 
 **State Retrieval:**
 
-Post.ts retrieves state from pre.ts for cleanup operations:
+Post.ts retrieves Schema-validated state from pre.ts using `ActionState.getOptional()`,
+which returns `Option<T>`:
 
 ```typescript
-import { getState, info, warning } from "@actions/core";
+import { Action, ActionState, ActionStateLive } from "@savvy-web/github-action-effects";
+import { Effect, Option, Schema } from "effect";
 
-// Retrieve values needed for cleanup
-const token = getState("token");
-const installationId = getState("installationId");
-const startTime = getState("startTime");
+const TokenState = Schema.Struct({
+ token: Schema.String,
+ expiresAt: Schema.String,
+ installationId: Schema.Number,
+ appSlug: Schema.String,
+});
 
-const duration = Date.now() - parseInt(startTime, 10);
-info(`Action completed in ${duration}ms`);
+const tokenOption = yield* state.getOptional("tokenState", TokenState);
+if (Option.isNone(tokenOption)) {
+ yield* Effect.logWarning("No token found in state - nothing to revoke");
+ return;
+}
 ```
 
-**Effect Signature:**
+**Program Structure:**
+
+Like pre.ts, the `program` Effect is exported for testability. Uses `Effect.logInfo`
+and `Effect.logWarning` instead of `@actions/core` logging functions.
 
 ```typescript
-export const cleanup: Effect.Effect<void, never> = Effect.gen(function* () {
- // Retrieve state saved by pre.ts
- const token = yield* Effect.sync(() => getState("token"));
- const installationId = yield* Effect.sync(() => getState("installationId"));
- const skipRevoke = yield* Effect.sync(() => getState("skipTokenRevoke") === "true");
+export const program = Effect.gen(function* () {
+ const state = yield* ActionState;
 
- // 1. Revoke GitHub App token (unless skipped or no token)
- if (token && installationId && !skipRevoke) {
-  yield* revokeToken(token, parseInt(installationId, 10)).pipe(
-   Effect.catchAll((error) => {
-    // Log but don't fail cleanup
-    yield* Effect.sync(() => warning(`Failed to revoke token: ${error}`));
-    return Effect.succeed(void 0);
-   })
-  );
- }
+ // Check skip flag
+ const skipRevokeOption = yield* state.getOptional("skipTokenRevoke", Schema.Struct({ value: Schema.String }));
+ const skipRevoke = Option.isSome(skipRevokeOption) && skipRevokeOption.value.value === "true";
 
- // 2. Log completion time
- const startTime = yield* Effect.sync(() => getState("startTime"));
- if (startTime) {
-  const duration = Date.now() - parseInt(startTime, 10);
-  yield* Effect.sync(() => info(`Action completed in ${duration}ms`));
- }
+ // Retrieve and revoke token (with graceful error handling)
+ const tokenOption = yield* state.getOptional("tokenState", TokenState);
+ if (Option.isNone(tokenOption)) return;
 
- // 3. Clean up temporary files (if any)
- yield* cleanupTempFiles().pipe(Effect.catchAll(() => Effect.succeed(void 0)));
+ yield* revokeInstallationToken(tokenState.token).pipe(
+  Effect.tap(() => Effect.logInfo("Token revoked successfully")),
+  Effect.catchAll((error) => Effect.logWarning(`Failed to revoke token: ${error.reason}`)),
+ );
 });
+
+Action.run(program, ActionStateLive);
 ```
 
 **Key Functions:**
 
-- `revokeToken()`: Revoke the GitHub App installation token
-- `clearEnvVar()`: Remove GITHUB_TOKEN from environment
-- `cleanupTempFiles()`: Remove any temporary files created during execution
+- `revokeInstallationToken()`: Revoke the GitHub App installation token
+- `ActionState.getOptional()`: Retrieve Schema-validated state with `Option` return

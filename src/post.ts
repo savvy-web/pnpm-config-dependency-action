@@ -9,11 +9,20 @@
  * @module post
  */
 
-import { getInput, getState, info, warning } from "@actions/core";
-import { NodeRuntime } from "@effect/platform-node";
-import { Effect } from "effect";
+import { Action, ActionState, ActionStateLive } from "@savvy-web/github-action-effects";
+import { Effect, Option, Schema } from "effect";
 
 import { revokeInstallationToken } from "./lib/github/auth.js";
+
+/**
+ * Schema for the token state saved by pre.ts.
+ */
+const TokenState = Schema.Struct({
+	token: Schema.String,
+	expiresAt: Schema.String,
+	installationId: Schema.Number,
+	appSlug: Schema.String,
+});
 
 /**
  * Post-action cleanup program.
@@ -21,36 +30,36 @@ import { revokeInstallationToken } from "./lib/github/auth.js";
 export const program = Effect.gen(function* () {
 	yield* Effect.logInfo("Running post-action cleanup");
 
+	const state = yield* ActionState;
+
 	// Check if token revocation should be skipped
-	const skipRevoke = getInput("skip-token-revoke") === "true";
+	const skipRevokeOption = yield* state.getOptional("skipTokenRevoke", Schema.Struct({ value: Schema.String }));
+	const skipRevoke = Option.isSome(skipRevokeOption) && skipRevokeOption.value.value === "true";
+
 	if (skipRevoke) {
 		yield* Effect.logInfo("Skipping token revocation (skip-token-revoke is true)");
-		info("Token revocation skipped");
 		return;
 	}
 
 	// Get token from state
-	const token = getState("token");
-	if (!token) {
+	const tokenOption = yield* state.getOptional("tokenState", TokenState);
+
+	if (Option.isNone(tokenOption)) {
 		yield* Effect.logWarning("No token found in state - nothing to revoke");
-		warning("No token to revoke");
 		return;
 	}
 
+	const tokenState = tokenOption.value;
+
 	// Revoke the token
 	yield* Effect.logInfo("Revoking installation token...");
-	yield* revokeInstallationToken(token).pipe(
+	yield* revokeInstallationToken(tokenState.token).pipe(
 		Effect.tap(() => Effect.logInfo("Token revoked successfully")),
-		Effect.catchAll((error) =>
-			Effect.gen(function* () {
-				yield* Effect.logWarning(`Failed to revoke token: ${error.reason}`);
-				warning(`Failed to revoke token: ${error.reason}`);
-			}),
-		),
+		Effect.catchAll((error) => Effect.logWarning(`Failed to revoke token: ${error.reason}`)),
 	);
 
-	info("Post-action cleanup complete");
+	yield* Effect.logInfo("Post-action cleanup complete");
 });
 
 // Run the post-action
-NodeRuntime.runMain(program);
+Action.run(program, ActionStateLive);

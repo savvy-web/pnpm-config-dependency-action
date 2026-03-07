@@ -39,7 +39,7 @@ Runs before the main action. Responsible for:
 - Authenticating as the GitHub App and generating a JWT
 - Exchanging the JWT for a short-lived installation token
 - Saving the token, installation ID, and app slug to state (persisted across
-  phases via `@actions/core`)
+  phases via `@savvy-web/github-action-effects` `ActionState` service)
 
 ### Main Phase (`src/main.ts`)
 
@@ -81,7 +81,6 @@ src/
 ├── post.ts                    # Phase 3: Cleanup
 ├── lib/
 │   ├── inputs.ts              # Input parsing with Effect Schema validation
-│   ├── logging.ts             # Debug-aware logging utilities
 │   ├── errors/types.ts        # Re-exports from schemas/errors
 │   ├── schemas/
 │   │   ├── index.ts           # Effect Schema definitions for all types
@@ -105,7 +104,7 @@ src/
 | Technology | Purpose |
 | --- | --- |
 | [Effect](https://effect.website) | Typed error handling, service composition, schema validation |
-| [@actions/core](https://github.com/actions/toolkit) | GitHub Actions input/output, state persistence, logging |
+| [@savvy-web/github-action-effects](https://github.com/savvy-web/github-action-effects) | GitHub Actions I/O services (inputs, outputs, state, logging) |
 | [@octokit/rest](https://octokit.github.io/rest.js) | GitHub REST API client |
 | [@octokit/auth-app](https://github.com/octokit/auth-app.js) | GitHub App JWT and installation token generation |
 | [@effect/platform](https://effect.website) | Cross-platform command execution |

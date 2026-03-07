@@ -59,6 +59,9 @@ importers:
       '@pnpm/workspace.read-manifest':
         specifier: ^1000.2.10
         version: 1000.2.10
+      '@savvy-web/github-action-effects':
+        specifier: ^0.3.0
+        version: 0.3.0(a98b294cdc58bfebb2cf017a7292a61a)
       effect:
         specifier: ^3.19.16
         version: 3.19.19
@@ -1050,6 +1053,21 @@ packages:
       '@types/node': ^25.2.0
       '@typescript/native-preview': ^7.0.0-dev.20260124.1
       typescript: ^5.9.3
+
+  '@savvy-web/github-action-effects@0.3.0':
+    resolution: {integrity: sha512-bNXF+C1t8ZxT2h8lvDIan7jG5CzwOMYU2uR0W2MFASbSFmnoClHJYsDaZ56qOad7BRSma4D8L+IbMKqt/JBwfA==}
+    peerDependencies:
+      '@actions/core': ^3.0.0
+      '@actions/exec': ^3.0.0
+      '@actions/github': ^9.0.0
+      '@effect/platform': '>=0.94.0'
+      '@effect/platform-node': '>=0.104.0'
+      effect: ^3.19.0
+    peerDependenciesMeta:
+      '@actions/exec':
+        optional: true
+      '@actions/github':
+        optional: true
 
   '@savvy-web/lint-staged@0.5.0':
     resolution: {integrity: sha512-LVDTkNRzn5ha0SGxgxfSf+hopx2FIy7QzX5+xFHJY5OEUeHxpcGuV/Hxp7UcLAWeifVGW3J5qRtKgpscFjl7hQ==}
@@ -3946,6 +3964,16 @@ snapshots:
       - '@effect/sql'
       - bufferutil
       - utf-8-validate
+
+  '@savvy-web/github-action-effects@0.3.0(a98b294cdc58bfebb2cf017a7292a61a)':
+    dependencies:
+      '@actions/core': 3.0.0
+      '@effect/platform': 0.94.5(effect@3.19.19)
+      '@effect/platform-node': 0.104.1(@effect/cluster@0.56.4(@effect/platform@0.94.5(effect@3.19.19))(@effect/rpc@0.73.2(@effect/platform@0.94.5(effect@3.19.19))(effect@3.19.19))(@effect/sql@0.49.0(@effect/experimental@0.58.0(@effect/platform@0.94.5(effect@3.19.19))(effect@3.19.19))(@effect/platform@0.94.5(effect@3.19.19))(effect@3.19.19))(@effect/workflow@0.16.0(@effect/experimental@0.58.0(@effect/platform@0.94.5(effect@3.19.19))(effect@3.19.19))(@effect/platform@0.94.5(effect@3.19.19))(@effect/rpc@0.73.2(@effect/platform@0.94.5(effect@3.19.19))(effect@3.19.19))(effect@3.19.19))(effect@3.19.19))(@effect/platform@0.94.5(effect@3.19.19))(@effect/rpc@0.73.2(@effect/platform@0.94.5(effect@3.19.19))(effect@3.19.19))(@effect/sql@0.49.0(@effect/experimental@0.58.0(@effect/platform@0.94.5(effect@3.19.19))(effect@3.19.19))(@effect/platform@0.94.5(effect@3.19.19))(effect@3.19.19))(effect@3.19.19)
+      effect: 3.19.19
+    optionalDependencies:
+      '@actions/exec': 3.0.0
+      '@actions/github': 9.0.0
 
   '@savvy-web/lint-staged@0.5.0(0701f098f7a0de03829c0b95ac7a0672)':
     dependencies:

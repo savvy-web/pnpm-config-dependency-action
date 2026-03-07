@@ -6,8 +6,8 @@
  * @module inputs
  */
 
-import { getBooleanInput, getInput } from "@actions/core";
-import { Effect, ParseResult, Schema } from "effect";
+import { ActionInputs as ActionInputsTag } from "@savvy-web/github-action-effects";
+import { Effect, Option, ParseResult, Schema } from "effect";
 
 import { InvalidInputError } from "./schemas/errors.js";
 import { ActionInputs } from "./schemas/index.js";
@@ -49,20 +49,28 @@ const ValidatedInputs = Schema.transformOrFail(RawActionInputs, ActionInputs, {
 });
 
 /**
+ * Read an optional string input, returning empty string if not set.
+ */
+const getOptionalString = (inputs: ActionInputsTag, name: string): Effect.Effect<string, InvalidInputError> =>
+	inputs.getOptional(name, Schema.String).pipe(Effect.map((opt) => Option.getOrElse(opt, () => "")));
+
+/**
  * Parse and validate action inputs using Effect Schema.
  */
-export const parseInputs: Effect.Effect<ActionInputs, InvalidInputError> = Effect.gen(function* () {
-	// Gather raw inputs from GitHub Actions
+export const parseInputs: Effect.Effect<ActionInputs, InvalidInputError, ActionInputsTag> = Effect.gen(function* () {
+	const inputs = yield* ActionInputsTag;
+
+	// Gather raw inputs from the ActionInputs service
 	const rawInputs = {
-		appId: getInput("app-id", { required: true }),
-		appPrivateKey: getInput("app-private-key", { required: true }),
-		branch: getInput("branch") || "pnpm/config-deps",
-		configDependencies: parseMultilineInput(getInput("config-dependencies")),
-		dependencies: parseMultilineInput(getInput("dependencies")),
-		run: parseMultilineInput(getInput("run")),
-		updatePnpm: getBooleanInput("update-pnpm") ?? true,
-		changesets: getBooleanInput("changesets") ?? true,
-		autoMerge: (getInput("auto-merge") || "") as "" | "merge" | "squash" | "rebase",
+		appId: yield* inputs.get("app-id", Schema.String),
+		appPrivateKey: yield* inputs.getSecret("app-private-key", Schema.String),
+		branch: (yield* getOptionalString(inputs, "branch")) || "pnpm/config-deps",
+		configDependencies: parseMultilineInput(yield* getOptionalString(inputs, "config-dependencies")),
+		dependencies: parseMultilineInput(yield* getOptionalString(inputs, "dependencies")),
+		run: parseMultilineInput(yield* getOptionalString(inputs, "run")),
+		updatePnpm: yield* inputs.getBooleanOptional("update-pnpm", true),
+		changesets: yield* inputs.getBooleanOptional("changesets", true),
+		autoMerge: ((yield* getOptionalString(inputs, "auto-merge")) || "") as "" | "merge" | "squash" | "rebase",
 	};
 
 	// Decode and validate using schema
@@ -81,7 +89,7 @@ export const parseInputs: Effect.Effect<ActionInputs, InvalidInputError> = Effec
 		}),
 	);
 
-	const dryRun = isDryRun();
+	const dryRun = yield* inputs.getBooleanOptional("dry-run", false);
 
 	yield* Effect.logInfo(
 		`Parsed inputs: branch=${result.branch}, configDeps=${result.configDependencies.length}, deps=${result.dependencies.length}, run=${result.run.length}, updatePnpm=${result.updatePnpm}, changesets=${result.changesets}, autoMerge=${result.autoMerge || "disabled"}, dryRun=${dryRun}`,
@@ -131,56 +139,4 @@ export const parseMultilineInput = (input: string): ReadonlyArray<string> => {
 		.split("\n")
 		.map((line) => line.trim())
 		.filter((line) => line.length > 0 && !line.startsWith("#"));
-};
-
-/**
- * Get optional GitHub token input (for GitHub Packages auth).
- */
-export const getGitHubToken = (): string | undefined => {
-	const token = getInput("github-token");
-	return token && token.trim().length > 0 ? token : undefined;
-};
-
-/**
- * Check if running in dry-run mode.
- */
-export const isDryRun = (): boolean => {
-	return getBooleanInput("dry-run") || false;
-};
-
-/**
- * Get the action timeout in seconds.
- * Defaults to 180 seconds (3 minutes).
- */
-export const getTimeout = (): number => {
-	const raw = getInput("timeout") || "180";
-	const parsed = Number.parseInt(raw, 10);
-	return Number.isNaN(parsed) || parsed <= 0 ? 180 : parsed;
-};
-
-/**
- * Check if token revocation should be skipped.
- */
-export const shouldSkipTokenRevoke = (): boolean => {
-	return getBooleanInput("skip-token-revoke") || false;
-};
-
-/**
- * Log level for the action.
- */
-export type LogLevel = "info" | "debug";
-
-/**
- * Get the configured log level.
- */
-export const getLogLevel = (): LogLevel => {
-	const level = getInput("log-level") || "info";
-	return level === "debug" ? "debug" : "info";
-};
-
-/**
- * Check if debug logging is enabled.
- */
-export const isDebugMode = (): boolean => {
-	return getLogLevel() === "debug";
 };

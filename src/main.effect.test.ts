@@ -1,28 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
-
-// Mock @actions/core before any imports that use it
-vi.mock("@actions/core", () => ({
-	getState: vi.fn(() => ""),
-	getInput: vi.fn(() => ""),
-	getBooleanInput: vi.fn(() => false),
-	setFailed: vi.fn(),
-	setOutput: vi.fn(),
-	info: vi.fn(),
-	debug: vi.fn(),
-	warning: vi.fn(),
-	summary: { addHeading: vi.fn(), addRaw: vi.fn(), write: vi.fn() },
-}));
-
-// Mock @actions/github for branch.ts
-vi.mock("@actions/github", () => ({
-	context: {
-		repo: { owner: "test-owner", repo: "test-repo" },
-		sha: "abc123",
-	},
-}));
-
 import type { Octokit } from "@octokit/rest";
 import { Effect, Layer, LogLevel, Logger } from "effect";
+import { describe, expect, it } from "vitest";
 import { pnpmUpgradeUpdate } from "./lib/__test__/fixtures.js";
 import { GitHubApiError, PnpmError } from "./lib/schemas/errors.js";
 import type { GitHubClientService, PnpmExecutorService } from "./lib/services/index.js";

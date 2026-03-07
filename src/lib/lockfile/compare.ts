@@ -14,7 +14,6 @@ import { getPackageInfosAsync } from "workspace-tools";
 
 import type { LockfileChange } from "../../types/index.js";
 import { LockfileError } from "../errors/types.js";
-import { logDebug, logDebugState } from "../logging.js";
 
 /**
  * Capture current lockfile state.
@@ -76,18 +75,18 @@ export const compareLockfiles = (
 		}
 
 		// Log lockfile structure for debugging
-		yield* logDebug("=== Lockfile Structure (Before) ===");
-		yield* logDebugState("Before catalogs", Object.keys(before.catalogs ?? {}));
-		yield* logDebugState("Before importers", Object.keys(before.importers ?? {}));
-		yield* logDebugState("Before lockfile keys", Object.keys(before));
+		yield* Effect.logDebug("=== Lockfile Structure (Before) ===");
+		yield* Effect.logDebug(`Before catalogs: ${JSON.stringify(Object.keys(before.catalogs ?? {}))}`);
+		yield* Effect.logDebug(`Before importers: ${JSON.stringify(Object.keys(before.importers ?? {}))}`);
+		yield* Effect.logDebug(`Before lockfile keys: ${JSON.stringify(Object.keys(before))}`);
 
-		yield* logDebug("=== Lockfile Structure (After) ===");
-		yield* logDebugState("After catalogs", Object.keys(after.catalogs ?? {}));
-		yield* logDebugState("After importers", Object.keys(after.importers ?? {}));
+		yield* Effect.logDebug("=== Lockfile Structure (After) ===");
+		yield* Effect.logDebug(`After catalogs: ${JSON.stringify(Object.keys(after.catalogs ?? {}))}`);
+		yield* Effect.logDebug(`After importers: ${JSON.stringify(Object.keys(after.importers ?? {}))}`);
 
 		// Build importer to package map first (needed for both catalog and importer comparison)
 		const importerToPackage = yield* buildImporterToPackageMap(workspaceRoot);
-		yield* logDebugState("Importer to package map", Object.fromEntries(importerToPackage));
+		yield* Effect.logDebug(`Importer to package map: ${JSON.stringify(Object.fromEntries(importerToPackage))}`);
 
 		const changes: LockfileChange[] = [];
 
@@ -101,9 +100,9 @@ export const compareLockfiles = (
 			importerToPackage,
 		);
 		if (catalogChanges.length > 0) {
-			yield* logDebug(`Catalog changes detected: ${catalogChanges.length}`);
+			yield* Effect.logDebug(`Catalog changes detected: ${catalogChanges.length}`);
 			for (const change of catalogChanges) {
-				yield* logDebug(
+				yield* Effect.logDebug(
 					`  - ${change.dependency} in [${change.affectedPackages.join(", ")}]: ${change.from} -> ${change.to}`,
 				);
 			}
@@ -113,9 +112,9 @@ export const compareLockfiles = (
 		// Compare package importers (regular dependencies - non-catalog specifier changes)
 		const packageChanges = yield* compareImporters(before, after, importerToPackage);
 		if (packageChanges.length > 0) {
-			yield* logDebug(`Importer changes detected: ${packageChanges.length}`);
+			yield* Effect.logDebug(`Importer changes detected: ${packageChanges.length}`);
 			for (const change of packageChanges) {
-				yield* logDebug(
+				yield* Effect.logDebug(
 					`  - ${change.dependency} in ${change.affectedPackages.join(", ")}: ${change.from} -> ${change.to}`,
 				);
 			}
@@ -189,9 +188,9 @@ const compareCatalogs = (
 	Effect.gen(function* () {
 		const changes: LockfileChange[] = [];
 
-		yield* logDebug("=== Comparing Catalogs ===");
-		yield* logDebugState("Before catalogs", before);
-		yield* logDebugState("After catalogs", after);
+		yield* Effect.logDebug("=== Comparing Catalogs ===");
+		yield* Effect.logDebug(`Before catalogs: ${JSON.stringify(before)}`);
+		yield* Effect.logDebug(`After catalogs: ${JSON.stringify(after)}`);
 
 		// Check all catalogs in 'after' for changes/additions
 		for (const [catalogName, afterEntries] of Object.entries(after)) {
@@ -220,8 +219,8 @@ const compareCatalogs = (
 						importerToPackage,
 					);
 
-					yield* logDebug(`Catalog change: ${depName}: ${from} -> ${to}`);
-					yield* logDebugState(`Affected packages for ${depName}`, affectedPackages);
+					yield* Effect.logDebug(`Catalog change: ${depName}: ${from} -> ${to}`);
+					yield* Effect.logDebug(`Affected packages for ${depName}: ${JSON.stringify(affectedPackages)}`);
 
 					// Catalog changes are "regular" type - they affect the packages using them
 					changes.push({
@@ -247,7 +246,7 @@ const compareCatalogs = (
 					// For removed entries, check the 'before' lockfile importers
 					// But we only have 'after' - so these packages no longer use this catalog
 					// Mark as affecting no packages (the catalog was removed)
-					yield* logDebug(`Catalog removed: ${depName}`);
+					yield* Effect.logDebug(`Catalog removed: ${depName}`);
 
 					changes.push({
 						type: "regular",
