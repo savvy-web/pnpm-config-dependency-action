@@ -98,9 +98,8 @@
 
 ## Current State
 
-**Status:** Initial implementation complete (v0.1.0 released). Core features operational including
-config dependency updates, regular dependency updates, pnpm self-upgrade, custom command execution,
-changeset creation, and GitHub PR management via App authentication.
+**Status:** v0.7.1 released. Core features operational. GitHub Action plumbing
+migrated to `@savvy-web/github-action-effects` library (v0.3.0).
 
 **Implemented Features:**
 
@@ -121,6 +120,23 @@ changeset creation, and GitHub PR management via App authentication.
 - Configurable changeset creation via `changesets` input (boolean, default: `true`)
 - Dry-run mode for testing
 - Debug logging mode
+
+**`@savvy-web/github-action-effects` Integration (v0.3.0):**
+
+All GitHub Action plumbing has been migrated to the library:
+
+- `@actions/core` is no longer imported directly by any source file
+- All entry points use `Action.run(program, ActionStateLive)` instead of
+  `NodeRuntime.runMain()`
+- Inputs read via `ActionInputs` service (Schema-validated)
+- Outputs/summaries via `ActionOutputs` service
+- State persistence via `ActionState` service (Schema-validated structured objects)
+- Logging via `ActionLoggerLayer` (routes `Effect.log*` to `@actions/core` functions)
+- `NodeContext.layer` provided automatically by `Action.run()`
+- `src/lib/logging.ts` deleted (custom debug module replaced by library layer)
+- Programs exported for testability; tests use library test layers
+- Deleted utility functions from inputs.ts: `isDryRun`, `getTimeout`,
+  `shouldSkipTokenRevoke`, `getLogLevel`, `isDebugMode`, `getGitHubToken`
 
 **Next Steps:**
 

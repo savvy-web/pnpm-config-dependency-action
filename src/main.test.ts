@@ -1,22 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
-
-// Mock @actions/core before any imports that use it
-vi.mock("@actions/core", () => ({
-	getState: vi.fn((key: string) => {
-		if (key === "appSlug") return "my-app";
-		return "";
-	}),
-	getInput: vi.fn(() => ""),
-	getBooleanInput: vi.fn(() => false),
-	setFailed: vi.fn(),
-	setOutput: vi.fn(),
-	info: vi.fn(),
-	debug: vi.fn(),
-	warning: vi.fn(),
-	summary: { addHeading: vi.fn(), addRaw: vi.fn(), write: vi.fn() },
-}));
-
-import { getState } from "@actions/core";
+import { describe, expect, it } from "vitest";
 
 import {
 	configUpdate,
@@ -61,7 +43,7 @@ describe("npmUrl", () => {
 
 describe("generateCommitMessage", () => {
 	it("generates message for config-only updates", () => {
-		const message = generateCommitMessage(configUpdates);
+		const message = generateCommitMessage(configUpdates, "my-app");
 
 		expect(message).toContain("chore(deps): update 2 config dependencies");
 		expect(message).toContain("- typescript: 5.3.3 -> 5.4.0");
@@ -69,27 +51,25 @@ describe("generateCommitMessage", () => {
 	});
 
 	it("generates message for regular-only updates", () => {
-		const message = generateCommitMessage(regularUpdates);
+		const message = generateCommitMessage(regularUpdates, "my-app");
 
 		expect(message).toContain("chore(deps): update 2 regular dependencies");
 		expect(message).toContain("- effect: 3.0.0 -> 3.1.0");
 	});
 
 	it("generates message for mixed updates", () => {
-		const message = generateCommitMessage(mixedUpdates);
+		const message = generateCommitMessage(mixedUpdates, "my-app");
 
 		expect(message).toContain("chore(deps): update 2 config and 2 regular dependencies");
 	});
 
-	it("includes sign-off with app slug from state", () => {
-		const message = generateCommitMessage(configUpdates);
+	it("includes sign-off with app slug", () => {
+		const message = generateCommitMessage(configUpdates, "my-app");
 
 		expect(message).toContain("Signed-off-by: my-app[bot] <my-app[bot]@users.noreply.github.com>");
 	});
 
 	it("falls back to github-actions[bot] when no app slug", () => {
-		vi.mocked(getState).mockReturnValueOnce("");
-
 		const message = generateCommitMessage(configUpdates);
 
 		expect(message).toContain("Signed-off-by: github-actions[bot]");
@@ -100,7 +80,7 @@ describe("generatePRBody", () => {
 	it("generates body with config dependencies table", () => {
 		const body = generatePRBody(configUpdates, []);
 
-		expect(body).toContain("### 🔧 Config Dependencies");
+		expect(body).toContain("### Config Dependencies");
 		expect(body).toContain("| Package | From | To |");
 		expect(body).toContain(`[\`typescript\`](https://www.npmjs.com/package/typescript)`);
 		expect(body).toContain("5.3.3");
@@ -110,24 +90,24 @@ describe("generatePRBody", () => {
 	it("generates body with regular dependencies table", () => {
 		const body = generatePRBody(regularUpdates, []);
 
-		expect(body).toContain("### 📦 Regular Dependencies");
+		expect(body).toContain("### Regular Dependencies");
 		expect(body).toContain(`[\`effect\`](https://www.npmjs.com/package/effect)`);
 	});
 
 	it("generates body with both tables", () => {
 		const body = generatePRBody(mixedUpdates, []);
 
-		expect(body).toContain("### 🔧 Config Dependencies");
-		expect(body).toContain("### 📦 Regular Dependencies");
+		expect(body).toContain("### Config Dependencies");
+		expect(body).toContain("### Regular Dependencies");
 	});
 
 	it("includes changeset details sections", () => {
 		const body = generatePRBody(configUpdates, [packageChangeset, rootChangeset]);
 
-		expect(body).toContain("### 📝 Changesets");
+		expect(body).toContain("### Changesets");
 		expect(body).toContain("2 changeset(s) created");
-		expect(body).toContain("<summary>📦 @savvy-web/core</summary>");
-		expect(body).toContain("<summary>🔧 root workspace</summary>");
+		expect(body).toContain("<summary>@savvy-web/core</summary>");
+		expect(body).toContain("<summary>root workspace</summary>");
 	});
 
 	it("handles glob patterns in dependency names (no link)", () => {
@@ -153,44 +133,44 @@ describe("generatePRBody", () => {
 
 describe("generateSummary", () => {
 	it("generates summary with PR link", () => {
-		const summary = generateSummary(configUpdates, [], pullRequest, false);
+		const result = generateSummary(configUpdates, [], pullRequest, false);
 
-		expect(summary).toContain(`[#42](${pullRequest.url})`);
-		expect(summary).toContain("**Dependencies updated:** 2");
+		expect(result).toContain(`[#42](${pullRequest.url})`);
+		expect(result).toContain("**Dependencies updated:** 2");
 	});
 
 	it("generates summary without PR (null)", () => {
-		const summary = generateSummary(configUpdates, [], null, false);
+		const result = generateSummary(configUpdates, [], null, false);
 
-		expect(summary).not.toContain("Pull request:");
-		expect(summary).toContain("**Dependencies updated:** 2");
+		expect(result).not.toContain("Pull request:");
+		expect(result).toContain("**Dependencies updated:** 2");
 	});
 
 	it("generates dry-run summary with PR body preview", () => {
-		const summary = generateSummary(mixedUpdates, [], null, true);
+		const result = generateSummary(mixedUpdates, [], null, true);
 
-		expect(summary).toContain("### 📋 PR Body Preview");
-		expect(summary).toContain("View PR body");
+		expect(result).toContain("### PR Body Preview");
+		expect(result).toContain("View PR body");
 	});
 
 	it("does not show PR body preview when not dry-run", () => {
-		const summary = generateSummary(mixedUpdates, [], pullRequest, false);
+		const result = generateSummary(mixedUpdates, [], pullRequest, false);
 
-		expect(summary).not.toContain("PR Body Preview");
+		expect(result).not.toContain("PR Body Preview");
 	});
 
 	it("shows changeset details", () => {
-		const summary = generateSummary(configUpdates, [packageChangeset, rootChangeset], null, false);
+		const result = generateSummary(configUpdates, [packageChangeset, rootChangeset], null, false);
 
-		expect(summary).toContain("### 📝 Changesets Created");
-		expect(summary).toContain("**Changesets created:** 2");
+		expect(result).toContain("### Changesets Created");
+		expect(result).toContain("**Changesets created:** 2");
 	});
 
 	it("shows config dependency table with clean versions", () => {
 		const updates = [{ ...configUpdate, to: "5.4.0+sha512-abc123" }];
-		const summary = generateSummary(updates, [], null, false);
+		const result = generateSummary(updates, [], null, false);
 
-		expect(summary).toContain("5.4.0");
-		expect(summary).not.toContain("sha512");
+		expect(result).toContain("5.4.0");
+		expect(result).not.toContain("sha512");
 	});
 });

@@ -6,10 +6,22 @@
 
 Parse and validate action inputs from `action.yml`.
 
-Uses Effect Schema (`src/lib/schemas/index.ts`) for type-safe validation and decoding.
+Uses `ActionInputs` service from `@savvy-web/github-action-effects` for reading inputs
+(replacing direct `@actions/core` `getInput()`/`getBooleanInput()` calls) and Effect
+Schema (`src/lib/schemas/index.ts`) for type-safe validation and decoding.
+
 The `ActionInputs` schema has 9 fields including the `updatePnpm: Schema.Boolean` field,
 the `autoMerge` field (values: `""`, `"merge"`, `"squash"`, or `"rebase"`), and the
 `changesets: Schema.Boolean` field (default: `true`).
+
+**Effect Context Requirement:**
+
+`parseInputs` now requires `ActionInputsTag` (the library's `ActionInputs` service)
+in its Effect context:
+
+```typescript
+export const parseInputs: Effect.Effect<ActionInputs, InvalidInputError, ActionInputsTag>
+```
 
 **Validation Logic:**
 
@@ -22,50 +34,47 @@ arrays are empty. This means any of the following are valid configurations:
 - `updatePnpm` is `true` (default)
 - Any combination of the above
 
+**Input Reading Methods:**
+
+- `inputs.get(name, Schema)` - Required input with Schema validation
+- `inputs.getSecret(name, Schema)` - Required secret input (masked in logs)
+- `inputs.getOptional(name, Schema)` - Optional input returning `Option<T>`
+- `inputs.getBooleanOptional(name, default)` - Boolean input with default value
+
+**Deleted Utility Functions:**
+
+The following utility functions that previously wrapped `@actions/core` directly have
+been removed (their functionality is now provided by library services):
+
+- `isDryRun` - replaced by `actionInputs.getBooleanOptional("dry-run", false)` in main.ts
+- `getTimeout` - replaced by inline `actionInputs.getBooleanOptional` call
+- `shouldSkipTokenRevoke` - replaced by `inputs.getBooleanOptional` in pre.ts
+- `getLogLevel` / `isDebugMode` - replaced by `ActionLoggerLayer` automatic routing
+- `getGitHubToken` - replaced by `ActionState.getOptional("tokenState", TokenState)`
+
 ```typescript
-export const parseInputs: Effect.Effect<ActionInputs, InvalidInputError> = Effect.gen(function* () {
- const appId = yield* getRequiredInput("app-id");
- const appPrivateKey = yield* getRequiredInput("app-private-key");
- const branch = yield* getInput("branch").pipe(Effect.map((b) => b || "pnpm/config"));
- const updatePnpm = yield* getBooleanInput("update-pnpm"); // default: true
+export const parseInputs: Effect.Effect<ActionInputs, InvalidInputError, ActionInputsTag> =
+ Effect.gen(function* () {
+  const inputs = yield* ActionInputsTag;
 
- const configDeps = yield* getMultilineInput("config-dependencies").pipe(
-  Effect.map((lines) => lines.filter((line) => line.trim().length > 0))
- );
+  const rawInputs = {
+   appId: yield* inputs.get("app-id", Schema.String),
+   appPrivateKey: yield* inputs.getSecret("app-private-key", Schema.String),
+   branch: (yield* getOptionalString(inputs, "branch")) || "pnpm/config-deps",
+   configDependencies: parseMultilineInput(yield* getOptionalString(inputs, "config-dependencies")),
+   dependencies: parseMultilineInput(yield* getOptionalString(inputs, "dependencies")),
+   run: parseMultilineInput(yield* getOptionalString(inputs, "run")),
+   updatePnpm: yield* inputs.getBooleanOptional("update-pnpm", true),
+   changesets: yield* inputs.getBooleanOptional("changesets", true),
+   autoMerge: ((yield* getOptionalString(inputs, "auto-merge")) || "") as "" | "merge" | "squash" | "rebase",
+  };
 
- const deps = yield* getMultilineInput("dependencies").pipe(
-  Effect.map((lines) => lines.filter((line) => line.trim().length > 0))
- );
-
- // Validate at least one update type is specified
- // updatePnpm: true alone is sufficient
- if (configDeps.length === 0 && deps.length === 0 && !updatePnpm) {
-  return yield* Effect.fail(
-   new InvalidInputError({
-    field: "inputs",
-    value: { configDeps, deps, updatePnpm },
-    reason: "Must specify at least one of: config-dependencies, dependencies, or update-pnpm"
-   })
+  // Decode and validate using Effect Schema transform
+  const result = yield* Schema.decodeUnknown(ValidatedInputs)(rawInputs).pipe(
+   Effect.mapError((parseError) => new InvalidInputError({ ... })),
   );
- }
-
- const autoMerge = yield* getInput("auto-merge").pipe(
-  Effect.map((val) => {
-   const normalized = val.trim().toLowerCase();
-   if (normalized === "" || normalized === "merge" || normalized === "squash" || normalized === "rebase") {
-    return normalized as "" | "merge" | "squash" | "rebase";
-   }
-   return ""; // default to disabled for invalid values
-  })
- );
-
- const changesets = yield* getBooleanInput("changesets"); // default: true
-
- return {
-  appId, appPrivateKey, branch, updatePnpm, autoMerge, changesets,
-  configDependencies: configDeps, dependencies: deps, run: []
- };
-});
+  return result;
+ });
 ```
 
 ## src/lib/github/auth.ts

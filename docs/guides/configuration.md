@@ -190,8 +190,8 @@ The action uses GitHub App authentication for secure, short-lived tokens:
 2. **Main phase**: Uses the installation token for all GitHub API calls
 3. **Post-phase**: Revokes the token (unless `skip-token-revoke` is set)
 
-Tokens are automatically masked in workflow logs using `@actions/core`
-`setSecret()`.
+Tokens are automatically masked in workflow logs using the `ActionOutputs`
+service's `setSecret()` method.
 
 ## Dependency Selection
 

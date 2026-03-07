@@ -1,45 +1,42 @@
+import { ActionInputsTest, ActionLoggerTest, ActionOutputsTest } from "@savvy-web/github-action-effects";
 import type { ParseResult } from "effect";
-import { Effect, LogLevel, Logger } from "effect";
-import { describe, expect, it, vi } from "vitest";
+import { Effect, Layer, LogLevel, Logger } from "effect";
+import { describe, expect, it } from "vitest";
 
-// Mock @actions/core before importing anything that uses it
-vi.mock("@actions/core", () => ({
-	getInput: vi.fn((_name: string) => ""),
-	getBooleanInput: vi.fn((_name: string) => false),
-	setFailed: vi.fn(),
-	setOutput: vi.fn(),
-	info: vi.fn(),
-	debug: vi.fn(),
-	warning: vi.fn(),
-}));
+import { getFieldFromParseIssue, getReasonFromParseIssue, parseInputs, parseMultilineInput } from "./inputs.js";
 
-import { getBooleanInput, getInput } from "@actions/core";
-
-import {
-	getFieldFromParseIssue,
-	getGitHubToken,
-	getLogLevel,
-	getReasonFromParseIssue,
-	getTimeout,
-	isDebugMode,
-	isDryRun,
-	parseInputs,
-	parseMultilineInput,
-	shouldSkipTokenRevoke,
-} from "./inputs.js";
-
-/** Run an Effect with logging suppressed. */
-const runEffect = <A>(effect: Effect.Effect<A>) =>
-	Effect.runPromise(effect.pipe(Logger.withMinimumLogLevel(LogLevel.None)));
-
-// Helper to set up mocked inputs
-const mockInputs = (inputs: Record<string, string>) => {
-	vi.mocked(getInput).mockImplementation((name: string) => inputs[name] ?? "");
+/** Run parseInputs with a test layer built from the given input map. */
+const runParseInputs = (inputs: Record<string, string>) => {
+	const layer = Layer.mergeAll(
+		ActionInputsTest.layer(inputs),
+		ActionOutputsTest.layer(ActionOutputsTest.empty()),
+		ActionLoggerTest.layer(ActionLoggerTest.empty()),
+	);
+	return Effect.runPromise(
+		Effect.either(parseInputs).pipe(Effect.provide(layer), Logger.withMinimumLogLevel(LogLevel.None)),
+	);
 };
 
-// Helper to set up mocked boolean inputs
-const mockBooleanInputs = (inputs: Record<string, boolean>) => {
-	vi.mocked(getBooleanInput).mockImplementation((name: string) => inputs[name] ?? false);
+/** Run parseInputs expecting success. */
+const runParseInputsOk = async (inputs: Record<string, string>) => {
+	const result = await runParseInputs(inputs);
+	if (result._tag === "Left") {
+		throw new Error(`Expected success but got error: ${JSON.stringify(result.left)}`);
+	}
+	return result.right;
+};
+
+const validInputs: Record<string, string> = {
+	"app-id": "12345",
+	"app-private-key": "fake-key",
+	branch: "pnpm/config-deps",
+	"config-dependencies": "typescript",
+	dependencies: "effect",
+	run: "",
+	"update-pnpm": "true",
+	changesets: "true",
+	"auto-merge": "",
+	"dry-run": "false",
 };
 
 describe("parseMultilineInput", () => {
@@ -86,17 +83,7 @@ describe("parseMultilineInput", () => {
 
 describe("parseInputs", () => {
 	it("succeeds with valid inputs", async () => {
-		mockInputs({
-			"app-id": "12345",
-			"app-private-key": "fake-key",
-			branch: "pnpm/config-deps",
-			"config-dependencies": "typescript",
-			dependencies: "effect",
-			run: "",
-		});
-		mockBooleanInputs({ "update-pnpm": true, changesets: true });
-
-		const result = await runEffect(parseInputs);
+		const result = await runParseInputsOk(validInputs);
 
 		expect(result.appId).toBe("12345");
 		expect(result.branch).toBe("pnpm/config-deps");
@@ -108,169 +95,72 @@ describe("parseInputs", () => {
 	});
 
 	it("uses default branch when not specified", async () => {
-		mockInputs({
-			"app-id": "12345",
-			"app-private-key": "fake-key",
-			branch: "",
-			"config-dependencies": "typescript",
-			dependencies: "",
-			run: "",
-		});
-
-		const result = await runEffect(parseInputs);
+		const result = await runParseInputsOk({ ...validInputs, branch: "" });
 		expect(result.branch).toBe("pnpm/config-deps");
 	});
 
 	it("fails when no dependencies specified and updatePnpm is false", async () => {
-		mockInputs({
-			"app-id": "12345",
-			"app-private-key": "fake-key",
-			branch: "pnpm/config",
+		const result = await runParseInputs({
+			...validInputs,
 			"config-dependencies": "",
 			dependencies: "",
-			run: "",
+			"update-pnpm": "false",
 		});
-		mockBooleanInputs({ "update-pnpm": false });
-
-		const result = await runEffect(Effect.either(parseInputs));
 		expect(result._tag).toBe("Left");
 	});
 
 	it("succeeds with only update-pnpm true and no dependencies", async () => {
-		mockInputs({
-			"app-id": "12345",
-			"app-private-key": "fake-key",
-			branch: "pnpm/config-deps",
+		const result = await runParseInputsOk({
+			...validInputs,
 			"config-dependencies": "",
 			dependencies: "",
-			run: "",
+			"update-pnpm": "true",
 		});
-		mockBooleanInputs({ "update-pnpm": true, changesets: true });
-
-		const result = await runEffect(parseInputs);
 		expect(result.updatePnpm).toBe(true);
 		expect(result.configDependencies).toEqual([]);
 		expect(result.dependencies).toEqual([]);
 	});
 
 	it("fails for invalid branch name", async () => {
-		mockInputs({
-			"app-id": "12345",
-			"app-private-key": "fake-key",
-			branch: "invalid branch!",
-			"config-dependencies": "typescript",
-			dependencies: "",
-			run: "",
-		});
-
-		const result = await runEffect(Effect.either(parseInputs));
+		const result = await runParseInputs({ ...validInputs, branch: "invalid branch!" });
 		expect(result._tag).toBe("Left");
 	});
 
 	it("fails for missing app-id", async () => {
-		mockInputs({
-			"app-id": "",
-			"app-private-key": "fake-key",
-			branch: "pnpm/config",
-			"config-dependencies": "typescript",
-			dependencies: "",
-			run: "",
-		});
-
-		const result = await runEffect(Effect.either(parseInputs));
+		const result = await runParseInputs({ ...validInputs, "app-id": "" });
 		expect(result._tag).toBe("Left");
 	});
 
 	it("error includes field name for invalid branch", async () => {
-		mockInputs({
-			"app-id": "12345",
-			"app-private-key": "fake-key",
-			branch: "bad branch!",
-			"config-dependencies": "typescript",
-			dependencies: "",
-			run: "",
-		});
-
-		const result = await runEffect(Effect.either(parseInputs));
+		const result = await runParseInputs({ ...validInputs, branch: "bad branch!" });
 		expect(result._tag).toBe("Left");
 		if (result._tag === "Left") {
-			// The error should be an InvalidInputError with useful field info
 			expect(result.left._tag).toBe("InvalidInputError");
 		}
 	});
 
-	it("error for missing private key (redacted value)", async () => {
-		mockInputs({
-			"app-id": "12345",
-			"app-private-key": "",
-			branch: "pnpm/config",
-			"config-dependencies": "typescript",
-			dependencies: "",
-			run: "",
-		});
-
-		const result = await runEffect(Effect.either(parseInputs));
+	it("error for missing private key", async () => {
+		const result = await runParseInputs({ ...validInputs, "app-private-key": "" });
 		expect(result._tag).toBe("Left");
 	});
 
 	it("parses run commands", async () => {
-		mockInputs({
-			"app-id": "12345",
-			"app-private-key": "fake-key",
-			branch: "pnpm/config",
-			"config-dependencies": "typescript",
-			dependencies: "",
-			run: "pnpm lint:fix\npnpm test",
-		});
-
-		const result = await runEffect(parseInputs);
+		const result = await runParseInputsOk({ ...validInputs, run: "pnpm lint:fix\npnpm test" });
 		expect(result.run).toEqual(["pnpm lint:fix", "pnpm test"]);
 	});
 
 	it("parses auto-merge input with empty default", async () => {
-		mockInputs({
-			"app-id": "12345",
-			"app-private-key": "fake-key",
-			branch: "pnpm/config-deps",
-			"config-dependencies": "typescript",
-			dependencies: "",
-			run: "",
-			"auto-merge": "",
-		});
-		mockBooleanInputs({ "update-pnpm": true, changesets: true });
-
-		const result = await runEffect(parseInputs);
+		const result = await runParseInputsOk({ ...validInputs, "auto-merge": "" });
 		expect(result.autoMerge).toBe("");
 	});
 
 	it("parses auto-merge input with squash value", async () => {
-		mockInputs({
-			"app-id": "12345",
-			"app-private-key": "fake-key",
-			branch: "pnpm/config-deps",
-			"config-dependencies": "typescript",
-			dependencies: "",
-			run: "",
-			"auto-merge": "squash",
-		});
-		mockBooleanInputs({ "update-pnpm": true, changesets: true });
-
-		const result = await runEffect(parseInputs);
+		const result = await runParseInputsOk({ ...validInputs, "auto-merge": "squash" });
 		expect(result.autoMerge).toBe("squash");
 	});
 
 	it("parses changesets input as false", async () => {
-		mockInputs({
-			"app-id": "12345",
-			"app-private-key": "fake-key",
-			branch: "pnpm/config-deps",
-			"config-dependencies": "typescript",
-			dependencies: "",
-			run: "",
-		});
-		mockBooleanInputs({ "update-pnpm": true, changesets: false });
-
-		const result = await runEffect(parseInputs);
+		const result = await runParseInputsOk({ ...validInputs, changesets: "false" });
 		expect(result.changesets).toBe(false);
 	});
 });
@@ -325,95 +215,5 @@ describe("getReasonFromParseIssue", () => {
 	it("returns generic message for unknown tag", () => {
 		const issue = { _tag: "Composite" as const } as unknown as ParseResult.ParseIssue;
 		expect(getReasonFromParseIssue(issue)).toBe("Validation failed");
-	});
-});
-
-describe("isDryRun", () => {
-	it("returns false by default", () => {
-		expect(isDryRun()).toBe(false);
-	});
-
-	it("returns true when dry-run is true", () => {
-		vi.mocked(getBooleanInput).mockReturnValueOnce(true);
-		expect(isDryRun()).toBe(true);
-	});
-});
-
-describe("shouldSkipTokenRevoke", () => {
-	it("returns false by default", () => {
-		expect(shouldSkipTokenRevoke()).toBe(false);
-	});
-});
-
-describe("getLogLevel", () => {
-	it("returns info by default", () => {
-		mockInputs({ "log-level": "" });
-		expect(getLogLevel()).toBe("info");
-	});
-
-	it("returns debug when log-level is debug", () => {
-		mockInputs({ "log-level": "debug" });
-		expect(getLogLevel()).toBe("debug");
-	});
-
-	it("returns info for unrecognized values", () => {
-		mockInputs({ "log-level": "verbose" });
-		expect(getLogLevel()).toBe("info");
-	});
-});
-
-describe("isDebugMode", () => {
-	it("returns false when log-level is info", () => {
-		mockInputs({ "log-level": "info" });
-		expect(isDebugMode()).toBe(false);
-	});
-
-	it("returns true when log-level is debug", () => {
-		mockInputs({ "log-level": "debug" });
-		expect(isDebugMode()).toBe(true);
-	});
-});
-
-describe("getTimeout", () => {
-	it("returns 180 by default", () => {
-		mockInputs({ timeout: "" });
-		expect(getTimeout()).toBe(180);
-	});
-
-	it("returns parsed value when provided", () => {
-		mockInputs({ timeout: "300" });
-		expect(getTimeout()).toBe(300);
-	});
-
-	it("returns 180 for non-numeric input", () => {
-		mockInputs({ timeout: "abc" });
-		expect(getTimeout()).toBe(180);
-	});
-
-	it("returns 180 for zero", () => {
-		mockInputs({ timeout: "0" });
-		expect(getTimeout()).toBe(180);
-	});
-
-	it("returns 180 for negative values", () => {
-		mockInputs({ timeout: "-10" });
-		expect(getTimeout()).toBe(180);
-	});
-});
-
-describe("getGitHubToken", () => {
-	it("returns undefined when token is empty", () => {
-		mockInputs({ "github-token": "" });
-		expect(getGitHubToken()).toBeUndefined();
-	});
-
-	it("returns token when provided", () => {
-		mockInputs({ "github-token": "ghp_test123" });
-		expect(getGitHubToken()).toBe("ghp_test123");
-	});
-
-	it("returns undefined for whitespace-only token", () => {
-		mockInputs({ "github-token": "   " });
-		expect(getGitHubToken()).toBeUndefined();
 	});
 });

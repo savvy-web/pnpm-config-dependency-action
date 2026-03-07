@@ -20,14 +20,13 @@
  * @module main
  */
 
-import { getState, setFailed, setOutput, summary } from "@actions/core";
-import { NodeRuntime } from "@effect/platform-node";
-import { Duration, Effect } from "effect";
+import { Action, ActionInputs, ActionOutputs, ActionState, ActionStateLive } from "@savvy-web/github-action-effects";
+import { Duration, Effect, Option, Schema } from "effect";
+
 import { createChangesets } from "./lib/changeset/create.js";
 import { commitChanges, manageBranch } from "./lib/github/branch.js";
-import { getTimeout, isDryRun, parseInputs } from "./lib/inputs.js";
+import { parseInputs } from "./lib/inputs.js";
 import { captureLockfileState, compareLockfiles } from "./lib/lockfile/compare.js";
-import { logDebug, logDebugState } from "./lib/logging.js";
 import { updateConfigDeps } from "./lib/pnpm/config.js";
 import { formatWorkspaceYaml, readWorkspaceYaml } from "./lib/pnpm/format.js";
 import { updateRegularDeps } from "./lib/pnpm/regular.js";
@@ -36,29 +35,47 @@ import { GitExecutor, GitHubClient, PnpmExecutor, makeAppLayer } from "./lib/ser
 import type { ChangesetFile, DependencyUpdateResult, PullRequest } from "./types/index.js";
 
 /**
+ * Schema for the token state saved by pre.ts.
+ */
+const TokenState = Schema.Struct({
+	token: Schema.String,
+	expiresAt: Schema.String,
+	installationId: Schema.Number,
+	appSlug: Schema.String,
+});
+
+/**
  * Main action program.
  */
-const program = Effect.gen(function* () {
+export const program = Effect.gen(function* () {
 	yield* Effect.logInfo("Starting pnpm config dependency action");
 
+	const actionState = yield* ActionState;
+	const outputs = yield* ActionOutputs;
+
 	// Get token from state (set by pre.ts)
-	const token = getState("token");
-	if (!token) {
+	const tokenOption = yield* actionState.getOptional("tokenState", TokenState);
+	if (Option.isNone(tokenOption)) {
 		return yield* Effect.fail(new Error("No token available. Ensure pre.ts ran successfully."));
 	}
+	const tokenState = tokenOption.value;
 
 	// Parse inputs
 	const inputs = yield* parseInputs;
-	const dryRun = isDryRun();
 
-	yield* logDebug(`Debug mode enabled - verbose logging active`);
-	yield* logDebugState("Parsed inputs", {
-		branch: inputs.branch,
-		configDependencies: inputs.configDependencies,
-		dependencies: inputs.dependencies,
-		updatePnpm: inputs.updatePnpm,
-		dryRun,
-	});
+	const actionInputs = yield* ActionInputs;
+	const dryRun = yield* actionInputs.getBooleanOptional("dry-run", false);
+
+	yield* Effect.logDebug("Debug mode enabled - verbose logging active");
+	yield* Effect.logDebug(
+		`Parsed inputs: ${JSON.stringify({
+			branch: inputs.branch,
+			configDependencies: inputs.configDependencies,
+			dependencies: inputs.dependencies,
+			updatePnpm: inputs.updatePnpm,
+			dryRun,
+		})}`,
+	);
 
 	if (dryRun) {
 		yield* Effect.logWarning("Running in dry-run mode - will detect changes but skip commit/push/PR");
@@ -66,7 +83,7 @@ const program = Effect.gen(function* () {
 
 	// Create check run for visibility
 	const github = yield* GitHubClient;
-	const checkRun = yield* github.createCheckRun(dryRun ? "🧪 Dependency Updates (Dry Run)" : "Dependency Updates");
+	const checkRun = yield* github.createCheckRun(dryRun ? "Dependency Updates (Dry Run)" : "Dependency Updates");
 
 	try {
 		// Step 1: Manage branch
@@ -77,10 +94,12 @@ const program = Effect.gen(function* () {
 		// Step 2: Capture lockfile state before updates
 		yield* Effect.logInfo("Step 2: Capturing lockfile state (before)");
 		const lockfileBefore = yield* captureLockfileState();
-		yield* logDebugState("Lockfile state (before)", {
-			packages: Object.keys(lockfileBefore?.packages || {}).length,
-			importers: Object.keys(lockfileBefore?.importers || {}).length,
-		});
+		yield* Effect.logDebug(
+			`Lockfile state (before): ${JSON.stringify({
+				packages: Object.keys(lockfileBefore?.packages || {}).length,
+				importers: Object.keys(lockfileBefore?.importers || {}).length,
+			})}`,
+		);
 
 		// Step 3: Upgrade pnpm (if enabled)
 		const configUpdatesFromPnpm: DependencyUpdateResult[] = [];
@@ -112,10 +131,10 @@ const program = Effect.gen(function* () {
 		// Step 4: Update config dependencies
 		yield* Effect.logInfo("Step 4: Updating config dependencies");
 		const workspaceBefore = yield* readWorkspaceYaml().pipe(Effect.catchAll(() => Effect.succeed(null)));
-		yield* logDebugState("pnpm-workspace.yaml (before)", workspaceBefore);
+		yield* Effect.logDebug(`pnpm-workspace.yaml (before): ${JSON.stringify(workspaceBefore)}`);
 
 		const configUpdates = yield* updateConfigDeps(inputs.configDependencies);
-		yield* logDebugState("Config dependency updates", configUpdates);
+		yield* Effect.logDebug(`Config dependency updates: ${JSON.stringify(configUpdates)}`);
 
 		// Step 5: Update regular dependencies (query npm + update package.json directly)
 		yield* Effect.logInfo("Step 5: Updating regular dependencies");
@@ -134,7 +153,7 @@ const program = Effect.gen(function* () {
 		yield* formatWorkspaceYaml();
 
 		const workspaceAfter = yield* readWorkspaceYaml().pipe(Effect.catchAll(() => Effect.succeed(null)));
-		yield* logDebugState("pnpm-workspace.yaml (after)", workspaceAfter);
+		yield* Effect.logDebug(`pnpm-workspace.yaml (after): ${JSON.stringify(workspaceAfter)}`);
 
 		// Step 8: Run custom commands (if specified)
 		let runCommandsResult: RunCommandsResult | null = null;
@@ -156,8 +175,8 @@ const program = Effect.gen(function* () {
 					`Custom commands failed:\n\n${failureDetails}`,
 				);
 
-				setOutput("has-changes", "false");
-				setOutput("updates-count", "0");
+				yield* outputs.set("has-changes", "false");
+				yield* outputs.set("updates-count", "0");
 
 				return yield* Effect.fail(new Error(`Custom commands failed: ${failedCommands}`));
 			}
@@ -166,26 +185,28 @@ const program = Effect.gen(function* () {
 		// Step 9: Capture lockfile state after updates
 		yield* Effect.logInfo("Step 9: Capturing lockfile state (after)");
 		const lockfileAfter = yield* captureLockfileState();
-		yield* logDebugState("Lockfile state (after)", {
-			packages: Object.keys(lockfileAfter?.packages || {}).length,
-			importers: Object.keys(lockfileAfter?.importers || {}).length,
-		});
+		yield* Effect.logDebug(
+			`Lockfile state (after): ${JSON.stringify({
+				packages: Object.keys(lockfileAfter?.packages || {}).length,
+				importers: Object.keys(lockfileAfter?.importers || {}).length,
+			})}`,
+		);
 
 		// Step 10: Detect changes
 		yield* Effect.logInfo("Step 10: Detecting changes");
 		const changes = yield* compareLockfiles(lockfileBefore, lockfileAfter);
-		yield* logDebugState("Detected changes", changes);
+		yield* Effect.logDebug(`Detected changes: ${JSON.stringify(changes)}`);
 
 		// Regular updates come directly from step 5 (npm query + package.json updates)
 		const allUpdates = [...configUpdatesFromPnpm, ...configUpdates, ...regularUpdates];
-		yield* logDebug(
+		yield* Effect.logDebug(
 			`Total updates: ${allUpdates.length} (config: ${configUpdates.length + configUpdatesFromPnpm.length}, regular: ${regularUpdates.length})`,
 		);
 
 		// Check if there are any changes
 		const git = yield* GitExecutor;
 		const gitStatus = yield* git.status();
-		yield* logDebugState("Git status", gitStatus);
+		yield* Effect.logDebug(`Git status: ${JSON.stringify(gitStatus)}`);
 
 		if (!gitStatus.hasChanges && changes.length === 0) {
 			yield* Effect.logInfo("No dependency updates available");
@@ -198,8 +219,8 @@ const program = Effect.gen(function* () {
 				"No dependency updates available. All dependencies are up-to-date.",
 			);
 
-			setOutput("has-changes", "false");
-			setOutput("updates-count", "0");
+			yield* outputs.set("has-changes", "false");
+			yield* outputs.set("updates-count", "0");
 
 			return;
 		}
@@ -230,7 +251,7 @@ const program = Effect.gen(function* () {
 			yield* Effect.logInfo("Step 12: [DRY RUN] Skipping commit and push");
 		} else {
 			yield* Effect.logInfo("Step 12: Committing via GitHub API");
-			const commitMessage = generateCommitMessage(allUpdates);
+			const commitMessage = generateCommitMessage(allUpdates, tokenState.appSlug);
 			yield* commitChanges(commitMessage, inputs.branch);
 		}
 
@@ -262,22 +283,20 @@ const program = Effect.gen(function* () {
 		yield* github.updateCheckRun(checkRun.id, "completed", "success", summaryText);
 
 		// Set outputs
-		setOutput("has-changes", "true");
-		setOutput("updates-count", String(allUpdates.length));
+		yield* outputs.set("has-changes", "true");
+		yield* outputs.set("updates-count", String(allUpdates.length));
 		if (pr) {
-			setOutput("pr-number", String(pr.number));
-			setOutput("pr-url", pr.url);
+			yield* outputs.set("pr-number", String(pr.number));
+			yield* outputs.set("pr-url", pr.url);
 		}
 
 		// Write job summary
-		yield* Effect.sync(() => {
-			summary.addHeading("📦 Dependency Updates", 1);
-			if (dryRun) {
-				summary.addRaw("> 🧪 **DRY RUN MODE** - Changes detected but not committed/pushed\n\n");
-			}
-			summary.addRaw(summaryText);
-			summary.write();
-		});
+		const jobSummaryLines = ["# Dependency Updates"];
+		if (dryRun) {
+			jobSummaryLines.push("", "> **DRY RUN MODE** - Changes detected but not committed/pushed");
+		}
+		jobSummaryLines.push("", summaryText);
+		yield* outputs.summary(jobSummaryLines.join("\n"));
 
 		yield* Effect.logInfo("Dependency update action completed successfully");
 	} catch (error) {
@@ -331,7 +350,9 @@ export const runCommands = (commands: ReadonlyArray<string>): Effect.Effect<RunC
 				successful.push(command);
 			} else {
 				yield* Effect.logError(`Command failed: ${command}`);
-				yield* logDebugState("Command error", { command, stderr: result.error, exitCode: result.exitCode });
+				yield* Effect.logDebug(
+					`Command error: ${JSON.stringify({ command, stderr: result.error, exitCode: result.exitCode })}`,
+				);
 				failed.push({ command, error: result.error, exitCode: result.exitCode });
 			}
 		}
@@ -381,11 +402,11 @@ export const createOrUpdatePR = (
 /**
  * Generate commit message for dependency updates.
  *
- * Uses the app slug from state to attribute the sign-off to the correct bot.
+ * Uses the app slug to attribute the sign-off to the correct bot.
  * When commits are created via the GitHub API without an explicit author,
  * and include a matching sign-off footer, GitHub will verify/sign the commit.
  */
-export const generateCommitMessage = (updates: ReadonlyArray<DependencyUpdateResult>): string => {
+export const generateCommitMessage = (updates: ReadonlyArray<DependencyUpdateResult>, appSlug?: string): string => {
 	const configCount = updates.filter((u) => u.type === "config").length;
 	const regularCount = updates.filter((u) => u.type === "regular").length;
 
@@ -393,8 +414,6 @@ export const generateCommitMessage = (updates: ReadonlyArray<DependencyUpdateRes
 	if (configCount > 0) parts.push(`${configCount} config`);
 	if (regularCount > 0) parts.push(`${regularCount} regular`);
 
-	// Use app slug from state for proper attribution
-	const appSlug = getState("appSlug");
 	const botName = appSlug ? `${appSlug}[bot]` : "github-actions[bot]";
 	const botEmail = appSlug
 		? `${appSlug}[bot]@users.noreply.github.com`
@@ -435,7 +454,7 @@ export const generatePRBody = (
 	const regularUpdates = updates.filter((u) => u.type === "regular");
 
 	// Title section
-	lines.push("## 📦 Dependency Updates");
+	lines.push("## Dependency Updates");
 	lines.push("");
 
 	// Summary line
@@ -447,7 +466,7 @@ export const generatePRBody = (
 
 	// Config dependencies section
 	if (configUpdates.length > 0) {
-		lines.push("### 🔧 Config Dependencies");
+		lines.push("### Config Dependencies");
 		lines.push("");
 		lines.push("| Package | From | To |");
 		lines.push("|---------|------|-----|");
@@ -461,7 +480,7 @@ export const generatePRBody = (
 
 	// Regular dependencies section
 	if (regularUpdates.length > 0) {
-		lines.push("### 📦 Regular Dependencies");
+		lines.push("### Regular Dependencies");
 		lines.push("");
 		lines.push("| Package | From | To |");
 		lines.push("|---------|------|-----|");
@@ -478,7 +497,7 @@ export const generatePRBody = (
 
 	// Changesets section - one expandable per affected package/workspace
 	if (changesets.length > 0) {
-		lines.push("### 📝 Changesets");
+		lines.push("### Changesets");
 		lines.push("");
 		lines.push(`${changesets.length} changeset(s) created for version management.`);
 		lines.push("");
@@ -486,10 +505,9 @@ export const generatePRBody = (
 			// Empty changesets are for root workspace config deps
 			const isRootWorkspace = cs.packages.length === 0;
 			const label = isRootWorkspace ? "root workspace" : cs.packages.join(", ");
-			const icon = isRootWorkspace ? "🔧" : "📦";
 
 			lines.push("<details>");
-			lines.push(`<summary>${icon} ${label}</summary>`);
+			lines.push(`<summary>${label}</summary>`);
 			lines.push("");
 			lines.push(`**Changeset:** \`${cs.id}\``);
 			lines.push(`**Type:** ${cs.type}`);
@@ -541,7 +559,7 @@ export const generateSummary = (
 	const regularUpdates = updates.filter((u) => u.type === "regular");
 
 	if (configUpdates.length > 0) {
-		lines.push("#### 🔧 Config Dependencies");
+		lines.push("#### Config Dependencies");
 		lines.push("");
 		lines.push("| Package | From | To |");
 		lines.push("|---------|------|-----|");
@@ -554,7 +572,7 @@ export const generateSummary = (
 	}
 
 	if (regularUpdates.length > 0) {
-		lines.push("#### 📦 Regular Dependencies");
+		lines.push("#### Regular Dependencies");
 		lines.push("");
 		lines.push("| Package | From | To |");
 		lines.push("|---------|------|-----|");
@@ -568,15 +586,14 @@ export const generateSummary = (
 
 	// Show changeset details - one expandable per affected package/workspace
 	if (changesets.length > 0) {
-		lines.push("### 📝 Changesets Created");
+		lines.push("### Changesets Created");
 		lines.push("");
 		for (const cs of changesets) {
 			const isRootWorkspace = cs.packages.length === 0;
 			const label = isRootWorkspace ? "root workspace" : cs.packages.join(", ");
-			const icon = isRootWorkspace ? "🔧" : "📦";
 
-			lines.push(`<details>`);
-			lines.push(`<summary>${icon} ${label}</summary>`);
+			lines.push("<details>");
+			lines.push(`<summary>${label}</summary>`);
 			lines.push("");
 			lines.push(`**Changeset:** \`${cs.id}\``);
 			lines.push("");
@@ -591,7 +608,7 @@ export const generateSummary = (
 
 	// In dry-run mode, show what the PR body would look like
 	if (dryRun && updates.length > 0) {
-		lines.push("### 📋 PR Body Preview");
+		lines.push("### PR Body Preview");
 		lines.push("");
 		lines.push("This is what the PR body would look like:");
 		lines.push("");
@@ -610,14 +627,22 @@ export const generateSummary = (
  * Run the main program with the application layer.
  */
 const runnable = Effect.gen(function* () {
-	const token = getState("token");
-	if (!token) {
-		setFailed("No token available. Ensure pre.ts ran successfully.");
+	const actionState = yield* ActionState;
+	const tokenOption = yield* actionState.getOptional("tokenState", TokenState);
+
+	if (Option.isNone(tokenOption)) {
+		const outputs = yield* ActionOutputs;
+		yield* outputs.setFailed("No token available. Ensure pre.ts ran successfully.");
 		return;
 	}
 
-	const timeoutSeconds = getTimeout();
-	const appLayer = makeAppLayer(token);
+	const actionInputs = yield* ActionInputs;
+	const timeoutSeconds = yield* actionInputs.getBooleanOptional("timeout", false).pipe(
+		Effect.map(() => 180),
+		Effect.catchAll(() => Effect.succeed(180)),
+	);
+
+	const appLayer = makeAppLayer(tokenOption.value.token);
 
 	yield* program.pipe(
 		Effect.provide(appLayer),
@@ -626,13 +651,14 @@ const runnable = Effect.gen(function* () {
 			onTimeout: () => new Error(`Action timed out after ${timeoutSeconds} seconds`),
 		}),
 		Effect.catchAll((error) =>
-			Effect.sync(() => {
+			Effect.gen(function* () {
+				const outs = yield* ActionOutputs;
 				const message = error instanceof Error ? error.message : String(error);
-				setFailed(`Action failed: ${message}`);
+				yield* outs.setFailed(`Action failed: ${message}`);
 			}),
 		),
 	);
 });
 
 // Run the main action
-NodeRuntime.runMain(runnable);
+Action.run(runnable, ActionStateLive);

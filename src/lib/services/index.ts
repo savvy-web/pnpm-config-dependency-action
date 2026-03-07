@@ -6,7 +6,6 @@
 
 import { context as ghContext } from "@actions/github";
 import { Command } from "@effect/platform";
-import { NodeContext } from "@effect/platform-node";
 import { Octokit } from "@octokit/rest";
 import { Context, Effect, Layer } from "effect";
 
@@ -419,7 +418,6 @@ const execGit = (args: ReadonlyArray<string>, operation: GitError["operation"]):
 	Effect.gen(function* () {
 		const command = Command.make("git", ...args);
 		const result = yield* Command.string(command).pipe(
-			Effect.provide(NodeContext.layer),
 			Effect.mapError(
 				(e) =>
 					new GitError({
@@ -528,7 +526,6 @@ const execPnpm = (
 	Effect.gen(function* () {
 		const cmd = Command.make("pnpm", ...args);
 		const result = yield* Command.string(cmd).pipe(
-			Effect.provide(NodeContext.layer),
 			Effect.mapError(
 				(e) =>
 					new PnpmError({
@@ -552,7 +549,6 @@ const execShell = (command: string): Effect.Effect<string, PnpmError> =>
 		// Use sh -c to properly handle shell commands
 		const cmd = Command.make("sh", "-c", command);
 		const result = yield* Command.string(cmd).pipe(
-			Effect.provide(NodeContext.layer),
 			Effect.mapError(
 				(e) =>
 					new PnpmError({

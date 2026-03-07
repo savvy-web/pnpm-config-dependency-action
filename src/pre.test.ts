@@ -1,29 +1,23 @@
+import {
+	ActionInputsTest,
+	ActionLoggerTest,
+	ActionOutputsTest,
+	ActionStateTest,
+} from "@savvy-web/github-action-effects";
+import { Effect, Layer, LogLevel, Logger } from "effect";
 import { describe, expect, it, vi } from "vitest";
 
-// Mock @effect/platform-node to prevent NodeRuntime.runMain from executing
-vi.mock("@effect/platform-node", () => ({
-	NodeRuntime: { runMain: vi.fn() },
-}));
-
-// Mock @actions/core
-const mockSaveState = vi.fn();
-const mockSetSecret = vi.fn();
-const mockSetOutput = vi.fn();
-const mockSetFailed = vi.fn();
-const mockGetInput = vi.fn(() => "");
-const mockInfo = vi.fn();
-const mockDebug = vi.fn();
-
-vi.mock("@actions/core", () => ({
-	getInput: (...args: unknown[]) => mockGetInput(...args),
-	saveState: (...args: unknown[]) => mockSaveState(...args),
-	setSecret: (...args: unknown[]) => mockSetSecret(...args),
-	setOutput: (...args: unknown[]) => mockSetOutput(...args),
-	setFailed: (...args: unknown[]) => mockSetFailed(...args),
-	info: (...args: unknown[]) => mockInfo(...args),
-	debug: (...args: unknown[]) => mockDebug(...args),
-	getBooleanInput: vi.fn(() => false),
-}));
+// Mock Action.run to prevent module-level execution
+vi.mock("@savvy-web/github-action-effects", async (importActual) => {
+	const actual = await importActual<typeof import("@savvy-web/github-action-effects")>();
+	return {
+		...actual,
+		Action: {
+			...actual.Action,
+			run: vi.fn(),
+		},
+	};
+});
 
 // Mock auth module
 const mockGenerateToken = vi.fn();
@@ -31,17 +25,29 @@ vi.mock("./lib/github/auth.js", () => ({
 	generateInstallationToken: (...args: unknown[]) => mockGenerateToken(...args),
 }));
 
-import { Effect, LogLevel, Logger } from "effect";
 import { program } from "./pre.js";
 
-const runProgram = () => Effect.runPromise(program.pipe(Logger.withMinimumLogLevel(LogLevel.None)));
+const makeTestLayer = (inputs: Record<string, string>) => {
+	const outputState = ActionOutputsTest.empty();
+	const logState = ActionLoggerTest.empty();
+	const stateState = ActionStateTest.empty();
+	const layer = Layer.mergeAll(
+		ActionInputsTest.layer(inputs),
+		ActionOutputsTest.layer(outputState),
+		ActionLoggerTest.layer(logState),
+		ActionStateTest.layer(stateState),
+	);
+	return { outputState, logState, stateState, layer };
+};
+
+const runProgram = (layer: Layer.Layer<never, never, never>) =>
+	Effect.runPromise(Effect.exit(program.pipe(Effect.provide(layer), Logger.withMinimumLogLevel(LogLevel.None))));
 
 describe("pre.ts program", () => {
 	it("generates token and saves state on success", async () => {
-		mockGetInput.mockImplementation((key: string) => {
-			if (key === "app-id") return "123";
-			if (key === "app-private-key") return "private-key";
-			return "";
+		const { layer, outputState, stateState } = makeTestLayer({
+			"app-id": "123",
+			"app-private-key": "private-key",
 		});
 
 		mockGenerateToken.mockReturnValue(
@@ -53,21 +59,27 @@ describe("pre.ts program", () => {
 			}),
 		);
 
-		await runProgram();
+		await runProgram(layer as Layer.Layer<never, never, never>);
 
-		expect(mockSetSecret).toHaveBeenCalledWith("ghs_test_token");
-		expect(mockSaveState).toHaveBeenCalledWith("token", "ghs_test_token");
-		expect(mockSaveState).toHaveBeenCalledWith("expiresAt", "2024-01-01T01:00:00Z");
-		expect(mockSaveState).toHaveBeenCalledWith("installationId", "42");
-		expect(mockSaveState).toHaveBeenCalledWith("appSlug", "my-app");
-		expect(mockSetOutput).toHaveBeenCalledWith("token", "ghs_test_token");
+		// Token should be set as secret
+		expect(outputState.secrets).toContain("ghs_test_token");
+
+		// Token should be set as output
+		expect(outputState.outputs).toContainEqual({ name: "token", value: "ghs_test_token" });
+
+		// State should contain token data
+		const tokenStateRaw = stateState.entries.get("tokenState") ?? "{}";
+		const tokenState = JSON.parse(tokenStateRaw);
+		expect(tokenState.token).toBe("ghs_test_token");
+		expect(tokenState.expiresAt).toBe("2024-01-01T01:00:00Z");
+		expect(tokenState.installationId).toBe(42);
+		expect(tokenState.appSlug).toBe("my-app");
 	});
 
 	it("saves startTime to state", async () => {
-		mockGetInput.mockImplementation((key: string) => {
-			if (key === "app-id") return "123";
-			if (key === "app-private-key") return "key";
-			return "";
+		const { layer, stateState } = makeTestLayer({
+			"app-id": "123",
+			"app-private-key": "key",
 		});
 
 		mockGenerateToken.mockReturnValue(
@@ -79,24 +91,23 @@ describe("pre.ts program", () => {
 			}),
 		);
 
-		await runProgram();
+		await runProgram(layer as Layer.Layer<never, never, never>);
 
-		expect(mockSaveState).toHaveBeenCalledWith("startTime", expect.any(String));
+		expect(stateState.entries.has("startTime")).toBe(true);
 	});
 
-	it("calls setFailed when app-id is missing", async () => {
-		mockGetInput.mockReturnValue("");
+	it("fails when app-id is missing", async () => {
+		const { layer } = makeTestLayer({});
 
-		await runProgram();
+		const exit = await runProgram(layer as Layer.Layer<never, never, never>);
 
-		expect(mockSetFailed).toHaveBeenCalledWith(expect.stringContaining("Pre-action failed"));
+		expect(exit._tag).toBe("Failure");
 	});
 
-	it("calls setFailed when token generation fails", async () => {
-		mockGetInput.mockImplementation((key: string) => {
-			if (key === "app-id") return "123";
-			if (key === "app-private-key") return "key";
-			return "";
+	it("fails when token generation fails", async () => {
+		const { layer } = makeTestLayer({
+			"app-id": "123",
+			"app-private-key": "key",
 		});
 
 		const { AuthenticationError } = await import("./lib/schemas/errors.js");
@@ -104,8 +115,8 @@ describe("pre.ts program", () => {
 			Effect.fail(new AuthenticationError({ reason: "Bad credentials", appId: "123" })),
 		);
 
-		await runProgram();
+		const exit = await runProgram(layer as Layer.Layer<never, never, never>);
 
-		expect(mockSetFailed).toHaveBeenCalledWith(expect.stringContaining("Pre-action failed"));
+		expect(exit._tag).toBe("Failure");
 	});
 });
