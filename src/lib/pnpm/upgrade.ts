@@ -9,11 +9,11 @@
  */
 
 import { readFileSync, writeFileSync } from "node:fs";
+import { CommandRunner } from "@savvy-web/github-action-effects";
 import { Effect } from "effect";
 import * as semver from "semver";
 
 import { FileSystemError } from "../errors/types.js";
-import { PnpmExecutor } from "../services/index.js";
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Types
@@ -132,7 +132,7 @@ const fsWriteError = (path: string, e: unknown) => new FileSystemError({ operati
  */
 export const upgradePnpm = (
 	workspaceRoot: string = process.cwd(),
-): Effect.Effect<PnpmUpgradeResult | null, FileSystemError, PnpmExecutor> =>
+): Effect.Effect<PnpmUpgradeResult | null, FileSystemError, CommandRunner> =>
 	Effect.gen(function* () {
 		const packageJsonPath = `${workspaceRoot}/package.json`;
 
@@ -166,13 +166,13 @@ export const upgradePnpm = (
 		}
 
 		// Step 4: Query available pnpm versions
-		const pnpm = yield* PnpmExecutor;
-		const versionsOutput = yield* pnpm
-			.run("npm view pnpm versions --json")
+		const runner = yield* CommandRunner;
+		const versionsResult = yield* runner
+			.execCapture("sh", ["-c", "npm view pnpm versions --json"])
 			.pipe(Effect.mapError((e) => fsReadError("npm registry", `Failed to query pnpm versions: ${e.stderr}`)));
 
 		const allVersions = yield* Effect.try({
-			try: () => JSON.parse(versionsOutput) as string[],
+			try: () => JSON.parse(versionsResult.stdout) as string[],
 			catch: (e) => fsReadError("npm registry", `Failed to parse pnpm versions: ${e}`),
 		});
 
@@ -213,8 +213,8 @@ export const upgradePnpm = (
 		let packageManagerUpdated = false;
 		if (packageManagerParsed) {
 			yield* Effect.logInfo(`Running corepack use pnpm@${resolved}`);
-			yield* pnpm
-				.run(`corepack use pnpm@${resolved}`)
+			yield* runner
+				.execCapture("sh", ["-c", `corepack use pnpm@${resolved}`])
 				.pipe(Effect.mapError((e) => fsWriteError(packageJsonPath, `corepack use failed: ${e.stderr}`)));
 			packageManagerUpdated = true;
 		}
