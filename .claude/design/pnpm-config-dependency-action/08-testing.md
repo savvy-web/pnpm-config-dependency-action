@@ -4,135 +4,117 @@
 
 ## Unit Testing
 
-**Test Framework:** Vitest with Effect integration
+**Test Framework:** Vitest with v8 coverage, forks pool for Effect-TS compatibility
 
-**Test Layer Pattern:**
+**Key Test Suites (11 test files, ~222 tests total):**
 
-Tests use library-provided test layers from `@savvy-web/github-action-effects` instead
-of `vi.mock("@actions/core")` for mocking action I/O. Each test layer provides an
-in-memory implementation of the corresponding service:
-
-- `ActionInputsTest.layer(inputs)` - Provides inputs from a `Record<string, string>`
-- `ActionOutputsTest.layer(state)` - Captures outputs, secrets, summaries, failures
-- `ActionStateTest.layer(state)` - In-memory state store (save/load)
-- `ActionLoggerTest.layer(state)` - Captures log messages by level
-
-```typescript
-import {
- ActionInputsTest, ActionOutputsTest,
- ActionStateTest, ActionLoggerTest,
-} from "@savvy-web/github-action-effects";
-import { Effect, Layer, LogLevel, Logger } from "effect";
-
-const makeTestLayer = (inputs: Record<string, string>) => {
- const outputState = ActionOutputsTest.empty();
- const stateState = ActionStateTest.empty();
- const layer = Layer.mergeAll(
-  ActionInputsTest.layer(inputs),
-  ActionOutputsTest.layer(outputState),
-  ActionLoggerTest.layer(ActionLoggerTest.empty()),
-  ActionStateTest.layer(stateState),
- );
- return { outputState, stateState, layer };
-};
-
-// Run program with test layers, suppress log output
-const runProgram = (layer: Layer.Layer<never, never, never>) =>
- Effect.runPromise(
-  Effect.exit(program.pipe(
-   Effect.provide(layer),
-   Logger.withMinimumLogLevel(LogLevel.None),
-  ))
- );
-```
-
-**Mocking `Action.run`:** Entry point tests (pre.test.ts, post.test.ts, main.test.ts)
-mock `Action.run` via `vi.mock("@savvy-web/github-action-effects")` to prevent
-module-level execution, then test the exported `program` Effect directly.
-
-**Remaining `vi.mock("@actions/core")` usage:** Some test files (services, branch, auth,
-lockfile) still mock `@actions/core` because `@actions/github` (which is still directly
-imported for repository context) has a transitive dependency on it. These mocks prevent
-`@actions/core` from throwing in non-GitHub-Actions environments.
-
-**Key Test Suites:**
-
-1. **Pre-action** (`src/pre.test.ts`)
-
-   - Token generation and state saving
-   - StartTime state persistence
-   - Missing app-id failure
-   - Token generation error handling
-
-2. **Post-action** (`src/post.test.ts`)
-
-   - Token revocation from state
-   - Skip revocation flag
-   - Missing token graceful handling
-
-3. **Main action** (`src/main.test.ts`, `src/main.effect.test.ts`)
+1. **Main action** (`src/main.test.ts`) - 24 tests
 
    - Full orchestration with mock services
-   - PR body generation with config/regular dependency tables
-   - Commit message generation with app slug
+   - Input parsing and validation
    - Dry-run mode behavior
+   - Error handling
 
-4. **Input Parsing** (`src/lib/inputs.test.ts`)
+2. **PR/Summary generation** (`src/main.effect.test.ts`) - 12 tests
 
-   - Valid inputs via `ActionInputsTest.layer()`
-   - Missing required inputs
-   - Invalid input formats
-   - Empty dependency lists
-   - Deleted utility function tests removed
+   - PR body generation with config/regular dependency tables
+   - Commit message generation
+   - Summary text generation
+   - pnpm upgrade appearing in Config Dependencies table
 
-5. **Error Types** (`src/lib/schemas/errors.test.ts`)
+3. **Schema types** (`src/lib/schemas/index.test.ts`) - 11 tests
 
-   - Error construction
-   - Error matching
-   - Error serialization
+   - Schema validation for all domain types
+   - BranchResult, DependencyUpdateResult, PullRequest, etc.
 
-6. **GitHub Auth** (`src/lib/github/auth.test.ts`)
+4. **Error types** (`src/lib/schemas/errors.test.ts`) - 33 tests
 
-   - JWT generation
-   - Installation token creation
-   - Token expiration handling
-   - Authentication failures
+   - Error construction and message formatting
+   - Error matching via `_tag`
+   - Error utility functions (isRetryable, getErrorMessage)
 
-7. **Branch Management** (`src/lib/github/branch.test.ts`)
+5. **Branch management** (`src/lib/github/branch.test.ts`) - 8 tests
 
-   - Create new branch
-   - Rebase existing branch
-   - Handle conflicts
-   - Already up-to-date
+   - Create new branch via GitBranch service
+   - Delete and recreate existing branch
+   - Commit changes via GitCommit service
+   - No-changes detection
 
-8. **Config Dependency Updates** (`src/lib/pnpm/config.test.ts`)
-   - Successful updates
-   - Update failures
-   - Version parsing
-   - Error accumulation
+6. **Config dependency updates** (`src/lib/pnpm/config.test.ts`) - 16 tests
 
-9. **Regular Dependency Updates** (`src/lib/pnpm/regular.test.ts`) - 22 tests
-   - `matchesPattern` (6 tests): exact match, exact mismatch, scoped wildcard, scoped mismatch, bare wildcard, dot metacharacter safety
+   - Config entry parsing (version + integrity hash)
+   - npm query and YAML editing
+   - Version comparison and skip logic
+   - Missing dependency handling
+
+7. **Regular dependency updates** (`src/lib/pnpm/regular.test.ts`) - 22 tests
+
+   - `matchesPattern` (6 tests): exact match, scoped wildcard, bare wildcard, dot metacharacter safety
    - `parseSpecifier` (6 tests): caret, tilde, exact, catalog:, catalog:named, workspace:
-   - `updateRegularDeps` Effect integration (10 tests): empty patterns, single dep newer version,
-     already latest, wildcard matching multiple deps, catalog: skip, multi-file updates,
-     npm query failure resilience, tilde prefix preservation, exact version preservation,
-     deduplication across dep fields
+   - `updateRegularDeps` Effect integration (10 tests): empty patterns, single dep,
+     already latest, wildcard matching, catalog: skip, multi-file updates,
+     npm query failure resilience, prefix preservation, deduplication
 
-10. **pnpm Self-Upgrade** (`src/lib/pnpm/upgrade.test.ts`) - 30 tests
-    - `parsePnpmVersion` (11 tests): exact version, sha suffix, caret prefix, caret+sha, non-pnpm packageManager, empty string, invalid semver; devEngines exact, caret, empty, invalid
-    - `formatPnpmVersion` (2 tests): with and without caret
-    - `resolveLatestInRange` (6 tests): highest in range, already latest, pre-release filtering, no match, empty versions, no major jump
-    - `upgradePnpm` Effect integration (11 tests): no pnpm fields, non-pnpm packageManager, newer version available, already latest, devEngines update, caret preservation, devEngines-only (no packageManager), non-pnpm devEngines skip, tab indentation preservation, space indentation preservation, no newer version
+8. **pnpm self-upgrade** (`src/lib/pnpm/upgrade.test.ts`) - 34 tests
 
-11. **PR Body Generation** (`src/main.effect.test.ts`)
-    - Includes tests for pnpm upgrade appearing in Config Dependencies table
+   - `parsePnpmVersion`: exact version, sha suffix, caret prefix, caret+sha, non-pnpm, empty, invalid
+   - `formatPnpmVersion`: with and without caret
+   - `resolveLatestInRange`: highest in range, already latest, pre-release filtering, no match
+   - `upgradePnpm` Effect integration: no pnpm fields, non-pnpm, newer available, already latest,
+     devEngines update, caret preservation, indentation preservation
+
+9. **Workspace YAML formatting** (`src/lib/pnpm/format.test.ts`) - 18 tests
+
+   - Array sorting, key sorting, configDependencies sorting
+   - YAML stringify options
+   - Round-trip formatting
+
+10. **Lockfile comparison** (`src/lib/lockfile/compare.test.ts`) - 23 tests
+
+    - Catalog snapshot comparison
+    - Package importer comparison
+    - No-change detection
+    - Missing lockfile handling
+
+11. **Changeset creation** (`src/lib/changeset/create.test.ts`) - 21 tests
+
+    - Changeset file generation
+    - Root workspace changesets
+    - Multiple affected packages
+
+## Test Patterns
+
+**Mocking `Action.run`:** Main test files mock `@savvy-web/github-action-effects`
+via `vi.mock()` to prevent module-level `Action.run` execution, then test the
+exported `program` Effect directly.
+
+**Mock service layers:** Domain module tests create mock `CommandRunner`, `GitBranch`,
+`GitCommit` etc. via `Layer.succeed()`:
+
+```typescript
+const mockCommandRunner = Layer.succeed(CommandRunner, {
+ exec: vi.fn(() => Effect.void),
+ execCapture: vi.fn((cmd, args) => {
+  // Return mocked output based on command
+  if (args.includes("npm view")) {
+   return Effect.succeed({ stdout: '"1.2.3"', stderr: "" });
+  }
+  return Effect.succeed({ stdout: "", stderr: "" });
+ }),
+});
+```
+
+**Remaining `vi.mock("@actions/core")` usage:** Some test files still mock
+`@actions/core` because `@actions/github` (directly imported for `context.sha`)
+has a transitive dependency on it.
+
+## Coverage
 
 **Coverage Exclusions:**
 
-`src/lib/pnpm/upgrade.ts` is excluded from per-file coverage thresholds in `vitest.config.ts` due to
-v8 function counting issues with Effect error callback patterns. The module is still tested
-thoroughly via `upgrade.test.ts`.
+`src/lib/pnpm/upgrade.ts` is excluded from per-file coverage thresholds in
+`vitest.config.ts` due to v8 function counting issues with Effect error callback
+patterns. The module is still tested thoroughly via `upgrade.test.ts`.
 
 ## Integration Testing
 
@@ -150,51 +132,5 @@ Create a test repository with:
 1. **Full Workflow** - End-to-end test of entire action
 2. **No Changes** - Verify early exit when already up-to-date
 3. **Partial Failures** - Some updates succeed, some fail
-4. **Branch Rebase** - Handle existing branch that needs rebase
+4. **Branch Reset** - Handle existing branch deletion and recreation
 5. **Changeset Creation** - Verify correct changeset files generated
-
-**Mock GitHub API:**
-
-Use `nock` or MSW to mock GitHub API calls:
-
-```typescript
-import nock from "nock";
-
-describe("Pull Request Creation", () => {
- beforeEach(() => {
-  nock("https://api.github.com")
-   .post("/repos/owner/repo/pulls")
-   .reply(201, {
-    number: 123,
-    html_url: "https://github.com/owner/repo/pull/123"
-   });
- });
-
- it("should create PR successfully", async () => {
-  // Test implementation
- });
-});
-```
-
-## Test Fixtures
-
-**Fixture Structure:**
-
-```text
-tests/
-├── fixtures/
-│   ├── repositories/
-│   │   ├── basic/                # Simple repo, no changesets
-│   │   ├── monorepo/             # Monorepo with changesets
-│   │   └── no-updates/           # All deps already latest
-│   ├── responses/
-│   │   ├── github-api/           # Mocked GitHub API responses
-│   │   └── pnpm/                 # Mocked pnpm command outputs
-│   └── expectations/
-│       ├── pr-descriptions/      # Expected PR descriptions
-│       └── changesets/           # Expected changeset files
-└── helpers/
-    ├── setup-repo.ts             # Create test repo from fixture
-    ├── mock-github.ts            # GitHub API mocking utilities
-    └── assert-effects.ts         # Effect assertion helpers
-```

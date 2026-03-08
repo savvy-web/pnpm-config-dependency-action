@@ -2,141 +2,62 @@
 
 [Back to index](./_index.md)
 
-## Implementation Plan
-
-### Phase 1: Core Infrastructure
-
-**Goal:** Set up project structure, Effect integration, and type definitions.
-
-**Tasks:**
-
-1. Initialize repository with pnpm workspace
-2. Configure TypeScript with strict mode
-3. Install Effect, @effect/schema, @actions/core, @octokit/rest
-4. Define core types and interfaces (`src/types/index.ts`)
-5. Define error types (`src/lib/errors/types.ts`)
-6. Set up testing infrastructure (Vitest, Effect test utilities)
-7. Configure GitHub Action metadata (`action.yml`)
-
-**Deliverables:**
-
-- Working TypeScript build
-- Core type definitions
-- Test framework configured
-- `action.yml` skeleton
-
-**Dependencies:** None
-
-### Phase 2: Dependency Updates
-
-**Goal:** Implement config and regular dependency update logic.
-
-**Tasks:**
-
-1. Implement input parsing (`src/lib/inputs.ts`)
-2. Implement pnpm config dependency updates (`src/lib/pnpm/config.ts`)
-3. Implement pnpm regular dependency updates (`src/lib/pnpm/regular.ts`)
-4. Implement pnpm install wrapper (`src/lib/pnpm/install.ts`)
-5. Implement workspace YAML formatter (`src/lib/pnpm/format.ts`)
-6. Add error accumulation for batch updates
-7. Write unit tests for all pnpm operations
-
-**Deliverables:**
-
-- Working dependency update logic
-- Error handling with accumulation
-- Unit tests passing
-
-**Dependencies:** Phase 1
-
-### Phase 3: Changeset Integration
-
-**Goal:** Detect changed packages and create changeset files.
-
-**Tasks:**
-
-1. Implement changeset directory detection (`src/lib/changeset/detect.ts`)
-2. Implement package change analysis (`src/lib/changeset/analyze.ts`)
-3. Implement changeset file creation (`src/lib/changeset/create.ts`)
-4. Parse `package.json` files to determine changed packages
-5. Generate changeset summaries with dependency lists
-6. Handle edge case: only root/config dependencies changed
-7. Write tests for changeset creation logic
-
-**Deliverables:**
-
-- Changeset creation working
-- Correct handling of package changes
-- Tests passing
-
-**Dependencies:** Phase 2
-
-### Phase 4: GitHub Integration
-
-**Goal:** Implement GitHub App auth, branch management, and PR creation.
-
-**Tasks:**
-
-1. Implement GitHub App authentication (`src/lib/github/auth.ts`, `src/pre.ts`)
-2. Implement branch existence check and creation (`src/lib/github/branch.ts`)
-3. Implement branch rebasing logic
-4. Implement git operations (status, diff, commit, push) (`src/lib/git/`)
-5. Implement check run creation and updates (`src/lib/github/check.ts`)
-6. Implement PR creation and updates (`src/lib/github/pr.ts`)
-7. Implement PR description template generation
-8. Implement cleanup logic (`src/post.ts`)
-9. Write integration tests with mocked GitHub API
-
-**Deliverables:**
-
-- Complete GitHub integration
-- Branch management working
-- PR creation working
-- Integration tests passing
-
-**Dependencies:** Phase 3
-
 ## Current State
 
-**Status:** v0.7.1 released. Core features operational. GitHub Action plumbing
-migrated to `@savvy-web/github-action-effects` library (v0.3.0).
+**Status:** v0.4.0 architecture migration complete. Single-phase entry point with
+all services from `@savvy-web/github-action-effects` v0.4.0.
+
+**Architecture (v0.4.0):**
+
+- **Single-phase design:** `main.ts` is the only entry point. `pre.ts`, `post.ts`,
+  and `github/auth.ts` have been deleted. Token lifecycle handled by
+  `GitHubApp.withToken()`.
+- **Library services only:** Custom services (`GitHubClient`, `GitExecutor`,
+  `PnpmExecutor` from `src/lib/services/index.ts`) have been deleted. All services
+  come from the library: `CommandRunner`, `GitBranch`, `GitCommit`, `CheckRun`,
+  `GitHubClient`, `AutoMerge`.
+- **Declarative inputs:** `src/lib/inputs.ts` deleted. Input parsing uses
+  `Action.parseInputs()` directly in `main.ts`.
+- **Simplified action.yml:** No `pre`/`post` entries. Removed `skip-token-revoke`,
+  `log-level` inputs and `token` output.
 
 **Implemented Features:**
 
-- Phase-based execution model with 14 steps
-- GitHub App token generation (pre.ts) and revocation (post.ts)
-- Branch management with create/rebase
-- Config dependency updates via `pnpm add --config`
+- Single-phase execution model with 16 steps
+- GitHub App token lifecycle via `GitHubApp.withToken()`
+- Branch management with delete-and-recreate strategy via `GitBranch` service
+- Config dependency updates via direct npm queries and YAML editing
 - Regular dependency updates via direct npm queries (compatible with `catalogMode: strict`)
 - pnpm self-upgrade via `corepack use` with `packageManager` and `devEngines` field support
 - Clean install after updates
 - Workspace YAML formatting
-- Custom command execution with error collection
+- Custom command execution via `CommandRunner` with error collection
 - Lockfile comparison for change detection
 - Changeset creation for affected packages
-- Commit via GitHub API (verified/signed commits)
-- PR creation and update with Dependabot-style formatting
-- Auto-merge support via GitHub GraphQL API
+- Verified commits via `GitCommit` service (GitHub API)
+- PR creation and update with Dependabot-style formatting via `GitHubClient`
+- Auto-merge support via `AutoMerge.enable()` (GraphQL API)
+- Check run lifecycle via `CheckRun.withCheckRun()`
 - Configurable changeset creation via `changesets` input (boolean, default: `true`)
 - Dry-run mode for testing
-- Debug logging mode
 
-**`@savvy-web/github-action-effects` Integration (v0.3.0):**
+**Deleted Modules (v0.4.0 migration):**
 
-All GitHub Action plumbing has been migrated to the library:
+- `src/pre.ts` - Token generation (replaced by `GitHubApp.withToken()`)
+- `src/post.ts` - Token revocation (handled automatically by `GitHubApp.withToken()`)
+- `src/lib/github/auth.ts` - Custom auth logic (replaced by `GitHubApp` service)
+- `src/lib/inputs.ts` - Input parsing (replaced by `Action.parseInputs()`)
+- `src/lib/services/index.ts` - Custom services (replaced by library services)
 
-- `@actions/core` is no longer imported directly by any source file
-- All entry points use `Action.run(program, ActionStateLive)` instead of
-  `NodeRuntime.runMain()`
-- Inputs read via `ActionInputs` service (Schema-validated)
-- Outputs/summaries via `ActionOutputs` service
-- State persistence via `ActionState` service (Schema-validated structured objects)
-- Logging via `ActionLoggerLayer` (routes `Effect.log*` to `@actions/core` functions)
-- `NodeContext.layer` provided automatically by `Action.run()`
-- `src/lib/logging.ts` deleted (custom debug module replaced by library layer)
-- Programs exported for testability; tests use library test layers
-- Deleted utility functions from inputs.ts: `isDryRun`, `getTimeout`,
-  `shouldSkipTokenRevoke`, `getLogLevel`, `isDebugMode`, `getGitHubToken`
+**Deleted Types (v0.4.0 migration):**
+
+- `InstallationToken` - Handled internally by `GitHubApp.withToken()`
+- `AuthenticatedClient` - Replaced by `GitHubClient` service
+- `GitHubContext` - Replaced by `GitHubClient.repo`
+- `ActionInputs` schema - Replaced by `Action.parseInputs()` declarative API
+- `AuthenticationError` - Handled by library
+- `CheckRun` schema (domain type) - Replaced by `CheckRun` service
+- `ActionResult` - No longer needed
 
 **Next Steps:**
 
@@ -153,18 +74,6 @@ All GitHub Action plumbing has been migrated to the library:
 Effect's type system makes errors explicit in function signatures. You can see at a glance what errors
 a function might produce, and the compiler ensures you handle them.
 
-```typescript
-// With promises - errors are invisible
-async function updateDep(dep: string): Promise<DependencyUpdateResult> {
- // What errors can this throw? Who knows!
-}
-
-// With Effect - errors are explicit
-function updateDep(dep: string): Effect.Effect<DependencyUpdateResult, PnpmError> {
- // Clear: this can fail with PnpmError
-}
-```
-
 **Error Accumulation:**
 
 GitHub Actions should be resilient. If updating 10 dependencies, and 2 fail, we want to:
@@ -175,20 +84,36 @@ GitHub Actions should be resilient. If updating 10 dependencies, and 2 fail, we 
 
 Effect makes this pattern easy with `Effect.all`, `Effect.either`, and custom error types.
 
-**Retry Logic:**
-
-GitHub API calls can fail transiently. Effect's `Schedule` API provides sophisticated retry logic
-with exponential backoff, jitter, and max attempts.
-
 **Resource Management:**
 
-GitHub check runs need to be finalized even if the action fails. Effect's `acquireUseRelease`
-pattern ensures cleanup always happens.
+GitHub App tokens and check runs need proper lifecycle management. Effect's resource
+patterns (like `acquireUseRelease` used by `GitHubApp.withToken()` and
+`CheckRun.withCheckRun()`) ensure cleanup always happens.
 
 **Testing:**
 
-Effect programs are pure and composable, making them easier to test. You can run effects in test
-mode, collect logs, and verify behavior without side effects.
+Effect programs are pure and composable, making them easier to test. Services can be
+mocked via `Layer.succeed()` without complex mocking frameworks.
+
+### Why Single-Phase Instead of Pre/Main/Post?
+
+**Simplicity:**
+
+- One entry point instead of three
+- No cross-phase state persistence needed
+- Token lifecycle handled by library service
+
+**Reliability:**
+
+- `GitHubApp.withToken()` guarantees token revocation via `acquireUseRelease`
+- No state corruption risk between phases
+- Simpler error handling (no partial state from failed phases)
+
+**Maintainability:**
+
+- Fewer files to maintain
+- All logic visible in one place
+- Easier to reason about execution flow
 
 ### Why Dedicated Branch Instead of Ephemeral Branches?
 
@@ -198,17 +123,11 @@ mode, collect logs, and verify behavior without side effects.
 - Predictable workflow (users know where to look)
 - Matches Dependabot's behavior (single branch per dependency type)
 
-**Rebase Support:**
+**Delete-and-Recreate Strategy:**
 
-- Can rebase onto main when behind
-- Keeps history clean and linear
-- Avoids merge commit clutter
-
-**Automation:**
-
-- CI/CD can target specific branch
-- Can set up CODEOWNERS for auto-review
-- Branch protection rules can be configured
+- Always starts from clean state (no stale changes)
+- Simpler than rebase (no conflict resolution)
+- Appropriate for automated dependency updates
 
 ### Why Changesets Integration?
 
@@ -220,18 +139,6 @@ Changesets is the de facto standard for versioning in pnpm monorepos. Integratin
 - Semantic versioning enforcement
 - Release automation compatibility
 
-**Transparency:**
-
-Each changeset file is a human-readable record of what changed and why. This provides:
-
-- Clear attribution of dependency updates
-- Easy review of impact scope
-- Historical record of dependency evolution
-
-**Flexibility:**
-
-Users can edit changeset messages before release to add context or combine related updates.
-
 ### Why GitHub App Instead of PAT?
 
 **Security:**
@@ -240,54 +147,15 @@ Users can edit changeset messages before release to add context or combine relat
 - Fine-grained permissions (read/write only what's needed)
 - No user account compromise risk
 
-**Auditability:**
-
-- Actions tied to app, not individual user
-- Clear separation of automation vs human actions
-- Easier to revoke access organization-wide
-
-**Scalability:**
-
-- No per-user token management
-- Works across repositories with single app installation
-- Team members can come and go without token rotation
-
 **Verified Commits:**
 
-- GitHub Apps can create verified/signed commits when using the API
+- GitHub Apps can create verified/signed commits via the Git Data API
 - Commit attribution shows the app name (e.g., "my-app[bot]")
-- Requires omitting the `author` parameter in `git.createCommit()` API call
-- Sign-off uses app slug from state for proper attribution
+- Requires omitting the `author` parameter in `createCommit()`
 
 ### Why Commit via GitHub API Instead of Git CLI?
 
-**Verified Commits:**
-
-When creating commits via the GitHub API with a GitHub App token:
-
-1. **Omit the `author` parameter** - This allows GitHub to attribute the commit to the app
-2. **Include sign-off trailer** - Use app slug: `Signed-off-by: my-app[bot] <my-app[bot]@users.noreply.github.com>`
-3. **GitHub verifies the commit** - Commits get a "Verified" badge in the UI
-
-**Implementation:**
-
-```typescript
-// ❌ INCORRECT: Passing author prevents verification
-await octokit.rest.git.createCommit({
-  owner, repo, message, tree, parents,
-  author: { name: "my-app[bot]", email: "..." } // Don't do this
-});
-
-// ✅ CORRECT: Omit author for verification
-await octokit.rest.git.createCommit({
-  owner, repo, message, tree, parents
-  // NO author parameter - GitHub will attribute and verify
-});
-```
-
-**Why This Matters:**
-
-- Verified commits show trust and authenticity
+- Verified commits with "Verified" badge
 - No SSH keys or GPG keys needed
 - Works automatically with GitHub App tokens
 - Consistent with how GitHub's own bots work (Dependabot, etc.)
@@ -301,14 +169,3 @@ await octokit.rest.git.createCommit({
 - [Changesets Documentation](https://github.com/changesets/changesets)
 - [Effect Documentation](https://effect.website)
 - [GitHub Actions Toolkit](https://github.com/actions/toolkit)
-
-**Internal References:**
-
-- Reference implementation: `workflow-release-action` (sister repo)
-- Pattern examples: Phase-based execution, check runs, summaries
-
-**Future Documentation:**
-
-- User guide: How to set up the action in your repository
-- Contributing guide: How to contribute to the action
-- Troubleshooting guide: Common issues and solutions

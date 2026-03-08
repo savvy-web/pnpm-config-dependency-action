@@ -4,75 +4,62 @@
 
 ## Service Architecture
 
-The action has two tiers of services:
+All services come from `@savvy-web/github-action-effects` (v0.4.0). There are no
+custom application services defined in this codebase.
 
-1. **Library services** (from `@savvy-web/github-action-effects`): `ActionInputs`,
-   `ActionOutputs`, `ActionState`, `ActionLogger` -- these handle all GitHub Action
-   plumbing (reading inputs, setting outputs, persisting state between phases, and
-   routing Effect log levels to `@actions/core` log functions).
+### Library Services
 
-2. **Application services** (in `src/lib/services/index.ts`): `GitHubClient`,
-   `GitExecutor`, `PnpmExecutor` -- these handle domain-specific operations (GitHub
-   API, git commands, pnpm commands).
+**Action plumbing** (provided by `Action.run()` automatically):
 
-### Library Services (provided by `Action.run()`)
-
-`Action.run(program, ActionStateLive)` provides all library services automatically:
-
-- `ActionInputs` - Read action inputs with Schema validation (`get`, `getSecret`,
-  `getOptional`, `getBooleanOptional`)
 - `ActionOutputs` - Set outputs (`set`), mask secrets (`setSecret`), write job
   summary (`summary`), fail the action (`setFailed`)
-- `ActionState` - Save/load Schema-validated state between phases (`save`,
-  `getOptional`)
-- `ActionLogger` (via `ActionLoggerLayer`) - Routes `Effect.logDebug` to
-  `core.debug()`, `Effect.logInfo` to `core.info()`, `Effect.logWarning` to
-  `core.warning()`, `Effect.logError` to `core.error()` automatically
-- `NodeContext.layer` - Provided automatically by `Action.run()` in v0.3.0
+- `ActionLoggerLayer` - Routes `Effect.logDebug` to `core.debug()`, `Effect.logInfo`
+  to `core.info()`, `Effect.logWarning` to `core.warning()`, `Effect.logError` to
+  `core.error()` automatically
+- `NodeContext.layer` - Platform layer provided automatically
 
-### Application Services (defined in `src/lib/services/index.ts`)
+**Token lifecycle:**
 
-```typescript
-import { Context, Effect, Layer } from "effect";
-import { Command } from "@effect/platform";
+- `GitHubApp` / `GitHubAppLive` - Generate and automatically revoke GitHub App tokens
+  via `withToken(appId, privateKey, callback)`
 
-// ══════════════════════════════════════════════════════════════════════════════
-// Service Definitions (Tags)
-// ══════════════════════════════════════════════════════════════════════════════
+**Domain services** (constructed from token inside `GitHubApp.withToken()` callback):
 
-/** GitHub API client service - wraps Octokit with Effect error types */
-class GitHubClient extends Context.Tag("GitHubClient")<GitHubClient, GitHubClientService>() {}
+- `GitHubClient` / `GitHubClientLive(token)` - Octokit wrapper with `rest()` and `repo`
+- `GitBranch` / `GitBranchLive` - Branch CRUD: `exists`, `create`, `delete`, `getSha`
+- `GitCommit` / `GitCommitLive` - Git Data API: `createTree`, `createCommit`, `updateRef`
+- `CheckRun` / `CheckRunLive` - Check run lifecycle: `withCheckRun`, `complete`
+- `AutoMerge` - Enable auto-merge via GraphQL
+- `CommandRunner` / `CommandRunnerLive` - Shell command execution: `exec`, `execCapture`
+- `DryRun` / `DryRunLive(flag)` - Dry-run mode flag
 
-/** pnpm command executor service */
-class PnpmExecutor extends Context.Tag("PnpmExecutor")<PnpmExecutor, PnpmExecutorService>() {}
+**Declarative input parsing:**
 
-/** Git command executor service */
-class GitExecutor extends Context.Tag("GitExecutor")<GitExecutor, GitExecutorService>() {}
+- `Action.parseInputs(schema, validator?)` - Parse and validate action inputs with
+  Effect Schema, replacing the deleted `parseInputs` module
 
-// ══════════════════════════════════════════════════════════════════════════════
-// Composed Application Layer
-// ══════════════════════════════════════════════════════════════════════════════
-
-/** Creates all application services from a GitHub App token */
-export const makeAppLayer = (token: string): Layer.Layer<GitHubClient | GitExecutor | PnpmExecutor> =>
- Layer.mergeAll(makeGitHubClientLayer(token), GitExecutorLive, PnpmExecutorLive);
-```
-
-**Key difference from prior architecture:** `makeAppLayer` no longer calls
-`Layer.provide(NodeContext.layer)` -- that is now handled by `Action.run()`.
-
-### Two-Layer Composition in main.ts
+### Layer Composition in main.ts
 
 ```typescript
-// Library services provided by Action.run()
-Action.run(runnable, ActionStateLive);
+// Action.run provides plumbing services + GitHubApp
+Action.run(program, GitHubAppLive);
 
-// Inside runnable:
-const appLayer = makeAppLayer(tokenOption.value.token);
-yield* program.pipe(
- Effect.provide(appLayer),  // Provides GitHubClient, GitExecutor, PnpmExecutor
- Effect.timeoutFail({ ... }),
- Effect.catchAll(/* ... */),
+// Inside program:
+const ghApp = yield* GitHubApp;
+yield* ghApp.withToken(appId, privateKey, (token) =>
+ Effect.gen(function* () {
+  const ghClient = GitHubClientLive(token);
+  const appLayer = Layer.mergeAll(
+   ghClient,
+   GitBranchLive.pipe(Layer.provide(ghClient)),
+   GitCommitLive.pipe(Layer.provide(ghClient)),
+   CheckRunLive.pipe(Layer.provide(ghClient)),
+   GitHubGraphQLLive.pipe(Layer.provide(ghClient)),
+   CommandRunnerLive,
+   DryRunLive(dryRun),
+  );
+  yield* Effect.provide(innerProgram(inputs, dryRun), appLayer);
+ }),
 );
 ```
 
@@ -86,192 +73,93 @@ Effect distinguishes between **expected errors** (typed, recoverable) and **unex
 - `GitError` - git operation failures
 - `GitHubApiError` - API call failures
 - `InvalidInputError` - validation failures
-
-**Unexpected Errors (Defects):**
-
-- Runtime exceptions
-- Network timeouts
-- Out of memory
+- `FileSystemError` - file read/write failures
+- `LockfileError` - lockfile parsing failures
 
 **Strategy by Error Type:**
 
 | Scenario | Strategy | Effect Pattern |
 | --- | --- | --- |
 | Critical errors | Fail fast | `Effect.fail()` |
-| Batch operations | Accumulate | `Effect.partition()` |
+| Batch operations | Accumulate | Sequential loop with `Effect.catchAll()` |
 | Transient failures | Retry | `Effect.retry(Schedule)` |
 | Optional features | Graceful degradation | `Effect.catchAll()` |
 
-## Typed Errors with Data.TaggedError
+## Typed Errors with Schema.TaggedError
 
 ```typescript
-import { Data } from "effect";
+import { Schema } from "effect";
 
 /** pnpm command execution error */
-export class PnpmError extends Data.TaggedError("PnpmError")<{
- readonly command: string;
- readonly dependency?: string;
- readonly exitCode?: number;
- readonly stderr?: string;
-}> {}
-
-// Pattern match on error type
-const handleError = (error: PnpmError | GitError) =>
- Effect.gen(function* () {
-  switch (error._tag) {
-   case "PnpmError":
-    yield* Effect.logError(`pnpm ${error.command} failed: ${error.stderr}`);
-    break;
-   case "GitError":
-    yield* Effect.logError(`git ${error.operation} failed: ${error.stderr}`);
-    break;
-  }
- });
+export class PnpmError extends Schema.TaggedError<PnpmError>()("PnpmError", {
+ command: NonEmptyString,
+ dependency: Schema.optional(Schema.String),
+ exitCode: Schema.Number.pipe(Schema.int()),
+ stderr: Schema.String,
+}) {
+ get message() {
+  return `pnpm ${this.command} failed (exit ${this.exitCode}): ${this.stderr}`;
+ }
+}
 ```
 
-## Error Accumulation with Effect.partition
+## Resource Management
 
-For batch operations, use `Effect.partition` to collect both successes and failures:
+### Token Lifecycle via GitHubApp.withToken
+
+Token generation and revocation are handled automatically by the library:
 
 ```typescript
-import { Effect, Array } from "effect";
-
-/**
- * Update multiple dependencies, collecting both successes and failures.
- * Continues processing even if some updates fail.
- */
-export const updateDependenciesWithAccumulation = (
- dependencies: ReadonlyArray<string>
-): Effect.Effect<
- { successful: ReadonlyArray<DependencyUpdateResult>; failed: ReadonlyArray<{ dep: string; error: PnpmError }> },
- never, // Never fails - accumulates errors instead
- PnpmExecutor
-> =>
+const ghApp = yield* GitHubApp;
+yield* ghApp.withToken(appId, privateKey, (token) =>
  Effect.gen(function* () {
-  const pnpm = yield* PnpmExecutor;
-
-  // Effect.partition separates successes and failures
-  const [failures, successes] = yield* Effect.partition(
-   dependencies,
-   (dep) => pnpm.addConfig(dep).pipe(
-    Effect.map((result) => ({ dep, result })),
-    Effect.mapError((error) => ({ dep, error }))
-   )
-  );
-
-  // Log failures but don't fail the effect
-  if (failures.length > 0) {
-   yield* Effect.logWarning(`${failures.length} dependency updates failed`);
-   for (const { dep, error } of failures) {
-    yield* Effect.logWarning(`  - ${dep}: ${error.stderr}`);
-   }
-  }
-
-  return {
-   successful: successes.map((s) => s.result),
-   failed: failures
-  };
- });
-```
-
-## Retry Policies with Schedule
-
-Use `Schedule` for sophisticated retry logic:
-
-```typescript
-import { Effect, Schedule } from "effect";
-
-// Exponential backoff: 100ms, 200ms, 400ms (max 3 retries)
-const exponentialBackoff = Schedule.exponential("100 millis").pipe(
- Schedule.compose(Schedule.recurs(3)),
- Schedule.jittered // Add ±25% randomness to prevent thundering herd
+  // Token is valid here
+  // Automatically revoked when this callback completes (success or failure)
+ }),
 );
-
-// Only retry on specific errors (e.g., rate limits, network issues)
-const retryableErrors = (error: GitHubApiError) =>
- error.statusCode === 429 || error.statusCode >= 500;
-
-// Retry GitHub API calls
-export const createPullRequestWithRetry = (data: PRData) =>
- Effect.gen(function* () {
-  const github = yield* GitHubClient;
-  return yield* github.createPR(data);
- }).pipe(
-  Effect.retry({
-   schedule: exponentialBackoff,
-   while: retryableErrors
-  })
- );
 ```
 
-## Resource Management with acquireUseRelease
+### Check Run Lifecycle via CheckRun.withCheckRun
 
-Ensure cleanup happens even on failure:
+Check runs are automatically finalized even on failure:
 
 ```typescript
-import { Effect, Exit } from "effect";
-
-/**
- * Wraps an operation with a GitHub check run.
- * The check run is always finalized (success/failure) even if the operation throws.
- */
-export const withCheckRun = <A, E, R>(
- name: string,
- operation: (checkRun: CheckRun) => Effect.Effect<A, E, R>
-): Effect.Effect<A, E | GitHubApiError, R | GitHubClient> =>
- Effect.acquireUseRelease(
-  // Acquire: Create check run
-  Effect.gen(function* () {
-   const github = yield* GitHubClient;
-   return yield* github.createCheckRun(name);
-  }),
-
-  // Use: Run the operation
-  operation,
-
-  // Release: Always finalize the check run
-  (checkRun, exit) =>
-   Effect.gen(function* () {
-    const github = yield* GitHubClient;
-    const [status, conclusion, summary] = Exit.match(exit, {
-     onFailure: (cause) => ["completed", "failure", `Failed: ${cause}`] as const,
-     onSuccess: () => ["completed", "success", "Completed successfully"] as const
-    });
-    yield* github.updateCheckRun(checkRun.id, status, conclusion, summary);
-   }).pipe(Effect.orDie) // Don't let cleanup errors propagate
- );
+const checkRunService = yield* CheckRun;
+yield* checkRunService.withCheckRun(name, headSha, (checkRunId) =>
+ Effect.gen(function* () {
+  // Check run is "in_progress" here
+  // Use checkRunService.complete(checkRunId, conclusion, output) to finalize
+ }),
+);
 ```
 
 ## Running the Effect Program
 
-All entry points use `Action.run()` from the library instead of
-`NodeRuntime.runMain()`:
+The single entry point uses `Action.run()` with `GitHubAppLive`:
 
 ```typescript
-import { Action, ActionState, ActionStateLive } from "@savvy-web/github-action-effects";
-import { Effect } from "effect";
+import { Action, ActionOutputs, GitHubApp, GitHubAppLive } from "@savvy-web/github-action-effects";
+import { Duration, Effect } from "effect";
 
-// Export program for testability
 export const program = Effect.gen(function* () {
- // Library services available via yield*
- const state = yield* ActionState;
- const outputs = yield* ActionOutputs;
- const inputs = yield* ActionInputs;
+ // Parse inputs declaratively
+ const inputs = yield* Action.parseInputs({ ... });
 
- // Application services (after providing appLayer)
- const github = yield* GitHubClient;
- const pnpm = yield* PnpmExecutor;
- const git = yield* GitExecutor;
-
- // ... orchestration logic
+ // Token lifecycle
+ const ghApp = yield* GitHubApp;
+ yield* ghApp.withToken(inputs["app-id"], inputs["app-private-key"], (token) => ...);
 });
 
-// Action.run provides ActionInputs, ActionOutputs, ActionState,
-// ActionLoggerLayer, and NodeContext.layer automatically
-Action.run(program, ActionStateLive);
+Action.run(
+ program.pipe(
+  Effect.timeoutFail({ duration: Duration.seconds(180), ... }),
+  Effect.catchAll((error) => ...),
+ ),
+ GitHubAppLive,
+);
 ```
 
-**Testing:** Programs are exported as `program` and can be tested by providing
-library test layers (`ActionInputsTest.layer()`, `ActionOutputsTest.layer()`,
-`ActionStateTest.layer()`, `ActionLoggerTest.layer()`) instead of the live
-layers. See the Testing section for details.
+**Testing:** The `program` is exported for testability. Tests mock
+`@savvy-web/github-action-effects` via `vi.mock()` to prevent module-level
+`Action.run` execution, then test the exported `program` Effect directly
+with mock service layers.

@@ -2,131 +2,92 @@
 
 [Back to index](./_index.md)
 
-## Core Interfaces
+## Overview
+
+Types are defined using Effect Schema in `src/lib/schemas/index.ts` and re-exported
+from `src/types/index.ts`. Error types use `Schema.TaggedError` in
+`src/lib/schemas/errors.ts`.
+
+Many types from the v0.3.0 architecture have been removed because their responsibilities
+are now handled by library services from `@savvy-web/github-action-effects`:
+
+- `ActionInputs` schema -- replaced by `Action.parseInputs()` declarative API
+- `InstallationToken` -- handled internally by `GitHubApp.withToken()`
+- `AuthenticatedClient` -- replaced by `GitHubClient` library service
+- `GitHubContext` -- replaced by `GitHubClient.repo` property
+- `CheckRun` schema -- replaced by `CheckRun` library service
+- `ActionResult` -- no longer needed (results handled inline in main.ts)
+- `AuthenticationError` -- handled internally by `GitHubApp.withToken()`
+
+## Domain Schemas (src/lib/schemas/index.ts)
 
 ```typescript
-import type { Effect } from "effect";
-import type { Octokit } from "@octokit/rest";
+import { Schema } from "effect";
 
-/**
- * Parsed action inputs from action.yml (9 fields, defined via Effect Schema).
- */
-export interface ActionInputs {
- readonly appId: string;           // NonEmptyString
- readonly appPrivateKey: string;   // NonEmptyString
- readonly branch: string;          // Pattern validated: /^[a-zA-Z0-9/_-]+$/
- readonly configDependencies: ReadonlyArray<string>;
- readonly dependencies: ReadonlyArray<string>;
- readonly run: ReadonlyArray<string>;
- readonly updatePnpm: boolean;     // default: true
- readonly autoMerge: "" | "merge" | "squash" | "rebase"; // default: ""
- readonly changesets: boolean;     // default: true, controls whether changesets are created for dependency updates
-}
+/** Branch management result. */
+export const BranchResult = Schema.Struct({
+ branch: NonEmptyString,
+ created: Schema.Boolean,
+ upToDate: Schema.Boolean,
+ baseRef: Schema.String,
+});
 
-/**
- * GitHub context for the action
- */
-export interface GitHubContext {
- readonly owner: string;
- readonly repo: string;
- readonly ref: string;
- readonly sha: string;
- readonly defaultBranch: string; // usually "main"
-}
+/** Dependency update result. */
+export const DependencyUpdateResult = Schema.Struct({
+ dependency: NonEmptyString,
+ from: Schema.NullOr(Schema.String),
+ to: NonEmptyString,
+ type: Schema.Literal("config", "regular"),
+ package: Schema.NullOr(Schema.String),
+});
 
-/**
- * GitHub App installation token
- */
-export interface InstallationToken {
- readonly token: string;
- readonly expiresAt: Date;
- readonly permissions: Record<string, string>;
- readonly repositories?: ReadonlyArray<{ id: number; name: string }>;
-}
+/** Single dependency change info. */
+export const DependencyChange = Schema.Struct({
+ dependency: NonEmptyString,
+ from: Schema.NullOr(Schema.String),
+ to: NonEmptyString,
+});
 
-/**
- * Authenticated Octokit client
- */
-export interface AuthenticatedClient {
- readonly octokit: Octokit;
- readonly installationId: number;
-}
+/** Changed package information. */
+export const ChangedPackage = Schema.Struct({
+ name: NonEmptyString,
+ path: Schema.String,
+ version: Schema.String,
+ changes: Schema.Array(DependencyChange),
+});
 
-/**
- * Branch management result
- */
-export interface BranchResult {
- readonly branch: string;
- readonly created: boolean; // true if newly created, false if rebased
- readonly upToDate: boolean; // true if no rebase was needed
- readonly baseRef: string; // ref branch was created from or rebased onto
-}
+/** Changeset file to create. */
+export const ChangesetFile = Schema.Struct({
+ id: NonEmptyString,
+ packages: Schema.Array(Schema.String),
+ type: Schema.Literal("patch", "minor", "major"),
+ summary: NonEmptyString,
+});
 
-/**
- * Dependency update result
- */
-export interface DependencyUpdateResult {
- readonly dependency: string;
- readonly from: string | null; // null if newly added
- readonly to: string;
- readonly type: "config" | "regular";
- readonly package: string | null; // null for config dependencies
-}
+/** Pull request information. */
+export const PullRequest = Schema.Struct({
+ number: Schema.Number.pipe(Schema.positive()),
+ url: Schema.String.pipe(Schema.startsWith("https://")),
+ created: Schema.Boolean,
+ nodeId: Schema.String,
+});
 
-/**
- * Changed package information
- */
-export interface ChangedPackage {
- readonly name: string;
- readonly path: string;
- readonly version: string;
- readonly dependencies: ReadonlyArray<DependencyUpdateResult>;
-}
+/** Lockfile change detected during comparison. */
+export const LockfileChange = Schema.Struct({
+ type: Schema.Literal("config", "regular"),
+ dependency: NonEmptyString,
+ from: Schema.NullOr(Schema.String),
+ to: NonEmptyString,
+ affectedPackages: Schema.Array(Schema.String),
+});
+```
 
-/**
- * Changeset file to create
- */
-export interface ChangesetFile {
- readonly packages: ReadonlyArray<string>; // package names
- readonly type: "patch"; // always patch for dependency updates
- readonly summary: string;
-}
+All schemas derive TypeScript types via `typeof Schema.Type`.
 
-/**
- * Check run information
- */
-export interface CheckRun {
- readonly id: number;
- readonly name: string;
- readonly status: "queued" | "in_progress" | "completed";
- readonly conclusion?: "success" | "failure" | "neutral" | "cancelled" | "skipped";
-}
+## Module-Level Types (src/lib/pnpm/upgrade.ts)
 
-/**
- * Pull request information
- */
-export interface PullRequest {
- readonly number: number;
- readonly url: string;
- readonly created: boolean; // true if newly created, false if updated
- readonly nodeId: string;
-}
-
-/**
- * Complete action result
- */
-export interface ActionResult {
- readonly updates: ReadonlyArray<DependencyUpdateResult>;
- readonly changedPackages: ReadonlyArray<ChangedPackage>;
- readonly changesets: ReadonlyArray<ChangesetFile>;
- readonly branch: BranchResult;
- readonly pr: PullRequest;
- readonly checkRun: CheckRun;
-}
-
-/**
- * Result of a pnpm upgrade operation (from src/lib/pnpm/upgrade.ts).
- */
+```typescript
+/** Result of a pnpm upgrade operation. */
 export interface PnpmUpgradeResult {
  readonly from: string;
  readonly to: string;
@@ -134,9 +95,7 @@ export interface PnpmUpgradeResult {
  readonly devEnginesUpdated: boolean;
 }
 
-/**
- * Parsed pnpm version info (from src/lib/pnpm/upgrade.ts).
- */
+/** Parsed pnpm version info. */
 export interface ParsedPnpmVersion {
  readonly version: string;
  readonly hasCaret: boolean;
@@ -144,83 +103,99 @@ export interface ParsedPnpmVersion {
 }
 ```
 
-## Effect Error Types
+## Effect Error Types (src/lib/schemas/errors.ts)
 
-Using Effect's `Data.TaggedError` for typed error handling:
+Uses Effect's `Schema.TaggedError` for typed error handling with rich metadata:
 
 ```typescript
-import { Data } from "effect";
+import { Schema } from "effect";
 
-/**
- * Input validation errors
- */
-export class InvalidInputError extends Data.TaggedError("InvalidInputError")<{
- readonly field: string;
- readonly value: unknown;
- readonly reason: string;
-}> {}
+/** Input validation error. */
+export class InvalidInputError extends Schema.TaggedError<InvalidInputError>()(
+ "InvalidInputError",
+ { field: NonEmptyString, value: Schema.Unknown, reason: NonEmptyString },
+) {}
 
-/**
- * GitHub authentication errors
- */
-export class AuthenticationError extends Data.TaggedError("AuthenticationError")<{
- readonly reason: string;
- readonly appId?: string;
-}> {}
+/** GitHub API error. */
+export class GitHubApiError extends Schema.TaggedError<GitHubApiError>()(
+ "GitHubApiError",
+ {
+  operation: NonEmptyString,
+  statusCode: Schema.optional(Schema.Number.pipe(Schema.between(100, 599))),
+  message: NonEmptyString,
+ },
+) {
+ get isRetryable(): boolean {
+  return this.isRateLimited || this.isServerError;
+ }
+}
 
-/**
- * GitHub API errors
- */
-export class GitHubApiError extends Data.TaggedError("GitHubApiError")<{
- readonly operation: string;
- readonly statusCode: number;
- readonly message: string;
-}> {}
+/** Git command execution error. */
+export class GitError extends Schema.TaggedError<GitError>()(
+ "GitError",
+ {
+  operation: Schema.Literal("status", "diff", "commit", "push", "rebase", "checkout", "fetch", "branch"),
+  exitCode: Schema.Number.pipe(Schema.int()),
+  stderr: Schema.String,
+ },
+) {}
 
-/**
- * Git operation errors
- */
-export class GitError extends Data.TaggedError("GitError")<{
- readonly operation: "status" | "diff" | "commit" | "push" | "rebase" | "checkout";
- readonly exitCode: number;
- readonly stderr: string;
-}> {}
+/** pnpm command execution error. */
+export class PnpmError extends Schema.TaggedError<PnpmError>()(
+ "PnpmError",
+ {
+  command: NonEmptyString,
+  dependency: Schema.optional(Schema.String),
+  exitCode: Schema.Number.pipe(Schema.int()),
+  stderr: Schema.String,
+ },
+) {}
 
-/**
- * pnpm command errors
- */
-export class PnpmError extends Data.TaggedError("PnpmError")<{
- readonly command: string;
- readonly dependency?: string;
- readonly exitCode: number;
- readonly stderr: string;
-}> {}
+/** Changeset creation error. */
+export class ChangesetError extends Schema.TaggedError<ChangesetError>()(
+ "ChangesetError",
+ { reason: NonEmptyString, packages: Schema.optional(Schema.Array(Schema.String)) },
+) {}
 
-/**
- * Changeset creation errors
- */
-export class ChangesetError extends Data.TaggedError("ChangesetError")<{
- readonly reason: string;
- readonly packages?: ReadonlyArray<string>;
-}> {}
+/** File system operation error. */
+export class FileSystemError extends Schema.TaggedError<FileSystemError>()(
+ "FileSystemError",
+ {
+  operation: Schema.Literal("read", "write", "delete", "exists"),
+  path: NonEmptyString,
+  reason: NonEmptyString,
+ },
+) {}
 
-/**
- * File system errors
- */
-export class FileSystemError extends Data.TaggedError("FileSystemError")<{
- readonly operation: "read" | "write" | "delete" | "exists";
- readonly path: string;
- readonly reason: string;
-}> {}
+/** Lockfile parsing/comparison error. */
+export class LockfileError extends Schema.TaggedError<LockfileError>()(
+ "LockfileError",
+ {
+  operation: Schema.Literal("read", "parse", "compare"),
+  reason: NonEmptyString,
+ },
+) {}
 
-/**
- * Aggregate error for collecting multiple failures
- */
-export class DependencyUpdateFailures extends Data.TaggedError("DependencyUpdateFailures")<{
- readonly failures: ReadonlyArray<{
-  readonly dependency: string;
-  readonly error: PnpmError;
- }>;
- readonly successful: ReadonlyArray<DependencyUpdateResult>;
-}> {}
+/** Aggregate error for collecting multiple dependency update failures. */
+export class DependencyUpdateFailures extends Schema.TaggedError<DependencyUpdateFailures>()(
+ "DependencyUpdateFailures",
+ {
+  failures: Schema.Array(Schema.Struct({
+   dependency: NonEmptyString,
+   error: Schema.Struct({ command: Schema.String, dependency: Schema.optional(Schema.String), exitCode: Schema.Number, stderr: Schema.String }),
+  })),
+  successful: Schema.Array(DependencyUpdateResult),
+ },
+) {}
+
+/** Union type of all expected errors. */
+export type ActionError =
+ | InvalidInputError
+ | GitHubApiError
+ | GitError
+ | PnpmError
+ | ChangesetError
+ | FileSystemError
+ | LockfileError
+ | DependencyUpdateFailures;
 ```

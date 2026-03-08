@@ -6,21 +6,19 @@
 
 ```text
 src/
-├── main.ts              # Main orchestration logic (uses Action.run)
-├── pre.ts               # GitHub App token generation (uses Action.run)
-├── post.ts              # Cleanup and token revocation (uses Action.run)
+├── main.ts              # Single-phase entry point (uses Action.run + GitHubApp.withToken)
 ├── lib/
-│   ├── inputs.ts        # Action input parsing (via ActionInputs service)
+│   ├── __test__/
+│   │   └── fixtures.ts  # Shared test fixtures
+│   ├── errors/
+│   │   └── types.ts     # Re-exports schema error types
 │   ├── schemas/
-│   │   ├── index.ts     # Effect Schema definitions (ActionInputs schema)
-│   │   └── errors.ts    # Typed error definitions (Data.TaggedError)
-│   ├── services/
-│   │   └── index.ts     # Effect services (GitHubClient, GitExecutor, PnpmExecutor)
+│   │   ├── index.ts     # Effect Schema definitions (domain types)
+│   │   └── errors.ts    # Typed error definitions (Schema.TaggedError)
 │   ├── github/
-│   │   ├── auth.ts      # GitHub App authentication
 │   │   └── branch.ts    # Branch management + commit via GitHub API
 │   ├── pnpm/
-│   │   ├── config.ts    # Config dependency updates
+│   │   ├── config.ts    # Config dependency updates (direct YAML editing)
 │   │   ├── regular.ts   # Regular dependency updates (npm query + package.json)
 │   │   ├── format.ts    # pnpm-workspace.yaml formatting
 │   │   └── upgrade.ts   # pnpm self-upgrade via corepack
@@ -29,176 +27,169 @@ src/
 │   └── lockfile/
 │       └── compare.ts   # Lockfile state capture and comparison
 └── types/
-    └── index.ts         # Shared type definitions
+    └── index.ts         # Re-exports from schemas (BranchResult, DependencyUpdateResult, etc.)
 ```
 
-**Key architectural note:** All GitHub Action plumbing (inputs, outputs, state,
-logging) is provided by `@savvy-web/github-action-effects` services. The
-`@actions/core` package is no longer imported directly by any source file.
-Each entry point uses `Action.run(program, ActionStateLive)` which provides
-`NodeContext.layer` and the `ActionLogger` layer automatically.
+**Key architectural notes:**
+
+- **Single-phase design:** There is only one entry point (`main.ts`). The pre/post
+  phases (`pre.ts`, `post.ts`) and auth module (`github/auth.ts`) have been deleted.
+  Token lifecycle is handled by `GitHubApp.withToken()` from the library.
+- **No custom services:** The `src/lib/services/index.ts` module has been deleted.
+  All services come from `@savvy-web/github-action-effects` (v0.4.0): `CommandRunner`,
+  `GitBranch`, `GitCommit`, `CheckRun`, `GitHubClient`, `AutoMerge`.
+- **No custom input parsing:** The `src/lib/inputs.ts` module has been deleted.
+  Input parsing uses `Action.parseInputs()` declaratively in `main.ts`.
+- **All GitHub Action plumbing** (inputs, outputs, logging) is provided by
+  `@savvy-web/github-action-effects`. The `@actions/core` package is not imported
+  directly. The only direct `@actions/github` import is for `context.sha`.
 
 ## Data Flow
 
 ```mermaid
 graph TD
-    A[pre.ts: Generate Token] --> B[main.ts: Start]
-    B --> C[Parse Inputs]
-    C --> D[Create Check Run]
-    D --> E[Branch Management]
-    E --> F{Branch Exists?}
-    F -->|No| G[Create from main]
-    F -->|Yes| H[Rebase on main]
-    G --> I[Capture Lockfile Before]
-    H --> I
-    I --> I2{update-pnpm?}
-    I2 -->|Yes| I3[Upgrade pnpm via corepack]
-    I2 -->|No| J
-    I3 --> J[Update Config Dependencies]
-    J --> L[Update Regular Dependencies]
-    L --> K[Clean Install]
-    K --> M[Format pnpm-workspace.yaml]
-    M --> N{Custom Commands?}
-    N -->|Yes| O[Run Commands]
-    N -->|No| P[Capture Lockfile After]
-    O --> Q{Commands Succeed?}
-    Q -->|No| R[Update Check Run: Failure]
-    Q -->|Yes| P
-    P --> S{Changes Detected?}
-    S -->|No| T[Exit Early]
-    S -->|Yes| U{changesets input AND\n.changeset/ dir?}
-    U -->|Yes| V[Create Changesets]
-    U -->|No| W[Commit via GitHub API]
-    V --> W
-    W --> X[Push Branch]
+    A[main.ts: Start] --> B[Parse Inputs via Action.parseInputs]
+    B --> C[GitHubApp.withToken: Generate Token]
+    C --> D[Build App Layer]
+    D --> E[CheckRun.withCheckRun]
+    E --> F[Branch Management]
+    F --> G{Branch Exists?}
+    G -->|No| H[Create from main]
+    G -->|Yes| I[Delete + Recreate from main]
+    H --> J[Capture Lockfile Before]
+    I --> J
+    J --> J2{update-pnpm?}
+    J2 -->|Yes| J3[Upgrade pnpm via corepack]
+    J2 -->|No| K
+    J3 --> K[Update Config Dependencies]
+    K --> L[Update Regular Dependencies]
+    L --> M[Clean Install]
+    M --> N[Format pnpm-workspace.yaml]
+    N --> O{Custom Commands?}
+    O -->|Yes| P[Run Commands]
+    O -->|No| Q[Capture Lockfile After]
+    P --> R{Commands Succeed?}
+    R -->|No| S[Update Check Run: Failure]
+    R -->|Yes| Q
+    Q --> T{Changes Detected?}
+    T -->|No| U[Exit Early]
+    T -->|Yes| V{changesets input AND\n.changeset/ dir?}
+    V -->|Yes| W[Create Changesets]
+    V -->|No| X[Commit via GitHub API]
+    W --> X
     X --> Y[Create/Update PR]
     Y --> Y2{Auto-merge enabled?}
     Y2 -->|Yes| Y3[Enable Auto-merge]
     Y2 -->|No| Z
     Y3 --> Z[Update Check Run]
     Z --> AA[Write Summary]
-    AA --> AB[post.ts: Cleanup]
-    R --> AB
-    T --> AB
+    AA --> AB[Token Revoked Automatically]
+    S --> AB
+    U --> AB
 ```
 
-## Phase Execution Model
+## Execution Model
 
-The action executes in **14 distinct steps** (implemented in `src/main.ts`):
+The action executes as a **single phase** with **16 steps** (implemented in `src/main.ts`):
 
-### Step 1: Setup
+### Step 1: Parse Inputs
 
-- Parse and validate inputs (including optional `run` commands, `update-pnpm` flag, and `changesets` flag)
-- Retrieve GitHub App token from state (generated by `pre.ts`)
-- Create check run for status visibility
+- Declarative input parsing via `Action.parseInputs()` with Effect Schema
+- Cross-validates that at least one update type is active
+- Inputs: `app-id`, `app-private-key`, `branch`, `config-dependencies`, `dependencies`,
+  `run`, `update-pnpm`, `changesets`, `auto-merge`, `dry-run`
 
-### Step 2: Branch Management
+### Step 2: Generate Token
 
-- Check if update branch exists
-- Create new branch from main OR rebase existing branch onto main
-- Switch to update branch
+- `GitHubApp.withToken()` handles the full token lifecycle
+- Generates GitHub App installation token from app-id and private key
+- Token is automatically revoked when the callback completes (or on failure)
 
-### Step 3: Capture Lockfile State (Before)
+### Step 3: Build App Layer
+
+- Constructs all dependent service layers from the token:
+  `GitHubClientLive`, `GitBranchLive`, `GitCommitLive`, `CheckRunLive`,
+  `GitHubGraphQLLive`, `CommandRunnerLive`, `DryRunLive`
+
+### Step 4: Create Check Run
+
+- `CheckRun.withCheckRun()` creates a check run for status visibility
+- Automatically finalized (success/failure) via resource management
+
+### Step 5: Branch Management
+
+- Check if update branch exists via `GitBranch` service
+- If not: create new branch from default branch
+- If exists: delete and recreate from default branch (fresh start)
+- Fetch and checkout the branch via `CommandRunner`
+
+### Step 6: Capture Lockfile State (Before)
 
 - Read current `pnpm-lock.yaml` using `@pnpm/lockfile.fs`
 - Store snapshot for later comparison
-- Log package and importer counts
 
-### Step 4: Upgrade pnpm (conditional)
+### Step 7: Upgrade pnpm (conditional)
 
-- Conditional on `inputs.updatePnpm` (default: `true`)
-- Read root `package.json` to extract `packageManager` and `devEngines.packageManager` fields
-- Parse pnpm version strings (handles `pnpm@10.28.2`, `pnpm@^10.28.2+sha512...`, `^10.28.2`)
-- Query available pnpm versions via `npm view pnpm versions --json`
-- Filter to stable releases only (no pre-release)
-- Resolve latest version within `^` semver range using `semver.maxSatisfying`
-- Take the highest resolved version across both fields
-- If already up-to-date, skip (return null)
-- Run `corepack use pnpm@<version>` to update the `packageManager` field
-- Re-read `package.json`, detect indentation, update `devEngines.packageManager.version`
-- Report result as a config dependency update (`dependency: "pnpm"`, `type: "config"`)
+- Conditional on `inputs["update-pnpm"]` (default: `true`)
+- Parse pnpm version from `packageManager` and `devEngines.packageManager` fields
+- Query available pnpm versions via `npm view pnpm versions --json` (uses `CommandRunner`)
+- Resolve latest version within `^` semver range
+- Run `corepack use pnpm@<version>` via `CommandRunner`
+- Update `devEngines.packageManager.version` if present
 
-### Step 5: Update Config Dependencies
+### Step 8: Update Config Dependencies
 
-- Update config dependencies one by one via `pnpm add --config`
+- Query npm directly for latest versions and integrity hashes via `CommandRunner`
+- Edit `pnpm-workspace.yaml` in place (avoids `pnpm add --config` catalog promotion)
 - Track version changes (from/to)
-- Accumulate errors without failing entirely
 
-### Step 6: Update Regular Dependencies
+### Step 9: Update Regular Dependencies
 
-- Query npm registry directly for latest versions (avoids `pnpm up --latest` which
-  promotes deps to catalogs when `catalogMode: strict` is enabled)
-- Find all workspace `package.json` files via `workspace-tools` `getPackageInfosAsync()`
-- Match dependency names against glob patterns like `effect`, `@effect/*`, `@savvy-web/*`
-- Skip `catalog:` and `workspace:` specifiers (leave catalog-managed deps untouched)
-- Query `npm view <pkg> dist-tags.latest --json` for each unique matching dependency
-- Compare current version with latest; if newer, construct new specifier preserving
-  prefix (`^`, `~`, or exact) and update `package.json` files directly
-- Preserve `package.json` indentation (tabs/spaces) via `detectIndent`
-- Returns `DependencyUpdateResult[]` directly (no lockfile inference needed)
+- Query npm registry directly for latest versions via `CommandRunner`
+- Find all workspace `package.json` files via `workspace-tools`
+- Match dependency names against glob patterns
+- Skip `catalog:` and `workspace:` specifiers
+- Update `package.json` files directly, preserving indentation
 
-### Step 7: Clean Install
+### Step 10: Clean Install
 
-- Triggered when config updates, regular dependency updates, or pnpm upgrade produced changes
-- Remove `node_modules` and `pnpm-lock.yaml` for a fresh lockfile
+- Triggered when any updates produced changes
+- Remove `node_modules` and `pnpm-lock.yaml` via `CommandRunner`
 - Execute `pnpm install` to regenerate lockfile from scratch
-- Ensures a fully coherent lockfile after all dependency updates
 
-### Step 8: Format pnpm-workspace.yaml
+### Step 11: Format pnpm-workspace.yaml
 
-- Format workspace YAML to match `@savvy-web/lint-staged` PnpmWorkspace handler
-- Sort arrays alphabetically (packages, onlyBuiltDependencies, publicHoistPattern)
-- Sort `configDependencies` object keys alphabetically
-- Sort top-level keys alphabetically (packages first)
-- Use consistent YAML stringify options (indent: 2, lineWidth: 0, singleQuote: false)
+- Sort arrays alphabetically, sort `configDependencies` keys, sort top-level keys
+- Consistent YAML stringify options (indent: 2, lineWidth: 0, singleQuote: false)
 
-### Step 9: Run Custom Commands (if specified)
+### Step 12: Run Custom Commands (if specified)
 
-- Execute commands from `run` input sequentially
+- Execute commands from `run` input sequentially via `CommandRunner`
 - All commands run even if some fail (errors collected)
 - If ANY command fails, update check run with failure and exit early
-- No PR created if commands fail
-- Examples: `pnpm lint:fix`, `pnpm test`, `pnpm build`
 
-### Step 10: Capture Lockfile State (After)
+### Step 13: Capture Lockfile State (After)
 
 - Read updated `pnpm-lock.yaml`
 - Store snapshot for comparison
 
-### Step 11: Detect Changes
+### Step 14: Detect Changes
 
-- Compare lockfile snapshots (before vs after) for catalog and specifier changes
-- Regular dependency updates come directly from step 6 (not inferred from lockfile diff)
-- Combine pnpm upgrade result, config updates, and regular updates into `allUpdates`
-- Check git status for modified files
+- Compare lockfile snapshots (before vs after)
+- Combine pnpm upgrade, config updates, and regular updates into `allUpdates`
+- Check git status for modified files via `CommandRunner`
 - Exit early if no changes detected
 
-### Step 12: Create Changesets (conditional)
+### Step 15: Create Changesets (conditional)
 
-- **Skipped entirely** if the `changesets` input is `false` (default: `true`)
-- When enabled, detect if `.changeset/` directory exists (skip if not present)
-- Group changes by affected package
+- Skipped if `changesets` input is `false` (default: `true`)
+- Detect if `.changeset/` directory exists
 - Create patch changeset for each affected package
-- Create empty changeset for root workspace if only config deps changed
-- Config dependencies passed to changeset creation
 
-### Step 13: Commit and Push
+### Step 16: Commit, Push, and Create PR
 
-- **Commit via GitHub API** (not `git commit`)
-- Create tree with modified files
-- Create commit with sign-off (NO author specified for verification)
-- Update branch ref to new commit SHA
-- Push to update branch (force-push if rebased)
-
-### Step 14: Create/Update PR
-
-- Check if PR already exists for branch
-- Create new PR or update existing PR body
-- Generate detailed summary with dependency tables (pnpm upgrade appears in Config Dependencies table)
-- If `inputs.autoMerge` is set to a merge method ("merge", "squash", or "rebase"), enable auto-merge via GitHub GraphQL API
-  - Uses `enablePullRequestAutoMerge` mutation with the PR's node ID
-  - Requires repository "Allow auto-merge" setting enabled
-  - Requires branch protection with required status checks on target branch
-  - If enabling auto-merge fails, log warning but do not fail the action
-- Update check run with success/failure
-- Write GitHub Actions summary
+- Commit via GitHub API (verified/signed commits via `GitCommit` service)
+- Create/update PR with detailed summary via `GitHubClient`
+- Enable auto-merge if configured (via `AutoMerge.enable()`)
+- Update check run with success
+- Write GitHub Actions summary via `ActionOutputs`

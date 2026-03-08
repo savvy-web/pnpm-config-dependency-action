@@ -7,6 +7,7 @@
 ```json
 {
  "dependencies": {
+  "@actions/cache": "^4.1.0",
   "@actions/core": "^3.0.0",
   "@actions/exec": "^3.0.0",
   "@actions/github": "^9.0.0",
@@ -21,7 +22,7 @@
   "@pnpm/lockfile.fs": "^1001.1.29",
   "@pnpm/lockfile.types": "^1002.0.9",
   "@pnpm/workspace.read-manifest": "^1000.2.10",
-  "@savvy-web/github-action-effects": "^0.3.0",
+  "@savvy-web/github-action-effects": "^0.4.0",
   "effect": "^3.19.16",
   "semver": "^7.7.4",
   "workspace-tools": "^0.41.0",
@@ -32,17 +33,22 @@
 
 ## Key Packages
 
-- `@savvy-web/github-action-effects` - Effect-based services for GitHub Actions plumbing
-  (inputs, outputs, state, logging). Replaces direct `@actions/core` usage for all
-  action I/O. Provides `ActionInputs`, `ActionOutputs`, `ActionState`, `ActionLogger`
-  services plus `Action.run()` entry point and test layers.
+- `@savvy-web/github-action-effects` (v0.4.0) - Effect-based services for GitHub Actions.
+  Provides two tiers of services:
+  - **Action plumbing:** `ActionOutputs`, `Action.run()`, `Action.parseInputs()`,
+    `GitHubApp.withToken()`, `CheckRun.withCheckRun()`, `AutoMerge.enable()`
+  - **Domain services:** `CommandRunner`, `GitBranch`, `GitCommit`, `GitHubClient`,
+    `GitHubGraphQL`, `DryRun`
+  - **Live layers:** `GitHubAppLive`, `GitHubClientLive`, `GitBranchLive`, `GitCommitLive`,
+    `CheckRunLive`, `CommandRunnerLive`, `DryRunLive`, `GitHubGraphQLLive`
 - `@actions/core` - Transitive dependency (used internally by `@savvy-web/github-action-effects`).
   **No longer imported directly** by any source file.
-- `@actions/github` - GitHub context (`context.repo`, `context.sha`). Used only in
-  `src/lib/services/index.ts` and `src/lib/github/auth.ts` for repository context.
+- `@actions/github` - GitHub context (`context.sha`). Used only in `src/main.ts` for
+  the head SHA when creating check runs.
 - `@effect/platform` / `@effect/platform-node` - Effect platform layer for `Command`
   (shell execution). `NodeContext.layer` is provided automatically by `Action.run()`.
-- `@octokit/auth-app` - GitHub App JWT and installation token generation
+- `@octokit/auth-app` - GitHub App JWT and installation token generation (used internally
+  by `GitHubApp.withToken()`)
 - `effect` - Typed error handling, retry logic, resource management
 - `yaml` - Parse and stringify `pnpm-workspace.yaml` with consistent formatting
 - `semver` - Semantic version parsing, comparison, and range resolution for pnpm self-upgrade
