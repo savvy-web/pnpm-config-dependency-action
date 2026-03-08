@@ -10,11 +10,11 @@
  */
 
 import { existsSync, writeFileSync } from "node:fs";
+import { CommandRunner } from "@savvy-web/github-action-effects";
 import { Effect } from "effect";
 import { stringify } from "yaml";
 import type { DependencyUpdateResult } from "../../types/index.js";
 import { FileSystemError } from "../errors/types.js";
-import { PnpmExecutor } from "../services/index.js";
 import { STRINGIFY_OPTIONS, readWorkspaceYaml, sortContent } from "./format.js";
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -60,18 +60,18 @@ export const parseConfigEntry = (entry: string): { version: string; hash: string
  */
 const queryConfigVersion = (
 	packageName: string,
-): Effect.Effect<{ version: string; integrity: string } | null, never, PnpmExecutor> =>
+): Effect.Effect<{ version: string; integrity: string } | null, never, CommandRunner> =>
 	Effect.gen(function* () {
-		const pnpm = yield* PnpmExecutor;
+		const runner = yield* CommandRunner;
 
-		const output = yield* pnpm
-			.run(`npm view ${packageName}@latest version dist.integrity --json`)
+		const result = yield* runner
+			.execCapture("sh", ["-c", `npm view ${packageName}@latest version dist.integrity --json`])
 			.pipe(Effect.catchAll(() => Effect.succeed(null)));
 
-		if (output === null) return null;
+		if (result === null) return null;
 
 		try {
-			const parsed = JSON.parse(output);
+			const parsed = JSON.parse(result.stdout);
 			if (
 				parsed &&
 				typeof parsed === "object" &&
@@ -103,7 +103,7 @@ const queryConfigVersion = (
 export const updateConfigDeps = (
 	deps: ReadonlyArray<string>,
 	workspaceRoot: string = process.cwd(),
-): Effect.Effect<ReadonlyArray<DependencyUpdateResult>, never, PnpmExecutor> =>
+): Effect.Effect<ReadonlyArray<DependencyUpdateResult>, never, CommandRunner> =>
 	Effect.gen(function* () {
 		if (deps.length === 0) return [];
 

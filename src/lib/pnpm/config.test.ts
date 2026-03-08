@@ -1,27 +1,45 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { CommandRunner as CommandRunnerService } from "@savvy-web/github-action-effects";
+import { CommandRunner } from "@savvy-web/github-action-effects";
 import { Effect, Layer, LogLevel, Logger } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
-import type { PnpmExecutorService } from "../services/index.js";
-import { PnpmExecutor } from "../services/index.js";
 import { parseConfigEntry, updateConfigDeps } from "./config.js";
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Test Helpers
 // ══════════════════════════════════════════════════════════════════════════════
 
-const runWithPnpm = <A, E>(effect: Effect.Effect<A, E, PnpmExecutor>, overrides: Partial<PnpmExecutorService> = {}) => {
-	const service: PnpmExecutorService = {
-		addConfig: (_dep) => Effect.succeed("ok"),
-		update: (_pattern) => Effect.succeed("ok"),
-		install: () => Effect.void,
-		run: (_cmd) => Effect.succeed("ok"),
-		...overrides,
-	};
-	const layer = Layer.succeed(PnpmExecutor, service);
+const makeExecCapture =
+	(handler: (command: string, args?: ReadonlyArray<string>) => string) =>
+	(command: string, args?: ReadonlyArray<string>) =>
+		Effect.succeed({ exitCode: 0, stdout: handler(command, args), stderr: "" });
+
+const defaultExecCapture = makeExecCapture(() => "ok");
+
+const makeRunner = (
+	execCaptureOverride?: (
+		command: string,
+		args?: ReadonlyArray<string>,
+	) => Effect.Effect<{ exitCode: number; stdout: string; stderr: string }, never>,
+): CommandRunnerService => ({
+	exec: (_cmd, _args) => Effect.succeed(0),
+	execCapture: execCaptureOverride ?? defaultExecCapture,
+	execJson: (_cmd, _args, _schema) => Effect.die("not implemented"),
+	execLines: (_cmd, _args) => Effect.succeed([]),
+});
+
+const runWithRunner = <A, E>(
+	effect: Effect.Effect<A, E, CommandRunner>,
+	execCaptureOverride?: (
+		command: string,
+		args?: ReadonlyArray<string>,
+	) => Effect.Effect<{ exitCode: number; stdout: string; stderr: string }, never>,
+) => {
+	const layer = Layer.succeed(CommandRunner, makeRunner(execCaptureOverride));
 	return Effect.runPromise(effect.pipe(Effect.provide(layer), Logger.withMinimumLogLevel(LogLevel.None)));
 };
 
@@ -81,40 +99,42 @@ describe("updateConfigDeps", () => {
 		JSON.stringify({ version, "dist.integrity": integrity });
 
 	it("returns empty array when no deps provided", async () => {
-		const result = await runWithPnpm(updateConfigDeps([]));
+		const result = await runWithRunner(updateConfigDeps([]));
 		expect(result).toEqual([]);
 	});
 
 	it("returns empty array when no workspace yaml exists", async () => {
-		const result = await runWithPnpm(updateConfigDeps(["typescript"], tempDir));
+		const result = await runWithRunner(updateConfigDeps(["typescript"], tempDir));
 		expect(result).toEqual([]);
 	});
 
 	it("returns empty array when no configDependencies section", async () => {
 		writeWorkspaceYaml(`packages:\n  - "pkgs/*"\n`);
 
-		const result = await runWithPnpm(updateConfigDeps(["typescript"], tempDir));
+		const result = await runWithRunner(updateConfigDeps(["typescript"], tempDir));
 		expect(result).toEqual([]);
 	});
 
 	it("skips dep not in configDependencies", async () => {
 		writeWorkspaceYaml(`configDependencies:\n  typescript: "5.3.3"\n`);
 
-		const result = await runWithPnpm(updateConfigDeps(["nonexistent"], tempDir));
+		const result = await runWithRunner(updateConfigDeps(["nonexistent"], tempDir));
 		expect(result).toEqual([]);
 	});
 
 	it("updates single dep when newer version available", async () => {
 		writeWorkspaceYaml(`configDependencies:\n  "@savvy-web/silk": "0.6.3+sha512-oldHash=="\n`);
 
-		const result = await runWithPnpm(updateConfigDeps(["@savvy-web/silk"], tempDir), {
-			run: (cmd) => {
-				if (cmd.includes("npm view @savvy-web/silk")) {
-					return Effect.succeed(makeNpmViewResponse("0.7.0", "sha512-newHash=="));
+		const result = await runWithRunner(
+			updateConfigDeps(["@savvy-web/silk"], tempDir),
+			makeExecCapture((_cmd, args) => {
+				const argStr = args?.join(" ") ?? "";
+				if (argStr.includes("npm view @savvy-web/silk")) {
+					return makeNpmViewResponse("0.7.0", "sha512-newHash==");
 				}
-				return Effect.succeed("ok");
-			},
-		});
+				return "ok";
+			}),
+		);
 
 		expect(result).toHaveLength(1);
 		expect(result[0]).toMatchObject({
@@ -133,14 +153,16 @@ describe("updateConfigDeps", () => {
 	it("skips dep when already on latest version", async () => {
 		writeWorkspaceYaml(`configDependencies:\n  typescript: "5.4.0+sha512-existingHash=="\n`);
 
-		const result = await runWithPnpm(updateConfigDeps(["typescript"], tempDir), {
-			run: (cmd) => {
-				if (cmd.includes("npm view typescript")) {
-					return Effect.succeed(makeNpmViewResponse("5.4.0", "sha512-existingHash=="));
+		const result = await runWithRunner(
+			updateConfigDeps(["typescript"], tempDir),
+			makeExecCapture((_cmd, args) => {
+				const argStr = args?.join(" ") ?? "";
+				if (argStr.includes("npm view typescript")) {
+					return makeNpmViewResponse("5.4.0", "sha512-existingHash==");
 				}
-				return Effect.succeed("ok");
-			},
-		});
+				return "ok";
+			}),
+		);
 
 		expect(result).toHaveLength(0);
 	});
@@ -148,17 +170,19 @@ describe("updateConfigDeps", () => {
 	it("updates multiple deps", async () => {
 		writeWorkspaceYaml(`configDependencies:\n  typescript: "5.3.3"\n  "@biomejs/biome": "1.5.0+sha512-oldHash=="\n`);
 
-		const result = await runWithPnpm(updateConfigDeps(["typescript", "@biomejs/biome"], tempDir), {
-			run: (cmd) => {
-				if (cmd.includes("npm view typescript")) {
-					return Effect.succeed(makeNpmViewResponse("5.4.0", "sha512-tsHash=="));
+		const result = await runWithRunner(
+			updateConfigDeps(["typescript", "@biomejs/biome"], tempDir),
+			makeExecCapture((_cmd, args) => {
+				const argStr = args?.join(" ") ?? "";
+				if (argStr.includes("npm view typescript")) {
+					return makeNpmViewResponse("5.4.0", "sha512-tsHash==");
 				}
-				if (cmd.includes("npm view @biomejs/biome")) {
-					return Effect.succeed(makeNpmViewResponse("1.6.1", "sha512-biomeHash=="));
+				if (argStr.includes("npm view @biomejs/biome")) {
+					return makeNpmViewResponse("1.6.1", "sha512-biomeHash==");
 				}
-				return Effect.succeed("ok");
-			},
-		});
+				return "ok";
+			}),
+		);
 
 		expect(result).toHaveLength(2);
 		expect(result.find((r) => r.dependency === "typescript")?.to).toBe("5.4.0");
@@ -168,16 +192,15 @@ describe("updateConfigDeps", () => {
 	it("continues when npm query fails for one dep", async () => {
 		writeWorkspaceYaml(`configDependencies:\n  "bad-pkg": "1.0.0"\n  "good-pkg": "1.0.0"\n`);
 
-		const result = await runWithPnpm(updateConfigDeps(["bad-pkg", "good-pkg"], tempDir), {
-			run: (cmd) => {
-				if (cmd.includes("npm view bad-pkg")) {
-					return Effect.fail({ command: "npm view", stderr: "not found", exitCode: 1 });
-				}
-				if (cmd.includes("npm view good-pkg")) {
-					return Effect.succeed(makeNpmViewResponse("2.0.0", "sha512-goodHash=="));
-				}
-				return Effect.succeed("ok");
-			},
+		const result = await runWithRunner(updateConfigDeps(["bad-pkg", "good-pkg"], tempDir), (_cmd, args) => {
+			const argStr = args?.join(" ") ?? "";
+			if (argStr.includes("npm view bad-pkg")) {
+				return Effect.fail({ command: "npm view", stderr: "not found", exitCode: 1 });
+			}
+			if (argStr.includes("npm view good-pkg")) {
+				return Effect.succeed({ exitCode: 0, stdout: makeNpmViewResponse("2.0.0", "sha512-goodHash=="), stderr: "" });
+			}
+			return Effect.succeed({ exitCode: 0, stdout: "ok", stderr: "" });
 		});
 
 		expect(result).toHaveLength(1);
@@ -198,14 +221,16 @@ describe("updateConfigDeps", () => {
 			].join("\n"),
 		);
 
-		await runWithPnpm(updateConfigDeps(["typescript"], tempDir), {
-			run: (cmd) => {
-				if (cmd.includes("npm view typescript")) {
-					return Effect.succeed(makeNpmViewResponse("5.4.0", "sha512-tsHash=="));
+		await runWithRunner(
+			updateConfigDeps(["typescript"], tempDir),
+			makeExecCapture((_cmd, args) => {
+				const argStr = args?.join(" ") ?? "";
+				if (argStr.includes("npm view typescript")) {
+					return makeNpmViewResponse("5.4.0", "sha512-tsHash==");
 				}
-				return Effect.succeed("ok");
-			},
-		});
+				return "ok";
+			}),
+		);
 
 		const yaml = readWorkspaceYaml();
 		expect(yaml.packages).toBeDefined();
@@ -216,14 +241,16 @@ describe("updateConfigDeps", () => {
 	it("reports clean versions in from/to (strips hash)", async () => {
 		writeWorkspaceYaml(`configDependencies:\n  "@savvy-web/silk": "0.6.3+sha512-P2oTH3CRDxvEqVtavf5adiX2B4=="\n`);
 
-		const result = await runWithPnpm(updateConfigDeps(["@savvy-web/silk"], tempDir), {
-			run: (cmd) => {
-				if (cmd.includes("npm view @savvy-web/silk")) {
-					return Effect.succeed(makeNpmViewResponse("0.7.0", "sha512-newHashValue=="));
+		const result = await runWithRunner(
+			updateConfigDeps(["@savvy-web/silk"], tempDir),
+			makeExecCapture((_cmd, args) => {
+				const argStr = args?.join(" ") ?? "";
+				if (argStr.includes("npm view @savvy-web/silk")) {
+					return makeNpmViewResponse("0.7.0", "sha512-newHashValue==");
 				}
-				return Effect.succeed("ok");
-			},
-		});
+				return "ok";
+			}),
+		);
 
 		expect(result).toHaveLength(1);
 		// from should be clean version (no hash)
@@ -235,14 +262,16 @@ describe("updateConfigDeps", () => {
 	it("handles config dep without hash suffix", async () => {
 		writeWorkspaceYaml(`configDependencies:\n  typescript: "5.3.3"\n`);
 
-		const result = await runWithPnpm(updateConfigDeps(["typescript"], tempDir), {
-			run: (cmd) => {
-				if (cmd.includes("npm view typescript")) {
-					return Effect.succeed(makeNpmViewResponse("5.4.0", "sha512-tsHash=="));
+		const result = await runWithRunner(
+			updateConfigDeps(["typescript"], tempDir),
+			makeExecCapture((_cmd, args) => {
+				const argStr = args?.join(" ") ?? "";
+				if (argStr.includes("npm view typescript")) {
+					return makeNpmViewResponse("5.4.0", "sha512-tsHash==");
 				}
-				return Effect.succeed("ok");
-			},
-		});
+				return "ok";
+			}),
+		);
 
 		expect(result).toHaveLength(1);
 		expect(result[0].from).toBe("5.3.3");
