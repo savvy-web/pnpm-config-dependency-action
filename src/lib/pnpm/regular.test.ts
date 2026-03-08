@@ -1,11 +1,11 @@
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { CommandRunner as CommandRunnerService } from "@savvy-web/github-action-effects";
+import { CommandRunner } from "@savvy-web/github-action-effects";
 import { Effect, Layer, LogLevel, Logger } from "effect";
 import { describe, expect, it, vi } from "vitest";
 
-import type { PnpmExecutorService } from "../services/index.js";
-import { PnpmExecutor } from "../services/index.js";
 import { matchesPattern, parseSpecifier, updateRegularDeps } from "./regular.js";
 
 // Mock workspace-tools to return our test workspace info
@@ -31,15 +31,33 @@ const readPackageJson = (dir: string) => {
 	return JSON.parse(readFileSync(join(dir, "package.json"), "utf-8"));
 };
 
-const runWithPnpm = <A, E>(effect: Effect.Effect<A, E, PnpmExecutor>, overrides: Partial<PnpmExecutorService> = {}) => {
-	const service: PnpmExecutorService = {
-		addConfig: (_dep) => Effect.succeed("ok"),
-		update: (_pattern) => Effect.succeed("ok"),
-		install: () => Effect.void,
-		run: (_cmd) => Effect.succeed("ok"),
-		...overrides,
-	};
-	const layer = Layer.succeed(PnpmExecutor, service);
+const makeExecCapture =
+	(handler: (command: string, args?: ReadonlyArray<string>) => string) =>
+	(command: string, args?: ReadonlyArray<string>) =>
+		Effect.succeed({ exitCode: 0, stdout: handler(command, args), stderr: "" });
+
+const defaultExecCapture = makeExecCapture(() => "ok");
+
+const makeRunner = (
+	execCaptureOverride?: (
+		command: string,
+		args?: ReadonlyArray<string>,
+	) => Effect.Effect<{ exitCode: number; stdout: string; stderr: string }, never>,
+): CommandRunnerService => ({
+	exec: (_cmd, _args) => Effect.succeed(0),
+	execCapture: execCaptureOverride ?? defaultExecCapture,
+	execJson: (_cmd, _args, _schema) => Effect.die("not implemented"),
+	execLines: (_cmd, _args) => Effect.succeed([]),
+});
+
+const runWithRunner = <A, E>(
+	effect: Effect.Effect<A, E, CommandRunner>,
+	execCaptureOverride?: (
+		command: string,
+		args?: ReadonlyArray<string>,
+	) => Effect.Effect<{ exitCode: number; stdout: string; stderr: string }, never>,
+) => {
+	const layer = Layer.succeed(CommandRunner, makeRunner(execCaptureOverride));
 	return Effect.runPromise(effect.pipe(Effect.provide(layer), Logger.withMinimumLogLevel(LogLevel.None)));
 };
 
@@ -111,7 +129,7 @@ describe("parseSpecifier", () => {
 
 describe("updateRegularDeps", () => {
 	it("returns empty array when no patterns provided", async () => {
-		const result = await runWithPnpm(updateRegularDeps([]));
+		const result = await runWithRunner(updateRegularDeps([]));
 		expect(result).toEqual([]);
 	});
 
@@ -124,14 +142,14 @@ describe("updateRegularDeps", () => {
 
 		mockGetPackageInfosAsync.mockResolvedValue({});
 
-		const result = await runWithPnpm(updateRegularDeps(["effect"], dir), {
-			run: (cmd) => {
-				if (cmd.includes("npm view effect")) {
-					return Effect.succeed('"3.1.0"');
-				}
-				return Effect.succeed("ok");
-			},
-		});
+		const result = await runWithRunner(
+			updateRegularDeps(["effect"], dir),
+			makeExecCapture((_cmd, args) => {
+				const shellCmd = args?.[1] ?? "";
+				if (shellCmd.includes("npm view effect")) return '"3.1.0"';
+				return "ok";
+			}),
+		);
 
 		expect(result).toHaveLength(1);
 		expect(result[0]).toMatchObject({
@@ -155,14 +173,14 @@ describe("updateRegularDeps", () => {
 
 		mockGetPackageInfosAsync.mockResolvedValue({});
 
-		const result = await runWithPnpm(updateRegularDeps(["effect"], dir), {
-			run: (cmd) => {
-				if (cmd.includes("npm view effect")) {
-					return Effect.succeed('"3.1.0"');
-				}
-				return Effect.succeed("ok");
-			},
-		});
+		const result = await runWithRunner(
+			updateRegularDeps(["effect"], dir),
+			makeExecCapture((_cmd, args) => {
+				const shellCmd = args?.[1] ?? "";
+				if (shellCmd.includes("npm view effect")) return '"3.1.0"';
+				return "ok";
+			}),
+		);
 
 		expect(result).toHaveLength(0);
 	});
@@ -179,17 +197,15 @@ describe("updateRegularDeps", () => {
 
 		mockGetPackageInfosAsync.mockResolvedValue({});
 
-		const result = await runWithPnpm(updateRegularDeps(["@savvy-web/*"], dir), {
-			run: (cmd) => {
-				if (cmd.includes("npm view @savvy-web/core")) {
-					return Effect.succeed('"1.1.0"');
-				}
-				if (cmd.includes("npm view @savvy-web/utils")) {
-					return Effect.succeed('"1.2.0"');
-				}
-				return Effect.succeed("ok");
-			},
-		});
+		const result = await runWithRunner(
+			updateRegularDeps(["@savvy-web/*"], dir),
+			makeExecCapture((_cmd, args) => {
+				const shellCmd = args?.[1] ?? "";
+				if (shellCmd.includes("npm view @savvy-web/core")) return '"1.1.0"';
+				if (shellCmd.includes("npm view @savvy-web/utils")) return '"1.2.0"';
+				return "ok";
+			}),
+		);
 
 		expect(result).toHaveLength(2);
 		expect(result.find((r) => r.dependency === "@savvy-web/core")?.to).toBe("^1.1.0");
@@ -208,14 +224,14 @@ describe("updateRegularDeps", () => {
 
 		mockGetPackageInfosAsync.mockResolvedValue({});
 
-		const result = await runWithPnpm(updateRegularDeps(["effect", "@effect/*"], dir), {
-			run: (cmd) => {
-				if (cmd.includes("npm view @effect/schema")) {
-					return Effect.succeed('"0.61.0"');
-				}
-				return Effect.succeed("ok");
-			},
-		});
+		const result = await runWithRunner(
+			updateRegularDeps(["effect", "@effect/*"], dir),
+			makeExecCapture((_cmd, args) => {
+				const shellCmd = args?.[1] ?? "";
+				if (shellCmd.includes("npm view @effect/schema")) return '"0.61.0"';
+				return "ok";
+			}),
+		);
 
 		// Only @effect/schema should be updated, effect with catalog: should be skipped
 		expect(result).toHaveLength(1);
@@ -245,14 +261,14 @@ describe("updateRegularDeps", () => {
 			},
 		});
 
-		const result = await runWithPnpm(updateRegularDeps(["effect"], dir), {
-			run: (cmd) => {
-				if (cmd.includes("npm view effect")) {
-					return Effect.succeed('"3.1.0"');
-				}
-				return Effect.succeed("ok");
-			},
-		});
+		const result = await runWithRunner(
+			updateRegularDeps(["effect"], dir),
+			makeExecCapture((_cmd, args) => {
+				const shellCmd = args?.[1] ?? "";
+				if (shellCmd.includes("npm view effect")) return '"3.1.0"';
+				return "ok";
+			}),
+		);
 
 		// Should have updates for both root and workspace package
 		expect(result).toHaveLength(2);
@@ -277,16 +293,15 @@ describe("updateRegularDeps", () => {
 
 		mockGetPackageInfosAsync.mockResolvedValue({});
 
-		const result = await runWithPnpm(updateRegularDeps(["bad-pkg", "good-pkg"], dir), {
-			run: (cmd) => {
-				if (cmd.includes("npm view bad-pkg")) {
-					return Effect.fail({ command: "npm view", stderr: "not found", exitCode: 1 });
-				}
-				if (cmd.includes("npm view good-pkg")) {
-					return Effect.succeed('"2.0.0"');
-				}
-				return Effect.succeed("ok");
-			},
+		const result = await runWithRunner(updateRegularDeps(["bad-pkg", "good-pkg"], dir), (_cmd, args) => {
+			const shellCmd = args?.[1] ?? "";
+			if (shellCmd.includes("npm view bad-pkg")) {
+				return Effect.fail({ command: "npm view", stderr: "not found", exitCode: 1 }) as never;
+			}
+			if (shellCmd.includes("npm view good-pkg")) {
+				return Effect.succeed({ exitCode: 0, stdout: '"2.0.0"', stderr: "" });
+			}
+			return Effect.succeed({ exitCode: 0, stdout: "ok", stderr: "" });
 		});
 
 		// Should still update good-pkg even though bad-pkg query failed
@@ -303,14 +318,14 @@ describe("updateRegularDeps", () => {
 
 		mockGetPackageInfosAsync.mockResolvedValue({});
 
-		const result = await runWithPnpm(updateRegularDeps(["effect"], dir), {
-			run: (cmd) => {
-				if (cmd.includes("npm view effect")) {
-					return Effect.succeed('"3.1.0"');
-				}
-				return Effect.succeed("ok");
-			},
-		});
+		const result = await runWithRunner(
+			updateRegularDeps(["effect"], dir),
+			makeExecCapture((_cmd, args) => {
+				const shellCmd = args?.[1] ?? "";
+				if (shellCmd.includes("npm view effect")) return '"3.1.0"';
+				return "ok";
+			}),
+		);
 
 		expect(result).toHaveLength(1);
 		expect(result[0].to).toBe("~3.1.0");
@@ -329,14 +344,14 @@ describe("updateRegularDeps", () => {
 
 		mockGetPackageInfosAsync.mockResolvedValue({});
 
-		const result = await runWithPnpm(updateRegularDeps(["effect"], dir), {
-			run: (cmd) => {
-				if (cmd.includes("npm view effect")) {
-					return Effect.succeed('"3.1.0"');
-				}
-				return Effect.succeed("ok");
-			},
-		});
+		const result = await runWithRunner(
+			updateRegularDeps(["effect"], dir),
+			makeExecCapture((_cmd, args) => {
+				const shellCmd = args?.[1] ?? "";
+				if (shellCmd.includes("npm view effect")) return '"3.1.0"';
+				return "ok";
+			}),
+		);
 
 		// Should only have 1 result, not 2
 		expect(result).toHaveLength(1);
@@ -356,14 +371,14 @@ describe("updateRegularDeps", () => {
 
 		mockGetPackageInfosAsync.mockResolvedValue({});
 
-		const result = await runWithPnpm(updateRegularDeps(["effect"], dir), {
-			run: (cmd) => {
-				if (cmd.includes("npm view effect")) {
-					return Effect.succeed('"3.1.0"');
-				}
-				return Effect.succeed("ok");
-			},
-		});
+		const result = await runWithRunner(
+			updateRegularDeps(["effect"], dir),
+			makeExecCapture((_cmd, args) => {
+				const shellCmd = args?.[1] ?? "";
+				if (shellCmd.includes("npm view effect")) return '"3.1.0"';
+				return "ok";
+			}),
+		);
 
 		expect(result).toHaveLength(1);
 		expect(result[0].to).toBe("3.1.0");
