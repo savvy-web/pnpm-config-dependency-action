@@ -58,8 +58,30 @@ const queryConfigVersion = (
 	registry: NpmRegistryService,
 ): Effect.Effect<{ version: string; integrity: string } | null> =>
 	Effect.gen(function* () {
-		const info = yield* registry.getPackageInfo(packageName).pipe(Effect.catchAll(() => Effect.succeed(null)));
-		if (!info || !info.integrity) return null;
+		yield* Effect.logDebug(`queryConfigVersion: fetching package info for ${packageName}`);
+		const info = yield* registry.getPackageInfo(packageName).pipe(
+			Effect.catchAll((error) =>
+				Effect.gen(function* () {
+					yield* Effect.logWarning(
+						`queryConfigVersion: npm registry query failed for ${packageName}: ${JSON.stringify({ pkg: error.pkg, operation: error.operation, reason: error.reason })}`,
+					);
+					return null;
+				}),
+			),
+		);
+		if (!info) {
+			yield* Effect.logDebug(`queryConfigVersion: no package info returned for ${packageName}`);
+			return null;
+		}
+		if (!info.integrity) {
+			yield* Effect.logWarning(
+				`queryConfigVersion: package info missing integrity for ${packageName} (version: ${info.version})`,
+			);
+			return null;
+		}
+		yield* Effect.logDebug(
+			`queryConfigVersion: found ${packageName}@${info.version} (integrity: ${info.integrity.slice(0, 20)}...)`,
+		);
 		return { version: info.version, integrity: info.integrity };
 	});
 
@@ -104,6 +126,8 @@ const updateConfigDepsImpl = (
 		const results: DependencyUpdateResult[] = [];
 		let changed = false;
 
+		yield* Effect.logDebug(`configDependencies keys: ${JSON.stringify(Object.keys(content.configDependencies))}`);
+
 		for (const dep of deps) {
 			const currentEntry = content.configDependencies[dep];
 			if (currentEntry === undefined) {
@@ -112,11 +136,13 @@ const updateConfigDepsImpl = (
 			}
 
 			// Parse current entry to extract version
+			yield* Effect.logDebug(`Parsing config entry for ${dep}: ${String(currentEntry).slice(0, 80)}`);
 			const parsed = parseConfigEntry(String(currentEntry));
 			if (!parsed) {
 				yield* Effect.logWarning(`Could not parse config dependency entry for ${dep}: ${currentEntry}`);
 				continue;
 			}
+			yield* Effect.logDebug(`Parsed ${dep}: version=${parsed.version}, hasHash=${!!parsed.hash}`);
 
 			// Query npm for latest version + integrity
 			yield* Effect.logInfo(`Querying npm for latest version of ${dep}`);
