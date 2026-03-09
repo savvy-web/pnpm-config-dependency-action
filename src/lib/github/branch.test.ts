@@ -8,7 +8,7 @@ import {
 } from "@savvy-web/github-action-effects";
 import { Effect, Either, Layer, LogLevel, Logger } from "effect";
 import { describe, expect, it } from "vitest";
-import { commitChanges, manageBranch, pushBranch } from "./branch.js";
+import { commitChanges, manageBranch } from "./branch.js";
 
 /**
  * Create a GitBranch test layer with optional initial branches.
@@ -155,16 +155,6 @@ describe("manageBranch", () => {
 	});
 });
 
-describe("pushBranch", () => {
-	it("is a no-op (API commits update branch directly)", async () => {
-		const either = await Effect.runPromise(
-			Effect.either(pushBranch("pnpm/config")).pipe(Logger.withMinimumLogLevel(LogLevel.None)),
-		);
-
-		expect(Either.isRight(either)).toBe(true);
-	});
-});
-
 describe("commitChanges", () => {
 	it("returns early when there are no changes", async () => {
 		const commitState = GitCommitTest.empty();
@@ -174,15 +164,7 @@ describe("commitChanges", () => {
 			["git status --porcelain", { exitCode: 0, stdout: "", stderr: "" }],
 		]);
 
-		const branchState: GitBranchTestState = {
-			branches: new Map([["pnpm/config", "head-sha"]]),
-		};
-
-		const layer = Layer.mergeAll(
-			GitBranchTest.layer(branchState),
-			GitCommitTest.layer(commitState),
-			CommandRunnerTest.layer(responses),
-		);
+		const layer = Layer.mergeAll(GitCommitTest.layer(commitState), CommandRunnerTest.layer(responses));
 
 		const either = await Effect.runPromise(
 			Effect.either(commitChanges("test commit", "pnpm/config")).pipe(
@@ -213,15 +195,7 @@ describe("commitChanges", () => {
 			["git checkout -B pnpm/config origin/pnpm/config", { exitCode: 0, stdout: "", stderr: "" }],
 		]);
 
-		const branchState: GitBranchTestState = {
-			branches: new Map([["pnpm/config", "head-sha"]]),
-		};
-
-		const layer = Layer.mergeAll(
-			GitBranchTest.layer(branchState),
-			GitCommitTest.layer(commitState),
-			CommandRunnerTest.layer(responses),
-		);
+		const layer = Layer.mergeAll(GitCommitTest.layer(commitState), CommandRunnerTest.layer(responses));
 
 		const either = await Effect.runPromise(
 			Effect.either(commitChanges("chore: update deps", "pnpm/config")).pipe(
@@ -231,26 +205,27 @@ describe("commitChanges", () => {
 		);
 
 		expect(Either.isRight(either)).toBe(true);
-		// A tree and commit should have been created
+		// A tree and commit should have been created via commitFiles
 		expect(commitState.trees.length).toBeGreaterThanOrEqual(1);
 		expect(commitState.commits).toHaveLength(1);
 		expect(commitState.commits[0].message).toBe("chore: update deps");
-		expect(commitState.commits[0].parentShas).toEqual(["head-sha"]);
-		// Ref should have been updated
+		// commitFiles uses `parent-of-<branch>` as parent in test state
+		expect(commitState.commits[0].parentShas).toEqual(["parent-of-pnpm/config"]);
+		// Ref should have been updated (commitFiles records the branch name directly)
 		expect(commitState.refUpdates).toHaveLength(1);
-		expect(commitState.refUpdates[0].ref).toBe("heads/pnpm/config");
+		expect(commitState.refUpdates[0].ref).toBe("pnpm/config");
 	});
 
-	it("handles all file types (staged, unstaged, untracked)", async () => {
+	it("handles deleted files with sha: null", async () => {
 		const commitState = GitCommitTest.empty();
 
-		// Mix of staged, unstaged, and untracked files
+		// Deleted file in git status
 		const responses = new Map<string, CommandResponse>([
 			[
 				"git status --porcelain",
 				{
 					exitCode: 0,
-					stdout: "M  file1.ts\n M file2.ts\n?? file3.ts\n",
+					stdout: "D  deleted-file.ts\n",
 					stderr: "",
 				},
 			],
@@ -258,15 +233,7 @@ describe("commitChanges", () => {
 			["git checkout -B branch origin/branch", { exitCode: 0, stdout: "", stderr: "" }],
 		]);
 
-		const branchState: GitBranchTestState = {
-			branches: new Map([["branch", "head-sha"]]),
-		};
-
-		const layer = Layer.mergeAll(
-			GitBranchTest.layer(branchState),
-			GitCommitTest.layer(commitState),
-			CommandRunnerTest.layer(responses),
-		);
+		const layer = Layer.mergeAll(GitCommitTest.layer(commitState), CommandRunnerTest.layer(responses));
 
 		const either = await Effect.runPromise(
 			Effect.either(commitChanges("update", "branch")).pipe(
@@ -276,7 +243,38 @@ describe("commitChanges", () => {
 		);
 
 		expect(Either.isRight(either)).toBe(true);
-		// Should have created at least one tree
-		expect(commitState.trees.length).toBeGreaterThanOrEqual(1);
+		// Should have created a tree with the deletion entry
+		expect(commitState.trees).toHaveLength(1);
+		expect(commitState.trees[0].entries).toEqual([{ path: "deleted-file.ts", mode: "100644", sha: null }]);
+		expect(commitState.commits).toHaveLength(1);
+	});
+
+	it("skips unreadable files gracefully", async () => {
+		const commitState = GitCommitTest.empty();
+
+		// Files that don't exist on disk — readFileSync will throw
+		const responses = new Map<string, CommandResponse>([
+			[
+				"git status --porcelain",
+				{
+					exitCode: 0,
+					stdout: "M  nonexistent-file.ts\n",
+					stderr: "",
+				},
+			],
+		]);
+
+		const layer = Layer.mergeAll(GitCommitTest.layer(commitState), CommandRunnerTest.layer(responses));
+
+		const either = await Effect.runPromise(
+			Effect.either(commitChanges("update", "branch")).pipe(
+				Effect.provide(layer),
+				Logger.withMinimumLogLevel(LogLevel.None),
+			),
+		);
+
+		expect(Either.isRight(either)).toBe(true);
+		// No commit should be created since no files could be read
+		expect(commitState.commits).toHaveLength(0);
 	});
 });

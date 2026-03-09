@@ -8,9 +8,8 @@
  * @module github/branch
  */
 
-import { readFileSync, statSync } from "node:fs";
-import { relative } from "node:path";
-import type { CommandRunnerError, GitBranchError, GitCommitError } from "@savvy-web/github-action-effects";
+import { readFileSync } from "node:fs";
+import type { CommandRunnerError, FileChange, GitBranchError, GitCommitError } from "@savvy-web/github-action-effects";
 import { CommandRunner, GitBranch, GitCommit } from "@savvy-web/github-action-effects";
 import { Effect } from "effect";
 
@@ -91,32 +90,19 @@ export const manageBranch = (
 	});
 
 /**
- * Push changes to the remote branch using GitHub API.
- * This is a no-op since API commits update refs directly.
- */
-export const pushBranch = (branchName: string, _force: boolean = false): Effect.Effect<void, never, never> =>
-	Effect.gen(function* () {
-		// When using GitHub API commits, the branch is already updated
-		// This function is kept for API compatibility but is now a no-op
-		// since commitChanges updates the branch ref directly
-		yield* Effect.logInfo(`Branch ${branchName} already updated via API`);
-	});
-
-/**
  * Commit all changes via GitHub API for verified commits.
  *
- * Uses the library's GitCommit service which wraps the GitHub Git Data API.
- * Commits are automatically verified/signed by GitHub when using a GitHub App token.
+ * Uses the library's GitCommit.commitFiles convenience method which wraps the
+ * GitHub Git Data API (createTree + createCommit + updateRef) in a single call.
+ * Supports file deletions via `{ path, sha: null }`.
  *
- * NOTE: The library's GitCommit.createCommit does NOT pass an author parameter,
- * which allows GitHub to attribute and verify the commit when using a GitHub App token.
+ * Commits are automatically verified/signed by GitHub when using a GitHub App token.
  */
 export const commitChanges = (
 	message: string,
 	branchName: string,
-): Effect.Effect<void, GitBranchError | GitCommitError | CommandRunnerError, GitBranch | GitCommit | CommandRunner> =>
+): Effect.Effect<void, GitCommitError | CommandRunnerError, GitCommit | CommandRunner> =>
 	Effect.gen(function* () {
-		const branchService = yield* GitBranch;
 		const commit = yield* GitCommit;
 		const cmd = yield* CommandRunner;
 
@@ -131,70 +117,40 @@ export const commitChanges = (
 
 		yield* Effect.logInfo("Committing changes via GitHub API...");
 
-		// Parse changed files from porcelain output
-		const allChangedFiles: string[] = [];
-		for (const line of lines) {
-			const file = line.substring(3);
-			allChangedFiles.push(file);
-		}
-
-		yield* Effect.logDebug(`Changed files: ${allChangedFiles.join(", ")}`);
-
-		// Get the current branch HEAD
-		const headSha = yield* branchService.getSha(branchName);
-		yield* Effect.logDebug(`Current HEAD: ${headSha}`);
-
-		// Build tree entries for changed files
-		const treeEntries: Array<{
-			path: string;
-			mode: "100644" | "100755" | "040000";
-			content: string;
-		}> = [];
+		// Build FileChange entries from git status
+		const fileChanges: FileChange[] = [];
 		const cwd = process.cwd();
 
-		for (const file of allChangedFiles) {
-			const filePath = relative(cwd, file.startsWith("/") ? file : `${cwd}/${file}`);
+		for (const line of lines) {
+			const status = line.substring(0, 2).trim();
+			const filePath = line.substring(3);
 
-			// Check if file exists (not deleted)
-			try {
-				const stats = statSync(file.startsWith("/") ? file : `${cwd}/${file}`);
-				if (stats.isFile()) {
-					const content = readFileSync(file.startsWith("/") ? file : `${cwd}/${file}`, "utf-8");
-					const mode = stats.mode & 0o111 ? ("100755" as const) : ("100644" as const);
-					treeEntries.push({
-						path: filePath,
-						mode,
-						content,
-					});
+			if (status === "D") {
+				// Deleted file
+				fileChanges.push({ path: filePath, sha: null });
+				yield* Effect.logDebug(`Deleting file: ${filePath}`);
+			} else {
+				// Added or modified file — read content
+				const absolutePath = filePath.startsWith("/") ? filePath : `${cwd}/${filePath}`;
+				try {
+					const content = readFileSync(absolutePath, "utf-8");
+					fileChanges.push({ path: filePath, content });
+				} catch {
+					yield* Effect.logWarning(`Could not read file: ${filePath}, skipping`);
 				}
-			} catch {
-				// File was deleted - skip because the library's TreeEntry type
-				// doesn't support sha: null for deletions. The tree is created
-				// relative to the base tree, so deleted files persist from the parent.
-				// TODO: Patch @savvy-web/github-action-effects TreeEntry to support deletions (savvy-web/github-action-effects#11)
-				yield* Effect.logWarning(`Skipping deleted file (not supported by API commit path): ${filePath}`);
 			}
 		}
 
-		yield* Effect.logDebug(`Tree entries: ${treeEntries.length}`);
+		if (fileChanges.length === 0) {
+			yield* Effect.logInfo("No file changes to commit");
+			return;
+		}
 
-		// Get the base tree from the current commit
-		// We need to use GitHubClient.rest() for getCommit, but the library's
-		// GitCommit service provides createTree with an optional baseTree param.
-		// We'll get the parent tree by using the branch SHA.
+		yield* Effect.logDebug(`File changes: ${fileChanges.length}`);
 
-		// Create the new tree (with base tree from current HEAD)
-		// The library's createTree accepts a baseTree parameter
-		const newTreeSha = yield* commit.createTree(treeEntries, headSha);
-		yield* Effect.logDebug(`New tree: ${newTreeSha}`);
-
-		// Create the commit (NO author parameter for verified commits)
-		const commitSha = yield* commit.createCommit(message, newTreeSha, [headSha]);
+		// Commit all files in one API call
+		const commitSha = yield* commit.commitFiles(branchName, message, fileChanges);
 		yield* Effect.logInfo(`Created commit: ${commitSha}`);
-
-		// Update the branch ref to point to the new commit
-		yield* commit.updateRef(`heads/${branchName}`, commitSha, true);
-		yield* Effect.logInfo(`Updated branch ${branchName} to ${commitSha}`);
 
 		// Fetch the new commit locally so git status is clean
 		yield* cmd.exec("git", ["fetch", "origin"]);
