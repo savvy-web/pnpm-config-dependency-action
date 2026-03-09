@@ -27,7 +27,6 @@ import type { ActionInputError } from "@savvy-web/github-action-effects";
 import {
 	Action,
 	ActionOutputs,
-	AutoMerge,
 	CheckRun,
 	CheckRunLive,
 	CommandRunner,
@@ -37,10 +36,12 @@ import {
 	GitCommitLive,
 	GitHubApp,
 	GitHubAppLive,
-	GitHubClient,
 	GitHubClientLive,
 	GitHubGraphQLLive,
 	GithubMarkdown,
+	NpmRegistryLive,
+	PullRequestLive,
+	PullRequest as PullRequestService,
 } from "@savvy-web/github-action-effects";
 import { Duration, Effect, Layer, Schema } from "effect";
 
@@ -110,112 +111,49 @@ export const createOrUpdatePR = (
 	branch: string,
 	updates: ReadonlyArray<DependencyUpdateResult>,
 	changesets: ReadonlyArray<ChangesetFile>,
-): Effect.Effect<PullRequestResult, never, GitHubClient> =>
+	autoMerge?: "merge" | "squash" | "rebase",
+) =>
 	Effect.gen(function* () {
-		const client = yield* GitHubClient;
-		const { owner, repo } = yield* client.repo.pipe(Effect.orDie);
-
+		const pr = yield* PullRequestService;
 		const title = "chore(deps): update pnpm config dependencies";
 		const body = generatePRBody(updates, changesets);
 
-		// Check if PR already exists
-		const existingPR = yield* client
-			.rest("pulls.list", (octokit) =>
-				(
-					octokit as {
-						rest: {
-							pulls: {
-								list: (
-									opts: Record<string, unknown>,
-								) => Promise<{ data: Array<{ number: number; html_url: string; node_id: string }> }>;
-							};
-						};
-					}
-				).rest.pulls
-					.list({
-						owner,
-						repo,
-						head: `${owner}:${branch}`,
-						base: "main",
-						state: "open",
-					})
-					.then((r) =>
-						r.data.length > 0
-							? {
-									number: r.data[0].number,
-									url: r.data[0].html_url,
-									nodeId: r.data[0].node_id,
-								}
-							: null,
-					)
-					.then((data) => ({ data })),
-			)
-			.pipe(Effect.catchAll(() => Effect.succeed(null)));
-
-		if (existingPR) {
-			yield* Effect.logInfo(`Updating existing PR #${existingPR.number}`);
-			yield* client
-				.rest("pulls.update", (octokit) =>
-					(
-						octokit as { rest: { pulls: { update: (opts: Record<string, unknown>) => Promise<{ data: unknown }> } } }
-					).rest.pulls.update({
-						owner,
-						repo,
-						pull_number: existingPR.number,
-						title,
-						body,
-					}),
-				)
-				.pipe(Effect.catchAll(() => Effect.void));
-			return {
-				number: existingPR.number,
-				url: existingPR.url,
-				created: false,
-				nodeId: existingPR.nodeId,
-			} as PullRequestResult;
-		}
-
-		yield* Effect.logInfo("Creating new PR");
-		const pr = yield* client
-			.rest("pulls.create", (octokit) =>
-				(
-					octokit as {
-						rest: {
-							pulls: {
-								create: (
-									opts: Record<string, unknown>,
-								) => Promise<{ data: { number: number; html_url: string; node_id: string } }>;
-							};
-						};
-					}
-				).rest.pulls.create({
-					owner,
-					repo,
-					title,
-					body,
-					head: branch,
-					base: "main",
-				}),
-			)
+		const result = yield* pr
+			.getOrCreate({
+				head: branch,
+				base: "main",
+				title,
+				body,
+				autoMerge: autoMerge || false,
+			})
 			.pipe(
-				Effect.map(
-					(data) =>
-						({
-							number: data.number,
-							url: data.html_url,
-							created: true,
-							nodeId: data.node_id,
-						}) as PullRequestResult,
-				),
-				Effect.catchAll(() =>
-					Effect.succeed({ number: 0, url: "", created: false, nodeId: "" } as unknown as PullRequestResult),
-				),
+				Effect.catchAll(() => {
+					return Effect.succeed({
+						number: 0,
+						url: "",
+						nodeId: "",
+						title: "",
+						state: "open" as const,
+						head: branch,
+						base: "main",
+						draft: false,
+						merged: false,
+						created: false,
+					});
+				}),
 			);
 
-		if (pr.number > 0) {
-			yield* Effect.logInfo(`Created PR #${pr.number}: ${pr.url}`);
+		if (result.number > 0) {
+			const action = result.created ? "Created" : "Updated";
+			yield* Effect.logInfo(`${action} PR #${result.number}: ${result.url}`);
 		}
-		return pr;
+
+		return {
+			number: result.number,
+			url: result.url,
+			created: result.created,
+			nodeId: result.nodeId,
+		} as PullRequestResult;
 	});
 
 /**
@@ -466,12 +404,14 @@ export const program = Effect.gen(function* () {
 			Effect.gen(function* () {
 				// Build all dependent layers from the token
 				const ghClient = GitHubClientLive(token);
+				const ghGraphql = GitHubGraphQLLive.pipe(Layer.provide(ghClient));
 				const appLayer = Layer.mergeAll(
 					ghClient,
 					GitBranchLive.pipe(Layer.provide(ghClient)),
 					GitCommitLive.pipe(Layer.provide(ghClient)),
 					CheckRunLive.pipe(Layer.provide(ghClient)),
-					GitHubGraphQLLive.pipe(Layer.provide(ghClient)),
+					PullRequestLive.pipe(Layer.provide(Layer.merge(ghClient, ghGraphql))),
+					NpmRegistryLive.pipe(Layer.provide(CommandRunnerLive)),
 					CommandRunnerLive,
 					DryRunLive(dryRun),
 				);
@@ -685,24 +625,7 @@ const innerProgram = (
 							yield* Effect.logInfo("Step 13: [DRY RUN] Skipping PR creation/update");
 						} else {
 							yield* Effect.logInfo("Step 13: Creating/updating PR");
-							const client = yield* GitHubClient;
-							pr = yield* createOrUpdatePR(inputs.branch, allUpdates, changesets).pipe(
-								Effect.provide(Layer.succeed(GitHubClient, client)),
-							);
-
-							// Enable auto-merge if configured
-							if (inputs["auto-merge"] && pr && pr.nodeId) {
-								const mergeMethod = inputs["auto-merge"].toUpperCase() as "MERGE" | "SQUASH" | "REBASE";
-								yield* AutoMerge.enable(pr.nodeId, mergeMethod).pipe(
-									Effect.tap(() => Effect.logInfo(`Auto-merge enabled (${inputs["auto-merge"]})`)),
-									Effect.catchAll((error) =>
-										Effect.logWarning(
-											`Failed to enable auto-merge: ${error.reason}. ` +
-												`Ensure the repository has "Allow auto-merge" enabled and branch protection rules configured.`,
-										),
-									),
-								);
-							}
+							pr = yield* createOrUpdatePR(inputs.branch, allUpdates, changesets, inputs["auto-merge"] || undefined);
 						}
 
 						// Update check run
