@@ -31,6 +31,7 @@ import {
 	CommandRunner,
 	GitHubApp,
 	GitHubAppLive,
+	LogLevelInput,
 } from "@savvy-web/github-action-effects";
 import type { Layer } from "effect";
 import { Duration, Effect, Schema } from "effect";
@@ -118,6 +119,7 @@ export const program = Effect.gen(function* () {
 			changesets: { schema: Schema.Boolean, default: true },
 			"auto-merge": { schema: Schema.Literal("", "merge", "squash", "rebase"), default: "" as const },
 			"dry-run": { schema: Schema.Boolean, default: false },
+			"log-level": { schema: LogLevelInput, default: "auto" as const },
 			timeout: { schema: Schema.NumberFromString, default: "180" },
 		},
 		(parsed) => {
@@ -139,6 +141,10 @@ export const program = Effect.gen(function* () {
 	);
 
 	const dryRun = inputs["dry-run"];
+
+	// Set log level before any other logging
+	const resolvedLogLevel = Action.resolveLogLevel(inputs["log-level"]);
+	yield* Action.setLogLevel(resolvedLogLevel);
 
 	yield* Effect.logDebug("Debug mode enabled - verbose logging active");
 	yield* Effect.logDebug(

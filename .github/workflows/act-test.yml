@@ -14,10 +14,11 @@ on:
         description: Logging verbosity
         type: choice
         options:
+          - auto
           - info
           - verbose
           - debug
-        default: info
+        default: auto
 
 jobs:
   test:
