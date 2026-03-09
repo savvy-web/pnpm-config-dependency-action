@@ -4,60 +4,52 @@
 
 ## Current State
 
-**Status:** v0.4.0 architecture migration complete. Single-phase entry point with
-all services from `@savvy-web/github-action-effects` v0.4.0.
+**Status:** Effect-first restructure complete. All domain logic wrapped as Effect
+services with `Context.Tag` + `Layer`. Layer composition centralized in
+`src/layers/app.ts`.
 
-**Architecture (v0.4.0):**
+**Architecture (current):**
 
-- **Single-phase design:** `main.ts` is the only entry point. `pre.ts`, `post.ts`,
-  and `github/auth.ts` have been deleted. Token lifecycle handled by
-  `GitHubApp.withToken()`.
-- **Library services only:** Custom services (`GitHubClient`, `GitExecutor`,
-  `PnpmExecutor` from `src/lib/services/index.ts`) have been deleted. All services
-  come from the library: `CommandRunner`, `GitBranch`, `GitCommit`, `CheckRun`,
-  `GitHubClient`, `AutoMerge`.
-- **Declarative inputs:** `src/lib/inputs.ts` deleted. Input parsing uses
-  `Action.parseInputs()` directly in `main.ts`.
-- **Simplified action.yml:** No `pre`/`post` entries. Removed `skip-token-revoke`,
-  `log-level` inputs and `token` output.
+- **Effect-first services:** All domain functions are Effect services in `src/services/`:
+  `BranchManager`, `PnpmUpgrade`, `ConfigDeps`, `RegularDeps`, `Report`,
+  `Lockfile`, `Changesets`, `WorkspaceYaml`
+- **Layer composition:** `makeAppLayer(token, dryRun)` in `src/layers/app.ts` wires
+  all library and domain layers together
+- **Pure helpers:** `src/utils/` contains stateless functions (`deps.ts`, `markdown.ts`,
+  `pnpm.ts`, `semver.ts`)
+- **No barrel re-exports:** Direct imports everywhere, no `index.ts` files
+- **Co-located tests:** Each `.ts` file has a `.test.ts` sibling
+- **New library services:** `NpmRegistry` (npm queries), `PullRequest` (PR management
+  with auto-merge), `GithubMarkdown` (markdown utilities)
 
 **Implemented Features:**
 
 - Single-phase execution model with 16 steps
 - GitHub App token lifecycle via `GitHubApp.withToken()`
-- Branch management with delete-and-recreate strategy via `GitBranch` service
-- Config dependency updates via direct npm queries and YAML editing
-- Regular dependency updates via direct npm queries (compatible with `catalogMode: strict`)
-- pnpm self-upgrade via `corepack use` with `packageManager` and `devEngines` field support
+- Branch management with delete-and-recreate strategy via `BranchManager` service
+- Config dependency updates via `ConfigDeps` service (uses `NpmRegistry`)
+- Regular dependency updates via `RegularDeps` service (uses `NpmRegistry`)
+- pnpm self-upgrade via `PnpmUpgrade` service
 - Clean install after updates
-- Workspace YAML formatting
+- Workspace YAML formatting via `WorkspaceYaml` service
 - Custom command execution via `CommandRunner` with error collection
-- Lockfile comparison for change detection
-- Changeset creation for affected packages
-- Verified commits via `GitCommit` service (GitHub API)
-- PR creation and update with Dependabot-style formatting via `GitHubClient`
-- Auto-merge support via `AutoMerge.enable()` (GraphQL API)
+- Lockfile comparison via `Lockfile` service
+- Changeset creation via `Changesets` service
+- Verified commits via `BranchManager.commitChanges()` (GitHub API)
+- PR creation/update via `Report` service (uses `PullRequest` library service)
+- Auto-merge support via `PullRequest` service (GraphQL API)
 - Check run lifecycle via `CheckRun.withCheckRun()`
-- Configurable changeset creation via `changesets` input (boolean, default: `true`)
+- PR sentinel fix: failures propagate as `PullRequestError` instead of `{ number: 0 }`
 - Dry-run mode for testing
 
-**Deleted Modules (v0.4.0 migration):**
+**Deleted Modules (restructure):**
 
-- `src/pre.ts` - Token generation (replaced by `GitHubApp.withToken()`)
-- `src/post.ts` - Token revocation (handled automatically by `GitHubApp.withToken()`)
-- `src/lib/github/auth.ts` - Custom auth logic (replaced by `GitHubApp` service)
-- `src/lib/inputs.ts` - Input parsing (replaced by `Action.parseInputs()`)
-- `src/lib/services/index.ts` - Custom services (replaced by library services)
-
-**Deleted Types (v0.4.0 migration):**
-
-- `InstallationToken` - Handled internally by `GitHubApp.withToken()`
-- `AuthenticatedClient` - Replaced by `GitHubClient` service
-- `GitHubContext` - Replaced by `GitHubClient.repo`
-- `ActionInputs` schema - Replaced by `Action.parseInputs()` declarative API
-- `AuthenticationError` - Handled by library
-- `CheckRun` schema (domain type) - Replaced by `CheckRun` service
-- `ActionResult` - No longer needed
+- `src/lib/` (entire directory) - Logic moved to `src/services/` and `src/utils/`
+- `src/types/index.ts` - No barrel re-exports, import from `src/schemas/domain.ts`
+- `src/lib/errors/types.ts` - Replaced by `src/errors/errors.ts`
+- `src/lib/schemas/index.ts` - Replaced by `src/schemas/domain.ts`
+- `src/lib/schemas/errors.ts` - Replaced by `src/errors/errors.ts`
+- `src/lib/__test__/fixtures.ts` - Replaced by `src/utils/fixtures.test.ts`
 
 **Next Steps:**
 
@@ -95,6 +87,19 @@ patterns (like `acquireUseRelease` used by `GitHubApp.withToken()` and
 Effect programs are pure and composable, making them easier to test. Services can be
 mocked via `Layer.succeed()` without complex mocking frameworks.
 
+### Why Effect-First Service Architecture?
+
+**Dependency injection:** `Context.Tag` + `Layer` provides compile-time verified
+dependency injection. Each service declares its dependencies in its Layer, and
+the compiler ensures all dependencies are satisfied.
+
+**Testability:** Mock any service by providing `Layer.succeed(Tag, mockImpl)`.
+No need for complex mocking frameworks or module mocking.
+
+**Composition:** `makeAppLayer` in `src/layers/app.ts` wires all layers in one place.
+Adding a new service means defining its Tag, implementing its Layer, and adding it
+to `makeAppLayer`.
+
 ### Why Single-Phase Instead of Pre/Main/Post?
 
 **Simplicity:**
@@ -109,19 +114,7 @@ mocked via `Layer.succeed()` without complex mocking frameworks.
 - No state corruption risk between phases
 - Simpler error handling (no partial state from failed phases)
 
-**Maintainability:**
-
-- Fewer files to maintain
-- All logic visible in one place
-- Easier to reason about execution flow
-
 ### Why Dedicated Branch Instead of Ephemeral Branches?
-
-**Consistency:**
-
-- Easier to find update PRs (always same branch name)
-- Predictable workflow (users know where to look)
-- Matches Dependabot's behavior (single branch per dependency type)
 
 **Delete-and-Recreate Strategy:**
 
@@ -131,9 +124,7 @@ mocked via `Layer.succeed()` without complex mocking frameworks.
 
 ### Why Changesets Integration?
 
-**Monorepo Best Practice:**
-
-Changesets is the de facto standard for versioning in pnpm monorepos. Integrating directly means:
+Changesets is the de facto standard for versioning in pnpm monorepos:
 
 - Automatic changelog generation
 - Semantic versioning enforcement
@@ -141,24 +132,10 @@ Changesets is the de facto standard for versioning in pnpm monorepos. Integratin
 
 ### Why GitHub App Instead of PAT?
 
-**Security:**
-
 - Tokens expire in 1 hour (vs PAT never expires)
-- Fine-grained permissions (read/write only what's needed)
-- No user account compromise risk
-
-**Verified Commits:**
-
-- GitHub Apps can create verified/signed commits via the Git Data API
-- Commit attribution shows the app name (e.g., "my-app[bot]")
-- Requires omitting the `author` parameter in `createCommit()`
-
-### Why Commit via GitHub API Instead of Git CLI?
-
-- Verified commits with "Verified" badge
-- No SSH keys or GPG keys needed
-- Works automatically with GitHub App tokens
-- Consistent with how GitHub's own bots work (Dependabot, etc.)
+- Fine-grained permissions
+- Verified commits via Git Data API (no SSH/GPG keys needed)
+- Consistent with GitHub's own bots (Dependabot, etc.)
 
 ## Related Documentation
 

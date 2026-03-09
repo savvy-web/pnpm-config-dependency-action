@@ -1,201 +1,221 @@
-# Library Modules (src/lib/)
+# Services and Utilities
 
 [Back to index](./_index.md)
 
-## src/lib/github/branch.ts
+## Domain Services (src/services/)
 
-Branch management and commit utilities using library services (`GitBranch`, `GitCommit`,
-`CommandRunner`) from `@savvy-web/github-action-effects`.
+All domain logic is wrapped as Effect services with `Context.Tag` + `Layer`.
+Each service depends on library services from `@savvy-web/github-action-effects`.
+
+### src/services/branch.ts - BranchManager
+
+Branch management and commit operations using `GitBranch`, `GitCommit`, and
+`CommandRunner` library services.
+
+**Service interface:**
+
+```typescript
+export class BranchManager extends Context.Tag("BranchManager")<BranchManager, {
+ readonly manage: (branchName: string, defaultBranch?: string) =>
+  Effect.Effect<BranchResult, GitBranchError | CommandRunnerError>;
+ readonly commitChanges: (message: string, branchName: string) =>
+  Effect.Effect<void, GitCommitError | CommandRunnerError>;
+}>() {}
+```
 
 **Branch Strategy:** Delete-and-recreate instead of rebase. When the branch already
-exists, it is deleted and recreated from the default branch for a fresh start. This
-avoids rebase complexity and conflict resolution.
+exists, it is deleted and recreated from the default branch for a fresh start.
 
-```typescript
-export const manageBranch = (
- branchName: string,
- defaultBranch: string = "main",
-): Effect.Effect<BranchResult, GitBranchError | CommandRunnerError, GitBranch | CommandRunner> =>
- Effect.gen(function* () {
-  const branch = yield* GitBranch;
-  const cmd = yield* CommandRunner;
-
-  const exists = yield* branch.exists(branchName);
-
-  if (!exists) {
-   const baseSha = yield* branch.getSha(defaultBranch);
-   yield* branch.create(branchName, baseSha);
-   yield* cmd.exec("git", ["fetch", "origin"]);
-   yield* cmd.exec("git", ["checkout", "-B", branchName, `origin/${branchName}`]);
-   return { branch: branchName, created: true, upToDate: true, baseRef: defaultBranch };
-  }
-
-  // Branch exists - delete and recreate from default branch
-  const baseSha = yield* branch.getSha(defaultBranch);
-  yield* branch.delete(branchName).pipe(Effect.catchAll(() => Effect.void));
-  yield* branch.create(branchName, baseSha);
-  yield* cmd.exec("git", ["fetch", "origin"]);
-  yield* cmd.exec("git", ["checkout", "-B", branchName, `origin/${branchName}`]);
-  return { branch: branchName, created: false, upToDate: true, baseRef: defaultBranch };
- });
-```
-
-**Commit via GitHub API:** The `commitChanges` function uses `GitCommit` service
-for verified commits. It reads changed files from `git status --porcelain`, builds
-a tree via `GitCommit.createTree()`, creates a commit via `GitCommit.createCommit()`
+**Commit via GitHub API:** `commitChanges` reads changed files from `git status --porcelain`,
+builds a tree via `GitCommit.createTree()`, creates a commit via `GitCommit.createCommit()`
 (without author parameter for verification), and updates the branch ref.
 
-```typescript
-export const commitChanges = (
- message: string,
- branchName: string,
-): Effect.Effect<void, GitBranchError | GitCommitError | CommandRunnerError, GitBranch | GitCommit | CommandRunner>
-```
+### src/services/workspace-yaml.ts - WorkspaceYaml
 
-## src/lib/pnpm/format.ts
-
-**Purpose:** Format `pnpm-workspace.yaml` consistently to avoid lint-staged hook changes.
+Format `pnpm-workspace.yaml` consistently to avoid lint-staged hook changes.
 
 **Formatting Rules:**
 
-1. **Sort arrays alphabetically:** `packages`, `onlyBuiltDependencies`, `publicHoistPattern`
-2. **Sort `configDependencies` object keys alphabetically**
-3. **Sort top-level keys alphabetically**, but keep `packages` first
-4. **YAML stringify options:**
-   - `indent: 2` - Two-space indentation
-   - `lineWidth: 0` - Disable line wrapping
-   - `singleQuote: false` - Use double quotes
+1. Sort arrays alphabetically: `packages`, `onlyBuiltDependencies`, `publicHoistPattern`
+2. Sort `configDependencies` object keys alphabetically
+3. Sort top-level keys alphabetically, but keep `packages` first
+4. YAML stringify: `indent: 2`, `lineWidth: 0`, `singleQuote: false`
 
-**Exported Functions:**
+**Exported helpers** (used directly by `main.ts` and `ConfigDeps`):
 
-- `formatWorkspaceYaml(workspaceRoot?)` - Read, sort, and write back the YAML file
+- `formatWorkspaceYaml(workspaceRoot?)` - Read, sort, and write back
 - `readWorkspaceYaml(workspaceRoot?)` - Read and parse workspace YAML
-- `sortContent(content)` - Sort workspace content (exported for use by `config.ts`)
-- `STRINGIFY_OPTIONS` - Consistent YAML stringify options (exported for use by `config.ts`)
+- `sortContent(content)` - Sort workspace content
+- `STRINGIFY_OPTIONS` - Consistent YAML stringify options
 
-## src/lib/pnpm/upgrade.ts
+### src/services/pnpm-upgrade.ts - PnpmUpgrade
 
-**Purpose:** Upgrade pnpm itself to the latest version within the `^` semver range.
+Upgrade pnpm to the latest version within `^` semver range via `corepack use`.
+Depends on `CommandRunner`.
 
-Uses `CommandRunner` for shell execution (replaces the deleted `PnpmExecutor` service).
-
-**Exported Functions:**
-
-- `parsePnpmVersion(raw, stripPnpmPrefix?)` - Parse version from `packageManager` or `devEngines` field
-- `formatPnpmVersion(version, hasCaret)` - Format version with optional caret prefix
-- `resolveLatestInRange(versions, current)` - Find highest stable version satisfying `^current`
-- `upgradePnpm(workspaceRoot?)` - Main upgrade Effect
-- `detectIndent(content)` - Detect JSON file indentation (reused by `regular.ts`)
-
-**Effect Signature:**
+**Service interface:**
 
 ```typescript
-export const upgradePnpm = (
- workspaceRoot?: string
-): Effect.Effect<PnpmUpgradeResult | null, FileSystemError, CommandRunner>
+export class PnpmUpgrade extends Context.Tag("PnpmUpgrade")<PnpmUpgrade, {
+ readonly upgrade: (workspaceRoot?: string) =>
+  Effect.Effect<PnpmUpgradeResult | null, FileSystemError>;
+}>() {}
 ```
 
 **Algorithm:**
 
 1. Read root `package.json`
 2. Parse `packageManager` field (format: `pnpm@10.28.2`, `pnpm@^10.28.2+sha512...`)
-3. Parse `devEngines.packageManager` field (name must be `pnpm`, version field parsed)
-4. If neither field found, return null
-5. Query available pnpm versions via `npm view pnpm versions --json` (uses `CommandRunner`)
-6. Filter to stable releases only (no pre-release via `semver.prerelease`)
-7. Resolve latest version in `^` range via `semver.maxSatisfying`
-8. Take highest resolved version across both fields
-9. If already up-to-date, return null
-10. Run `corepack use pnpm@<version>` via `CommandRunner`
-11. Re-read `package.json`, detect indentation, update `devEngines.packageManager.version`
-12. Return `PnpmUpgradeResult`
+3. Parse `devEngines.packageManager` field (name must be `pnpm`)
+4. Query pnpm versions via `npm view pnpm versions --json`
+5. Resolve latest in `^` range, run `corepack use pnpm@<version>`
+6. Update `devEngines.packageManager.version` if present
 
-## src/lib/pnpm/config.ts
+### src/services/config-deps.ts - ConfigDeps
 
-**Purpose:** Update config dependencies by querying npm directly and editing
-`pnpm-workspace.yaml` in place. This avoids `pnpm add --config` which promotes
-all workspace dependencies to the default catalog when `catalogMode: strict` is enabled.
+Update config dependencies by querying npm via `NpmRegistry` and editing
+`pnpm-workspace.yaml` in place. Avoids `pnpm add --config` catalog promotion.
 
-Uses `CommandRunner` for npm queries (replaces the deleted `PnpmExecutor` service).
-
-**Exported Functions:**
-
-- `parseConfigEntry(entry)` - Parse config dependency entry (version + optional hash)
-- `updateConfigDeps(deps, workspaceRoot?)` - Main update Effect
-
-**Effect Signature:**
+**Service interface:**
 
 ```typescript
-export const updateConfigDeps = (
- deps: ReadonlyArray<string>,
- workspaceRoot?: string,
-): Effect.Effect<ReadonlyArray<DependencyUpdateResult>, never, CommandRunner>
+export class ConfigDeps extends Context.Tag("ConfigDeps")<ConfigDeps, {
+ readonly updateConfigDeps: (deps: ReadonlyArray<string>, workspaceRoot?: string) =>
+  Effect.Effect<ReadonlyArray<DependencyUpdateResult>>;
+}>() {}
 ```
 
 **Algorithm:**
 
 1. Read `pnpm-workspace.yaml` via `readWorkspaceYaml()`
-2. For each config dependency, parse current entry to extract version
-3. Query `npm view <pkg>@latest version dist.integrity --json` via `CommandRunner`
-4. Compare current version with latest; skip if already up-to-date
-5. Construct new entry: `version+integrity`
-6. Write back via `sortContent()` + `stringify()` for consistent formatting
-7. Return `DependencyUpdateResult[]`
+2. For each dep, query `NpmRegistry` for latest version + integrity
+3. Compare current with latest; skip if up-to-date
+4. Write back via `sortContent()` + `stringify()`
 
-## src/lib/pnpm/regular.ts
+### src/services/regular-deps.ts - RegularDeps
 
-**Purpose:** Update regular (non-config) dependencies by querying npm directly.
-Avoids `pnpm up --latest` which promotes deps to catalogs when `catalogMode: strict`.
+Update regular dependencies by querying npm via `NpmRegistry`. Avoids
+`pnpm up --latest` which promotes deps to catalogs with `catalogMode: strict`.
 
-Uses `CommandRunner` for npm queries (replaces the deleted `PnpmExecutor` service).
-
-**Exported Functions:**
-
-- `matchesPattern(depName, pattern)` - Glob matching via Node's native `path.matchesGlob`
-- `parseSpecifier(specifier)` - Parse version specifier into `{ prefix, version }`,
-  returns `null` for `catalog:` and `workspace:` specifiers
-- `updateRegularDeps(patterns, workspaceRoot?)` - Main Effect function
-
-**Effect Signature:**
+**Service interface:**
 
 ```typescript
-export const updateRegularDeps = (
- patterns: ReadonlyArray<string>,
- workspaceRoot?: string,
-): Effect.Effect<ReadonlyArray<DependencyUpdateResult>, never, CommandRunner>
+export class RegularDeps extends Context.Tag("RegularDeps")<RegularDeps, {
+ readonly updateRegularDeps: (patterns: ReadonlyArray<string>, workspaceRoot?: string) =>
+  Effect.Effect<ReadonlyArray<DependencyUpdateResult>>;
+}>() {}
 ```
 
 **Key Design Decisions:**
 
-- Queries npm registry directly instead of relying on `pnpm up` to avoid catalog promotion
-- Uses Node's native `path.matchesGlob` for pattern matching
-- Preserves specifier prefix (`^`, `~`, or exact) from existing `package.json`
-- Skips `catalog:` and `workspace:` specifiers entirely
+- Queries npm registry directly via `NpmRegistry` service
+- Uses `matchesPattern` from `src/utils/deps.ts` for glob matching
+- Preserves specifier prefix (`^`, `~`, or exact) from `package.json`
+- Skips `catalog:` and `workspace:` specifiers
 - Deduplicates per path+dep to avoid duplicate PR table rows
-- Gracefully handles npm query failures per-dependency (logs warning, continues)
-- Reuses `detectIndent` from `upgrade.ts` for consistent `package.json` formatting
+- Gracefully handles npm query failures per-dependency
 
-## src/lib/lockfile/compare.ts
+### src/services/lockfile.ts - Lockfile
 
-**Purpose:** Compare lockfile snapshots before and after updates to detect changes.
+Compare lockfile snapshots before and after updates to detect changes.
+Uses `@pnpm/lockfile.fs` and `workspace-tools`.
 
-Uses pnpm's official packages (`@pnpm/lockfile.fs`, `@pnpm/lockfile.types`) and
-`workspace-tools` for workspace info.
+**Service interface:**
 
-**Exported Functions:**
+```typescript
+export class Lockfile extends Context.Tag("Lockfile")<Lockfile, {
+ readonly capture: (workspaceRoot?: string) =>
+  Effect.Effect<LockfileObject | null, LockfileError>;
+ readonly compare: (before, after, workspaceRoot?) =>
+  Effect.Effect<ReadonlyArray<LockfileChange>, LockfileError>;
+}>() {}
+```
 
-- `captureLockfileState(workspaceRoot?)` - Read current `pnpm-lock.yaml` snapshot
-- `compareLockfiles(before, after, workspaceRoot?)` - Compare two snapshots for changes
+**Exported helpers** (used by `main.ts` and `Changesets`):
 
-Returns `ReadonlyArray<LockfileChange>` with catalog and specifier changes.
+- `captureLockfileState(workspaceRoot?)` - Standalone capture function
+- `compareLockfiles(before, after, workspaceRoot?)` - Standalone compare function
+- `groupChangesByPackage(changes)` - Group lockfile changes by affected package
 
-## src/lib/changeset/create.ts
+### src/services/changesets.ts - Changesets
 
-**Purpose:** Create changeset files for affected packages after dependency updates.
+Create changeset files for affected packages after dependency updates.
 
-**Exported Functions:**
+**Service interface:**
 
-- `createChangesets(changes)` - Create changeset files from lockfile changes
+```typescript
+export class Changesets extends Context.Tag("Changesets")<Changesets, {
+ readonly create: (changes: ReadonlyArray<LockfileChange>, workspaceRoot?: string) =>
+  Effect.Effect<ReadonlyArray<ChangesetFile>, ChangesetError | FileSystemError>;
+}>() {}
+```
 
-Creates patch changesets for each affected workspace package. Config dependency
-changes create an empty changeset for the root workspace.
+**Exported helper:**
+
+- `createChangesets(changes)` - Standalone function for creating changesets
+
+### src/services/report.ts - Report
+
+PR management and report generation. Depends on `PullRequest` library service.
+
+**Service interface:**
+
+```typescript
+export class Report extends Context.Tag("Report")<Report, {
+ readonly createOrUpdatePR: (branch, updates, changesets, autoMerge?) =>
+  Effect.Effect<PullRequestResult, PullRequestError>;
+ readonly generatePRBody: (updates, changesets) => string;
+ readonly generateSummary: (updates, changesets, pr, dryRun) => string;
+ readonly generateCommitMessage: (updates, appSlug?) => string;
+}>() {}
+```
+
+**Key fix:** PR creation failures now propagate through the Effect error channel
+as `PullRequestError` instead of returning a sentinel `{ number: 0, url: "" }`.
+
+## Layer Composition (src/layers/app.ts)
+
+`makeAppLayer(token, dryRun)` wires all library and domain layers:
+
+```typescript
+export const makeAppLayer = (token: string, dryRun: boolean) => {
+ const ghClient = GitHubClientLive(token);
+ const npmRegistry = NpmRegistryLive.pipe(Layer.provide(CommandRunnerLive));
+ const prLayer = PullRequestLive.pipe(Layer.provide(Layer.merge(ghClient, ghGraphql)));
+
+ const libraryLayers = Layer.mergeAll(
+  ghClient, gitBranch, gitCommit, CheckRunLive, prLayer,
+  npmRegistry, CommandRunnerLive, DryRunLive(dryRun),
+ );
+
+ const domainLayers = Layer.mergeAll(
+  BranchManagerLive, PnpmUpgradeLive, ConfigDepsLive,
+  RegularDepsLive, ReportLive,
+ );
+
+ return Layer.provideMerge(domainLayers, libraryLayers);
+};
+```
+
+## Pure Helpers (src/utils/)
+
+### src/utils/deps.ts
+
+- `parseConfigEntry(entry)` - Parse config dependency entry (version + optional hash)
+- `matchesPattern(depName, pattern)` - Glob matching via `path.matchesGlob`
+- `parseSpecifier(specifier)` - Parse version specifier; returns `null` for `catalog:`/`workspace:`
+
+### src/utils/markdown.ts
+
+- `npmUrl(packageName)` - Generate npmjs.com URL for a package
+- `cleanVersion(version)` - Strip prefix characters from version string
+
+### src/utils/pnpm.ts
+
+- `parsePnpmVersion(raw, stripPnpmPrefix?)` - Parse version from `packageManager` or `devEngines`
+- `formatPnpmVersion(version, hasCaret)` - Format version with optional caret
+- `detectIndent(content)` - Detect JSON file indentation (reused by `RegularDeps`)
+
+### src/utils/semver.ts
+
+- `resolveLatestInRange(versions, current)` - Find highest stable version satisfying `^current`

@@ -4,22 +4,13 @@
 
 ## Overview
 
-Types are defined using Effect Schema in `src/lib/schemas/index.ts` and re-exported
-from `src/types/index.ts`. Error types use `Schema.TaggedError` in
-`src/lib/schemas/errors.ts`.
+Types are defined using Effect Schema in `src/schemas/domain.ts`. Error types use
+`Schema.TaggedError` in `src/errors/errors.ts`. Module-level types (e.g.,
+`PnpmUpgradeResult`) are defined in their respective service files.
 
-Many types from the v0.3.0 architecture have been removed because their responsibilities
-are now handled by library services from `@savvy-web/github-action-effects`:
+No barrel re-exports exist. Import directly from the defining module.
 
-- `ActionInputs` schema -- replaced by `Action.parseInputs()` declarative API
-- `InstallationToken` -- handled internally by `GitHubApp.withToken()`
-- `AuthenticatedClient` -- replaced by `GitHubClient` library service
-- `GitHubContext` -- replaced by `GitHubClient.repo` property
-- `CheckRun` schema -- replaced by `CheckRun` library service
-- `ActionResult` -- no longer needed (results handled inline in main.ts)
-- `AuthenticationError` -- handled internally by `GitHubApp.withToken()`
-
-## Domain Schemas (src/lib/schemas/index.ts)
+## Domain Schemas (src/schemas/domain.ts)
 
 ```typescript
 import { Schema } from "effect";
@@ -64,8 +55,8 @@ export const ChangesetFile = Schema.Struct({
  summary: NonEmptyString,
 });
 
-/** Pull request information. */
-export const PullRequest = Schema.Struct({
+/** Pull request result. */
+export const PullRequestResult = Schema.Struct({
  number: Schema.Number.pipe(Schema.positive()),
  url: Schema.String.pipe(Schema.startsWith("https://")),
  created: Schema.Boolean,
@@ -84,7 +75,7 @@ export const LockfileChange = Schema.Struct({
 
 All schemas derive TypeScript types via `typeof Schema.Type`.
 
-## Module-Level Types (src/lib/pnpm/upgrade.ts)
+## Module-Level Types (src/services/pnpm-upgrade.ts)
 
 ```typescript
 /** Result of a pnpm upgrade operation. */
@@ -94,7 +85,11 @@ export interface PnpmUpgradeResult {
  readonly packageManagerUpdated: boolean;
  readonly devEnginesUpdated: boolean;
 }
+```
 
+## Pure Helper Types (src/utils/pnpm.ts)
+
+```typescript
 /** Parsed pnpm version info. */
 export interface ParsedPnpmVersion {
  readonly version: string;
@@ -103,7 +98,7 @@ export interface ParsedPnpmVersion {
 }
 ```
 
-## Effect Error Types (src/lib/schemas/errors.ts)
+## Effect Error Types (src/errors/errors.ts)
 
 Uses Effect's `Schema.TaggedError` for typed error handling with rich metadata:
 

@@ -61,7 +61,7 @@ Load sections based on what you are working on. Do not load all sections at once
 | Module structure, data flow, 16-step execution | Architecture | @./02-architecture.md |
 | Core interfaces, Effect error types | Type Definitions | @./03-type-definitions.md |
 | main.ts single-phase entry point | Entry Point | @./04-module-entry-points.md |
-| All src/lib/ modules (github, pnpm, lockfile, changeset) | Library Modules | @./05-module-library.md |
+| Domain services, layer composition, pure helpers | Services & Utilities | @./05-module-library.md |
 | Service architecture, error handling, retry, resource mgmt | Effect Patterns | @./06-effect-patterns.md |
 | Auth, branch mgmt, check runs, PR management | GitHub Integration | @./07-github-integration.md |
 | Unit/integration tests, fixtures, coverage | Testing | @./08-testing.md |

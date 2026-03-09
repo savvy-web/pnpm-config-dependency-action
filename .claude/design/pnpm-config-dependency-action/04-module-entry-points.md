@@ -7,15 +7,9 @@
 **Responsibility:** Orchestrate the complete dependency update workflow in a single
 phase, including token lifecycle, check runs, and all update steps.
 
-**Architecture change (v0.4.0):** The previous three-phase architecture (`pre.ts`,
-`main.ts`, `post.ts`) has been replaced by a single `main.ts` entry point. Token
-generation and revocation are handled automatically by `GitHubApp.withToken()`.
-The `ActionState` service is no longer needed for cross-phase state persistence.
-
 ### Input Parsing
 
-Inputs are parsed declaratively via `Action.parseInputs()` instead of a separate
-`parseInputs` module:
+Inputs are parsed declaratively via `Action.parseInputs()`:
 
 ```typescript
 const inputs = yield* Action.parseInputs(
@@ -44,24 +38,16 @@ const inputs = yield* Action.parseInputs(
 );
 ```
 
-### Token Lifecycle
+### Token Lifecycle and Layer Composition
 
-Token is generated and automatically revoked via `GitHubApp.withToken()`:
+Token is generated via `GitHubApp.withToken()`. Inside the callback, `makeAppLayer`
+from `src/layers/app.ts` wires all library and domain service layers:
 
 ```typescript
 const ghApp = yield* GitHubApp;
 yield* ghApp.withToken(inputs["app-id"], inputs["app-private-key"], (token) =>
  Effect.gen(function* () {
-  const ghClient = GitHubClientLive(token);
-  const appLayer = Layer.mergeAll(
-   ghClient,
-   GitBranchLive.pipe(Layer.provide(ghClient)),
-   GitCommitLive.pipe(Layer.provide(ghClient)),
-   CheckRunLive.pipe(Layer.provide(ghClient)),
-   GitHubGraphQLLive.pipe(Layer.provide(ghClient)),
-   CommandRunnerLive,
-   DryRunLive(dryRun),
-  );
+  const appLayer = makeAppLayer(token, dryRun);
   yield* Effect.provide(innerProgram(inputs, dryRun), appLayer);
  }),
 );
@@ -73,8 +59,9 @@ The module exports a `program` Effect and an `innerProgram` function:
 
 - `program` handles input parsing, token lifecycle, and error handling
 - `innerProgram(inputs, dryRun)` contains the 16-step orchestration logic
-  and requires `ActionOutputs`, `CheckRun`, `GitBranch`, `GitCommit`,
-  `GitHubClient`, `CommandRunner` in its context
+  and requires all domain services (`BranchManager`, `PnpmUpgrade`, `ConfigDeps`,
+  `RegularDeps`, `Report`, `Lockfile`, `Changesets`) plus library services
+  (`ActionOutputs`, `CheckRun`, `CommandRunner`) in its context
 
 The module-level execution wraps with timeout and top-level error handling:
 
@@ -100,10 +87,9 @@ Action.run(
 
 - `program` - Main Effect (exported for testability)
 - `runCommands(commands)` - Execute custom commands sequentially via `CommandRunner`
-- `createOrUpdatePR(branch, updates, changesets)` - Create or update dependency PR via `GitHubClient`
-- `generateCommitMessage(updates, appSlug?)` - Generate conventional commit message
-- `generatePRBody(updates, changesets)` - Generate Dependabot-style PR description
-- `generateSummary(updates, changesets, pr, dryRun)` - Generate check run/job summary
+
+Report-related functions (PR creation, commit messages, summaries) have moved to the
+`Report` service in `src/services/report.ts`.
 
 ### Required GitHub App Permissions
 

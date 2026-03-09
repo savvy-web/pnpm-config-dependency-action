@@ -6,7 +6,7 @@
 
 **Test Framework:** Vitest with v8 coverage, forks pool for Effect-TS compatibility
 
-**Key Test Suites (11 test files, ~222 tests total):**
+**Key Test Suites (13 test files, 235 tests total):**
 
 1. **Main action** (`src/main.test.ts`) - 24 tests
 
@@ -15,39 +15,39 @@
    - Dry-run mode behavior
    - Error handling
 
-2. **PR/Summary generation** (`src/main.effect.test.ts`) - 12 tests
+2. **Report service** (`src/main.effect.test.ts`) - 12 tests
 
    - PR body generation with config/regular dependency tables
    - Commit message generation
    - Summary text generation
    - pnpm upgrade appearing in Config Dependencies table
 
-3. **Schema types** (`src/lib/schemas/index.test.ts`) - 11 tests
+3. **Domain schemas** (`src/schemas/domain.test.ts`) - 11 tests
 
    - Schema validation for all domain types
-   - BranchResult, DependencyUpdateResult, PullRequest, etc.
+   - BranchResult, DependencyUpdateResult, PullRequestResult, etc.
 
-4. **Error types** (`src/lib/schemas/errors.test.ts`) - 33 tests
+4. **Error types** (`src/errors/errors.test.ts`) - 33 tests
 
    - Error construction and message formatting
    - Error matching via `_tag`
    - Error utility functions (isRetryable, getErrorMessage)
 
-5. **Branch management** (`src/lib/github/branch.test.ts`) - 8 tests
+5. **BranchManager service** (`src/services/branch.test.ts`) - 8 tests
 
    - Create new branch via GitBranch service
    - Delete and recreate existing branch
    - Commit changes via GitCommit service
    - No-changes detection
 
-6. **Config dependency updates** (`src/lib/pnpm/config.test.ts`) - 16 tests
+6. **ConfigDeps service** (`src/services/config-deps.test.ts`) - 16 tests
 
    - Config entry parsing (version + integrity hash)
    - npm query and YAML editing
    - Version comparison and skip logic
    - Missing dependency handling
 
-7. **Regular dependency updates** (`src/lib/pnpm/regular.test.ts`) - 22 tests
+7. **RegularDeps service** (`src/services/regular-deps.test.ts`) - 22 tests
 
    - `matchesPattern` (6 tests): exact match, scoped wildcard, bare wildcard, dot metacharacter safety
    - `parseSpecifier` (6 tests): caret, tilde, exact, catalog:, catalog:named, workspace:
@@ -55,7 +55,7 @@
      already latest, wildcard matching, catalog: skip, multi-file updates,
      npm query failure resilience, prefix preservation, deduplication
 
-8. **pnpm self-upgrade** (`src/lib/pnpm/upgrade.test.ts`) - 34 tests
+8. **PnpmUpgrade service** (`src/services/pnpm-upgrade.test.ts`) - 34 tests
 
    - `parsePnpmVersion`: exact version, sha suffix, caret prefix, caret+sha, non-pnpm, empty, invalid
    - `formatPnpmVersion`: with and without caret
@@ -63,24 +63,32 @@
    - `upgradePnpm` Effect integration: no pnpm fields, non-pnpm, newer available, already latest,
      devEngines update, caret preservation, indentation preservation
 
-9. **Workspace YAML formatting** (`src/lib/pnpm/format.test.ts`) - 18 tests
+9. **WorkspaceYaml service** (`src/services/workspace-yaml.test.ts`) - 18 tests
 
    - Array sorting, key sorting, configDependencies sorting
    - YAML stringify options
    - Round-trip formatting
 
-10. **Lockfile comparison** (`src/lib/lockfile/compare.test.ts`) - 23 tests
+10. **Lockfile service** (`src/services/lockfile.test.ts`) - 23 tests
 
     - Catalog snapshot comparison
     - Package importer comparison
     - No-change detection
     - Missing lockfile handling
 
-11. **Changeset creation** (`src/lib/changeset/create.test.ts`) - 21 tests
+11. **Changesets service** (`src/services/changesets.test.ts`) - 21 tests
 
     - Changeset file generation
     - Root workspace changesets
     - Multiple affected packages
+
+12. **Report service** (`src/services/report.test.ts`) - tests for PR/summary
+
+    - PR creation/update via PullRequest service
+    - Commit message formatting
+    - Summary generation
+
+13. **Test fixtures** (`src/utils/fixtures.test.ts`) - shared test utilities
 
 ## Test Patterns
 
@@ -88,20 +96,21 @@
 via `vi.mock()` to prevent module-level `Action.run` execution, then test the
 exported `program` Effect directly.
 
-**Mock service layers:** Domain module tests create mock `CommandRunner`, `GitBranch`,
-`GitCommit` etc. via `Layer.succeed()`:
+**Mock service layers:** Domain service tests create mock library services via
+`Layer.succeed()`:
 
 ```typescript
-const mockCommandRunner = Layer.succeed(CommandRunner, {
- exec: vi.fn(() => Effect.void),
- execCapture: vi.fn((cmd, args) => {
-  // Return mocked output based on command
-  if (args.includes("npm view")) {
-   return Effect.succeed({ stdout: '"1.2.3"', stderr: "" });
-  }
-  return Effect.succeed({ stdout: "", stderr: "" });
- }),
+const mockNpmRegistry = Layer.succeed(NpmRegistry, {
+ getLatestVersion: vi.fn((pkg) =>
+  Effect.succeed({ version: "1.2.3", integrity: "sha512-..." }),
+ ),
 });
+```
+
+Domain service tests provide the mock library layer to the service's Live layer:
+
+```typescript
+const testLayer = ConfigDepsLive.pipe(Layer.provide(mockNpmRegistry));
 ```
 
 **Remaining `vi.mock("@actions/core")` usage:** Some test files still mock
@@ -112,9 +121,9 @@ has a transitive dependency on it.
 
 **Coverage Exclusions:**
 
-`src/lib/pnpm/upgrade.ts` is excluded from per-file coverage thresholds in
+`src/services/pnpm-upgrade.ts` is excluded from per-file coverage thresholds in
 `vitest.config.ts` due to v8 function counting issues with Effect error callback
-patterns. The module is still tested thoroughly via `upgrade.test.ts`.
+patterns. The module is still tested thoroughly via `pnpm-upgrade.test.ts`.
 
 ## Integration Testing
 

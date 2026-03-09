@@ -6,43 +6,53 @@
 
 ```text
 src/
-├── main.ts              # Single-phase entry point (uses Action.run + GitHubApp.withToken)
-├── lib/
-│   ├── __test__/
-│   │   └── fixtures.ts  # Shared test fixtures
-│   ├── errors/
-│   │   └── types.ts     # Re-exports schema error types
-│   ├── schemas/
-│   │   ├── index.ts     # Effect Schema definitions (domain types)
-│   │   └── errors.ts    # Typed error definitions (Schema.TaggedError)
-│   ├── github/
-│   │   └── branch.ts    # Branch management + commit via GitHub API
-│   ├── pnpm/
-│   │   ├── config.ts    # Config dependency updates (direct YAML editing)
-│   │   ├── regular.ts   # Regular dependency updates (npm query + package.json)
-│   │   ├── format.ts    # pnpm-workspace.yaml formatting
-│   │   └── upgrade.ts   # pnpm self-upgrade via corepack
-│   ├── changeset/
-│   │   └── create.ts    # Create changeset files
-│   └── lockfile/
-│       └── compare.ts   # Lockfile state capture and comparison
-└── types/
-    └── index.ts         # Re-exports from schemas (BranchResult, DependencyUpdateResult, etc.)
+├── main.ts              # Single-phase entry point (orchestrator)
+├── main.test.ts
+├── main.effect.test.ts
+├── errors/
+│   ├── errors.ts        # Schema.TaggedError definitions
+│   └── errors.test.ts
+├── schemas/
+│   ├── domain.ts        # Effect Schema definitions (domain types)
+│   └── domain.test.ts
+├── layers/
+│   └── app.ts           # makeAppLayer(token, dryRun) - layer composition
+├── services/
+│   ├── branch.ts        # BranchManager service (Context.Tag)
+│   ├── branch.test.ts
+│   ├── changesets.ts     # Changesets service + helpers
+│   ├── changesets.test.ts
+│   ├── config-deps.ts   # ConfigDeps service
+│   ├── config-deps.test.ts
+│   ├── lockfile.ts      # Lockfile service + helpers
+│   ├── lockfile.test.ts
+│   ├── pnpm-upgrade.ts  # PnpmUpgrade service
+│   ├── pnpm-upgrade.test.ts
+│   ├── regular-deps.ts  # RegularDeps service
+│   ├── regular-deps.test.ts
+│   ├── report.ts        # Report service (PR, summary, commit msg)
+│   ├── report.test.ts
+│   ├── workspace-yaml.ts # WorkspaceYaml service + helpers
+│   └── workspace-yaml.test.ts
+└── utils/
+    ├── deps.ts          # parseConfigEntry, matchesPattern, parseSpecifier
+    ├── fixtures.test.ts # Shared test fixtures
+    ├── markdown.ts      # npmUrl, cleanVersion
+    ├── pnpm.ts          # parsePnpmVersion, formatPnpmVersion, detectIndent
+    └── semver.ts        # resolveLatestInRange
 ```
 
 **Key architectural notes:**
 
-- **Single-phase design:** There is only one entry point (`main.ts`). The pre/post
-  phases (`pre.ts`, `post.ts`) and auth module (`github/auth.ts`) have been deleted.
-  Token lifecycle is handled by `GitHubApp.withToken()` from the library.
-- **No custom services:** The `src/lib/services/index.ts` module has been deleted.
-  All services come from `@savvy-web/github-action-effects` (v0.4.0): `CommandRunner`,
-  `GitBranch`, `GitCommit`, `CheckRun`, `GitHubClient`, `AutoMerge`.
-- **No custom input parsing:** The `src/lib/inputs.ts` module has been deleted.
-  Input parsing uses `Action.parseInputs()` declaratively in `main.ts`.
-- **All GitHub Action plumbing** (inputs, outputs, logging) is provided by
-  `@savvy-web/github-action-effects`. The `@actions/core` package is not imported
-  directly. The only direct `@actions/github` import is for `context.sha`.
+- **Effect-first services:** All domain logic is wrapped in Effect services with
+  `Context.Tag` + `Layer`. Services are defined in `src/services/`, pure helpers
+  in `src/utils/`.
+- **Layer composition:** `src/layers/app.ts` exports `makeAppLayer(token, dryRun)`
+  which wires all library layers (from `@savvy-web/github-action-effects`) and
+  domain service layers together.
+- **No barrel re-exports:** Direct imports everywhere. No `index.ts` files.
+- **Tests co-located:** Each `.ts` file has a `.test.ts` sibling in the same directory.
+- **Deleted directories:** `src/lib/` (entire directory) and `src/types/` have been removed.
 
 ## Data Flow
 
@@ -50,34 +60,34 @@ src/
 graph TD
     A[main.ts: Start] --> B[Parse Inputs via Action.parseInputs]
     B --> C[GitHubApp.withToken: Generate Token]
-    C --> D[Build App Layer]
+    C --> D[makeAppLayer: Build All Layers]
     D --> E[CheckRun.withCheckRun]
-    E --> F[Branch Management]
+    E --> F[BranchManager.manage]
     F --> G{Branch Exists?}
     G -->|No| H[Create from main]
     G -->|Yes| I[Delete + Recreate from main]
-    H --> J[Capture Lockfile Before]
+    H --> J[Lockfile.capture Before]
     I --> J
     J --> J2{update-pnpm?}
-    J2 -->|Yes| J3[Upgrade pnpm via corepack]
+    J2 -->|Yes| J3[PnpmUpgrade.upgrade]
     J2 -->|No| K
-    J3 --> K[Update Config Dependencies]
-    K --> L[Update Regular Dependencies]
+    J3 --> K[ConfigDeps.updateConfigDeps]
+    K --> L[RegularDeps.updateRegularDeps]
     L --> M[Clean Install]
-    M --> N[Format pnpm-workspace.yaml]
+    M --> N[WorkspaceYaml.format]
     N --> O{Custom Commands?}
     O -->|Yes| P[Run Commands]
-    O -->|No| Q[Capture Lockfile After]
+    O -->|No| Q[Lockfile.capture After]
     P --> R{Commands Succeed?}
     R -->|No| S[Update Check Run: Failure]
     R -->|Yes| Q
     Q --> T{Changes Detected?}
     T -->|No| U[Exit Early]
     T -->|Yes| V{changesets input AND\n.changeset/ dir?}
-    V -->|Yes| W[Create Changesets]
-    V -->|No| X[Commit via GitHub API]
+    V -->|Yes| W[Changesets.create]
+    V -->|No| X[BranchManager.commitChanges]
     W --> X
-    X --> Y[Create/Update PR]
+    X --> Y[Report.createOrUpdatePR]
     Y --> Y2{Auto-merge enabled?}
     Y2 -->|Yes| Y3[Enable Auto-merge]
     Y2 -->|No| Z
@@ -107,9 +117,12 @@ The action executes as a **single phase** with **16 steps** (implemented in `src
 
 ### Step 3: Build App Layer
 
-- Constructs all dependent service layers from the token:
-  `GitHubClientLive`, `GitBranchLive`, `GitCommitLive`, `CheckRunLive`,
-  `GitHubGraphQLLive`, `CommandRunnerLive`, `DryRunLive`
+- `makeAppLayer(token, dryRun)` from `src/layers/app.ts` wires all layers:
+  - Library layers: `GitHubClientLive`, `GitBranchLive`, `GitCommitLive`,
+    `CheckRunLive`, `PullRequestLive`, `NpmRegistryLive`, `GitHubGraphQLLive`,
+    `CommandRunnerLive`, `DryRunLive`
+  - Domain layers: `BranchManagerLive`, `PnpmUpgradeLive`, `ConfigDepsLive`,
+    `RegularDepsLive`, `ReportLive`
 
 ### Step 4: Create Check Run
 
@@ -118,38 +131,33 @@ The action executes as a **single phase** with **16 steps** (implemented in `src
 
 ### Step 5: Branch Management
 
-- Check if update branch exists via `GitBranch` service
-- If not: create new branch from default branch
+- `BranchManager.manage()` handles branch lifecycle
+- If not exists: create new branch from default branch
 - If exists: delete and recreate from default branch (fresh start)
 - Fetch and checkout the branch via `CommandRunner`
 
 ### Step 6: Capture Lockfile State (Before)
 
-- Read current `pnpm-lock.yaml` using `@pnpm/lockfile.fs`
+- `Lockfile.capture()` reads current `pnpm-lock.yaml` using `@pnpm/lockfile.fs`
 - Store snapshot for later comparison
 
 ### Step 7: Upgrade pnpm (conditional)
 
 - Conditional on `inputs["update-pnpm"]` (default: `true`)
-- Parse pnpm version from `packageManager` and `devEngines.packageManager` fields
-- Query available pnpm versions via `npm view pnpm versions --json` (uses `CommandRunner`)
-- Resolve latest version within `^` semver range
-- Run `corepack use pnpm@<version>` via `CommandRunner`
-- Update `devEngines.packageManager.version` if present
+- `PnpmUpgrade.upgrade()` parses version, queries npm, runs `corepack use`
+- Updates `devEngines.packageManager.version` if present
 
 ### Step 8: Update Config Dependencies
 
-- Query npm directly for latest versions and integrity hashes via `CommandRunner`
-- Edit `pnpm-workspace.yaml` in place (avoids `pnpm add --config` catalog promotion)
+- `ConfigDeps.updateConfigDeps()` queries npm via `NpmRegistry` service
+- Edits `pnpm-workspace.yaml` in place (avoids `pnpm add --config` catalog promotion)
 - Track version changes (from/to)
 
 ### Step 9: Update Regular Dependencies
 
-- Query npm registry directly for latest versions via `CommandRunner`
-- Find all workspace `package.json` files via `workspace-tools`
-- Match dependency names against glob patterns
-- Skip `catalog:` and `workspace:` specifiers
-- Update `package.json` files directly, preserving indentation
+- `RegularDeps.updateRegularDeps()` queries npm via `NpmRegistry` service
+- Finds workspace `package.json` files, matches patterns, updates specifiers
+- Skips `catalog:` and `workspace:` specifiers
 
 ### Step 10: Clean Install
 
@@ -159,7 +167,7 @@ The action executes as a **single phase** with **16 steps** (implemented in `src
 
 ### Step 11: Format pnpm-workspace.yaml
 
-- Sort arrays alphabetically, sort `configDependencies` keys, sort top-level keys
+- `WorkspaceYaml.format()` sorts arrays, keys, and configDependencies
 - Consistent YAML stringify options (indent: 2, lineWidth: 0, singleQuote: false)
 
 ### Step 12: Run Custom Commands (if specified)
@@ -170,12 +178,12 @@ The action executes as a **single phase** with **16 steps** (implemented in `src
 
 ### Step 13: Capture Lockfile State (After)
 
-- Read updated `pnpm-lock.yaml`
+- `Lockfile.capture()` reads updated `pnpm-lock.yaml`
 - Store snapshot for comparison
 
 ### Step 14: Detect Changes
 
-- Compare lockfile snapshots (before vs after)
+- `Lockfile.compare()` compares snapshots (before vs after)
 - Combine pnpm upgrade, config updates, and regular updates into `allUpdates`
 - Check git status for modified files via `CommandRunner`
 - Exit early if no changes detected
@@ -183,13 +191,12 @@ The action executes as a **single phase** with **16 steps** (implemented in `src
 ### Step 15: Create Changesets (conditional)
 
 - Skipped if `changesets` input is `false` (default: `true`)
-- Detect if `.changeset/` directory exists
-- Create patch changeset for each affected package
+- `Changesets.create()` detects `.changeset/` directory and creates patch changesets
 
 ### Step 16: Commit, Push, and Create PR
 
-- Commit via GitHub API (verified/signed commits via `GitCommit` service)
-- Create/update PR with detailed summary via `GitHubClient`
-- Enable auto-merge if configured (via `AutoMerge.enable()`)
+- `BranchManager.commitChanges()` commits via GitHub API (verified/signed)
+- `Report.createOrUpdatePR()` creates/updates PR with detailed summary
+- Enable auto-merge if configured
 - Update check run with success
 - Write GitHub Actions summary via `ActionOutputs`

@@ -4,8 +4,10 @@
 
 ## Service Architecture
 
-All services come from `@savvy-web/github-action-effects` (v0.4.0). There are no
-custom application services defined in this codebase.
+Services are organized in two tiers:
+
+1. **Library services** from `@savvy-web/github-action-effects` (infrastructure)
+2. **Domain services** defined in `src/services/` (application logic)
 
 ### Library Services
 
@@ -14,8 +16,7 @@ custom application services defined in this codebase.
 - `ActionOutputs` - Set outputs (`set`), mask secrets (`setSecret`), write job
   summary (`summary`), fail the action (`setFailed`)
 - `ActionLoggerLayer` - Routes `Effect.logDebug` to `core.debug()`, `Effect.logInfo`
-  to `core.info()`, `Effect.logWarning` to `core.warning()`, `Effect.logError` to
-  `core.error()` automatically
+  to `core.info()`, etc.
 - `NodeContext.layer` - Platform layer provided automatically
 
 **Token lifecycle:**
@@ -23,22 +24,33 @@ custom application services defined in this codebase.
 - `GitHubApp` / `GitHubAppLive` - Generate and automatically revoke GitHub App tokens
   via `withToken(appId, privateKey, callback)`
 
-**Domain services** (constructed from token inside `GitHubApp.withToken()` callback):
+**Infrastructure services** (constructed from token inside `GitHubApp.withToken()`):
 
 - `GitHubClient` / `GitHubClientLive(token)` - Octokit wrapper with `rest()` and `repo`
 - `GitBranch` / `GitBranchLive` - Branch CRUD: `exists`, `create`, `delete`, `getSha`
 - `GitCommit` / `GitCommitLive` - Git Data API: `createTree`, `createCommit`, `updateRef`
 - `CheckRun` / `CheckRunLive` - Check run lifecycle: `withCheckRun`, `complete`
-- `AutoMerge` - Enable auto-merge via GraphQL
+- `PullRequest` / `PullRequestLive` - PR CRUD + auto-merge via GraphQL
+- `NpmRegistry` / `NpmRegistryLive` - npm registry queries (version, integrity)
 - `CommandRunner` / `CommandRunnerLive` - Shell command execution: `exec`, `execCapture`
 - `DryRun` / `DryRunLive(flag)` - Dry-run mode flag
 
-**Declarative input parsing:**
+### Domain Services (src/services/)
 
-- `Action.parseInputs(schema, validator?)` - Parse and validate action inputs with
-  Effect Schema, replacing the deleted `parseInputs` module
+Each domain service uses `Context.Tag` + `Layer`:
 
-### Layer Composition in main.ts
+- `BranchManager` / `BranchManagerLive` - Depends on `GitBranch`, `GitCommit`, `CommandRunner`
+- `PnpmUpgrade` / `PnpmUpgradeLive` - Depends on `CommandRunner`
+- `ConfigDeps` / `ConfigDepsLive` - Depends on `NpmRegistry`
+- `RegularDeps` / `RegularDepsLive` - Depends on `NpmRegistry`
+- `Report` / `ReportLive` - Depends on `PullRequest`
+
+Stateless services (`Lockfile`, `Changesets`, `WorkspaceYaml`) export standalone
+helper functions used directly by `main.ts`.
+
+### Layer Composition
+
+All layers are wired together in `src/layers/app.ts`:
 
 ```typescript
 // Action.run provides plumbing services + GitHubApp
@@ -48,20 +60,14 @@ Action.run(program, GitHubAppLive);
 const ghApp = yield* GitHubApp;
 yield* ghApp.withToken(appId, privateKey, (token) =>
  Effect.gen(function* () {
-  const ghClient = GitHubClientLive(token);
-  const appLayer = Layer.mergeAll(
-   ghClient,
-   GitBranchLive.pipe(Layer.provide(ghClient)),
-   GitCommitLive.pipe(Layer.provide(ghClient)),
-   CheckRunLive.pipe(Layer.provide(ghClient)),
-   GitHubGraphQLLive.pipe(Layer.provide(ghClient)),
-   CommandRunnerLive,
-   DryRunLive(dryRun),
-  );
+  const appLayer = makeAppLayer(token, dryRun);
   yield* Effect.provide(innerProgram(inputs, dryRun), appLayer);
  }),
 );
 ```
+
+`makeAppLayer` separates library layers from domain layers, then uses
+`Layer.provideMerge` to wire domain layers on top of library layers.
 
 ## Error Handling Strategy
 
@@ -135,19 +141,20 @@ yield* checkRunService.withCheckRun(name, headSha, (checkRunId) =>
 
 ## Running the Effect Program
 
-The single entry point uses `Action.run()` with `GitHubAppLive`:
-
 ```typescript
 import { Action, ActionOutputs, GitHubApp, GitHubAppLive } from "@savvy-web/github-action-effects";
 import { Duration, Effect } from "effect";
+import { makeAppLayer } from "./layers/app.js";
 
 export const program = Effect.gen(function* () {
- // Parse inputs declaratively
  const inputs = yield* Action.parseInputs({ ... });
-
- // Token lifecycle
  const ghApp = yield* GitHubApp;
- yield* ghApp.withToken(inputs["app-id"], inputs["app-private-key"], (token) => ...);
+ yield* ghApp.withToken(inputs["app-id"], inputs["app-private-key"], (token) =>
+  Effect.gen(function* () {
+   const appLayer = makeAppLayer(token, inputs["dry-run"]);
+   yield* Effect.provide(innerProgram(inputs, inputs["dry-run"]), appLayer);
+  }),
+ );
 });
 
 Action.run(
