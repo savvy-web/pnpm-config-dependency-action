@@ -426,17 +426,6 @@ const innerProgram = (
 		appLayer,
 	);
 
-// Run the main action
-Action.run(
-	program.pipe(
-		Effect.catchAll((error) =>
-			Effect.gen(function* () {
-				const outs = yield* ActionOutputs;
-				const message = error instanceof Error ? error.message : String(error);
-				yield* outs.setFailed(`Action failed: ${message}`);
-			}),
-		),
-	),
-	GitHubAppLive,
-);
+// Run the main action — Action.run handles all error formatting via formatCause
+Action.run(program, GitHubAppLive);
 /* v8 ignore stop */
