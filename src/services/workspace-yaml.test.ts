@@ -4,11 +4,8 @@ import { join } from "node:path";
 import { Effect, LogLevel, Logger } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-const runEffect = <A>(effect: Effect.Effect<A>) =>
-	Effect.runPromise(effect.pipe(Logger.withMinimumLogLevel(LogLevel.None)));
-
 import type { PnpmWorkspaceContent } from "./workspace-yaml.js";
-import { WorkspaceYaml, WorkspaceYamlLive, getConfigDependencyVersion, sortContent } from "./workspace-yaml.js";
+import { WorkspaceYaml, WorkspaceYamlLive, sortContent } from "./workspace-yaml.js";
 
 describe("sortContent", () => {
 	it("sorts top-level keys alphabetically with packages first", () => {
@@ -223,44 +220,6 @@ describe("WorkspaceYaml.read", () => {
 				return yield* ws.read(tempDir);
 			}).pipe(Effect.provide(WorkspaceYamlLive), Logger.withMinimumLogLevel(LogLevel.None)),
 		);
-		expect(result).toBeNull();
-	});
-});
-
-describe("getConfigDependencyVersion", () => {
-	let tempDir: string;
-
-	beforeEach(() => {
-		tempDir = mkdtempSync(join(tmpdir(), "config-ver-test-"));
-	});
-
-	afterEach(() => {
-		rmSync(tempDir, { recursive: true, force: true });
-	});
-
-	it("returns version for existing config dependency", async () => {
-		writeFileSync(join(tempDir, "pnpm-workspace.yaml"), `configDependencies:\n  typescript: "5.4.0+sha512-abc123"\n`);
-
-		const result = await runEffect(getConfigDependencyVersion("typescript", tempDir));
-		expect(result).toBe("5.4.0");
-	});
-
-	it("returns null for nonexistent dependency", async () => {
-		writeFileSync(join(tempDir, "pnpm-workspace.yaml"), `configDependencies:\n  typescript: "5.4.0"\n`);
-
-		const result = await runEffect(getConfigDependencyVersion("biome", tempDir));
-		expect(result).toBeNull();
-	});
-
-	it("returns null when no configDependencies key", async () => {
-		writeFileSync(join(tempDir, "pnpm-workspace.yaml"), `packages:\n  - "pkgs/*"\n`);
-
-		const result = await runEffect(getConfigDependencyVersion("typescript", tempDir));
-		expect(result).toBeNull();
-	});
-
-	it("returns null when file does not exist", async () => {
-		const result = await runEffect(getConfigDependencyVersion("typescript", tempDir));
 		expect(result).toBeNull();
 	});
 });

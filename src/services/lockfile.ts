@@ -217,7 +217,7 @@ const findPackagesUsingCatalog = (
 	dependencyName: string,
 	importerToPackage: Map<string, string>,
 ): string[] => {
-	const affectedPackages: string[] = [];
+	const affectedSet = new Set<string>();
 	const catalogSpecifier = catalogName === "default" ? "catalog:" : `catalog:${catalogName}`;
 
 	for (const [importerId, snapshot] of Object.entries(importers ?? {})) {
@@ -231,14 +231,12 @@ const findPackagesUsingCatalog = (
 			const dep = deps[dependencyName];
 			if (dep?.specifier?.startsWith(catalogSpecifier)) {
 				const packageName = importerToPackage.get(importerId) ?? importerId;
-				if (!affectedPackages.includes(packageName)) {
-					affectedPackages.push(packageName);
-				}
+				affectedSet.add(packageName);
 			}
 		}
 	}
 
-	return affectedPackages;
+	return [...affectedSet];
 };
 
 /**

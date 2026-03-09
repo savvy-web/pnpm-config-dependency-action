@@ -89,30 +89,6 @@ export const sortContent = (content: PnpmWorkspaceContent): PnpmWorkspaceContent
 	return result;
 };
 
-/**
- * Get config dependency version from pnpm-workspace.yaml.
- */
-export const getConfigDependencyVersion = (
-	dependency: string,
-	workspaceRoot: string = process.cwd(),
-): Effect.Effect<string | null, FileSystemError> =>
-	Effect.gen(function* () {
-		const content = yield* readWorkspaceYamlImpl(workspaceRoot);
-
-		if (!content?.configDependencies) {
-			return null;
-		}
-
-		const entry = content.configDependencies[dependency];
-		if (!entry) {
-			return null;
-		}
-
-		// Extract version from entry (format: "version+sha512-...")
-		const version = entry.split("+")[0];
-		return version || null;
-	});
-
 // ══════════════════════════════════════════════════════════════════════════════
 // Service Interface
 // ══════════════════════════════════════════════════════════════════════════════

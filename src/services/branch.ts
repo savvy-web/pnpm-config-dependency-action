@@ -97,9 +97,7 @@ const manageBranchImpl = (
 		// Branch exists - delete and recreate from default branch
 		yield* Effect.logInfo(`Branch ${branchName} exists, resetting to ${defaultBranch}`);
 
-		yield* cmd.exec("git", ["fetch", "origin"]);
-
-		// Get the SHA of the default branch
+		// Get the SHA of the default branch (via API, no local fetch needed)
 		const baseSha = yield* branch.getSha(defaultBranch);
 		yield* Effect.logDebug(`Base SHA for ${defaultBranch}: ${baseSha}`);
 

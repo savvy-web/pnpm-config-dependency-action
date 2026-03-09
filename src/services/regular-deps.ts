@@ -60,6 +60,8 @@ const queryLatestVersion = (packageName: string, registry: NpmRegistryService): 
 		return version;
 	});
 
+const DEP_FIELDS = ["dependencies", "devDependencies", "optionalDependencies"] as const;
+
 interface PackageJsonDeps {
 	dependencies?: Record<string, string>;
 	devDependencies?: Record<string, string>;
@@ -76,7 +78,6 @@ const collectMatchingDeps = (
 ): Effect.Effect<Map<string, Array<{ path: string; currentSpecifier: string }>>, FileSystemError> =>
 	Effect.gen(function* () {
 		const depMap = new Map<string, Array<{ path: string; currentSpecifier: string }>>();
-		const depFields = ["dependencies", "devDependencies", "optionalDependencies"] as const;
 
 		for (const pkgPath of packageJsonPaths) {
 			const raw = yield* Effect.try({
@@ -89,7 +90,7 @@ const collectMatchingDeps = (
 				catch: (e) => new FileSystemError({ operation: "read", path: pkgPath, reason: `Invalid JSON: ${e}` }),
 			});
 
-			for (const field of depFields) {
+			for (const field of DEP_FIELDS) {
 				const deps = pkg[field];
 				if (!deps) continue;
 
@@ -131,22 +132,19 @@ const updatePackageJson = (pkgPath: string, updates: Map<string, string>): Effec
 			catch: (e) => new FileSystemError({ operation: "read", path: pkgPath, reason: `Invalid JSON: ${e}` }),
 		});
 
-		const depFields = ["dependencies", "devDependencies", "optionalDependencies"] as const;
 		let changed = false;
 
-		for (const field of depFields) {
+		for (const field of DEP_FIELDS) {
 			const deps = pkg[field];
 			if (!deps) continue;
 
 			for (const [name, newSpecifier] of updates) {
 				if (name in deps) {
 					const current = deps[name];
-					// Only update if the dep exists and is not a catalog/workspace specifier
-					if (current && !current.startsWith("catalog:") && !current.startsWith("workspace:")) {
-						if (current !== newSpecifier) {
-							deps[name] = newSpecifier;
-							changed = true;
-						}
+					// Only update if the dep exists and is a parseable specifier (not catalog:/workspace:)
+					if (current && parseSpecifier(current) && current !== newSpecifier) {
+						deps[name] = newSpecifier;
+						changed = true;
 					}
 				}
 			}
@@ -215,6 +213,12 @@ const updateRegularDepsImpl = (
 
 		yield* Effect.logInfo(`Found ${depMap.size} unique dependencies matching patterns`);
 
+		// Build inverse map for O(1) path-to-name lookup
+		const pathToPackageName = new Map<string, string>(
+			Object.entries(packageInfos).map(([name, info]) => [info.packageJsonPath, name]),
+		);
+		pathToPackageName.set(rootPkgJson, "(root)");
+
 		// Step 3: Query npm for latest versions and compute updates
 		const results: DependencyUpdateResult[] = [];
 		// Track updates per package.json path
@@ -244,9 +248,7 @@ const updateRegularDepsImpl = (
 				fileUpdates.set(entry.path, updates);
 
 				// Derive package name from path
-				const pkgName =
-					Object.entries(packageInfos).find(([, info]) => info.packageJsonPath === entry.path)?.[0] ??
-					(entry.path === rootPkgJson ? "(root)" : entry.path);
+				const pkgName = pathToPackageName.get(entry.path) ?? entry.path;
 
 				results.push({
 					dependency: depName,
