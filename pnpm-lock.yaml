@@ -41,12 +41,6 @@ importers:
       '@octokit/auth-app':
         specifier: ^8.2.0
         version: 8.2.0
-      '@octokit/request':
-        specifier: ^10.0.7
-        version: 10.0.8
-      '@octokit/rest':
-        specifier: ^22.0.1
-        version: 22.0.1
       '@pnpm/catalogs.config':
         specifier: ^1000.0.5
         version: 1000.0.5
@@ -63,8 +57,8 @@ importers:
         specifier: ^1000.2.10
         version: 1000.2.10
       '@savvy-web/github-action-effects':
-        specifier: ^0.4.0
-        version: 0.4.0(56ffc6140b9890a20b03958495271931)
+        specifier: ^0.5.0
+        version: 0.5.0(56ffc6140b9890a20b03958495271931)
       effect:
         specifier: ^3.19.16
         version: 3.19.19
@@ -772,12 +766,6 @@ packages:
     peerDependencies:
       '@octokit/core': '>=6'
 
-  '@octokit/plugin-request-log@6.0.0':
-    resolution: {integrity: sha512-UkOzeEN3W91/eBq9sPZNQ7sUBvYCqYbrrD8gTbBuGtHEuycE4/awMXcYvx6sVYo7LypPhmQwwpUe4Yyu4QZN5Q==}
-    engines: {node: '>= 20'}
-    peerDependencies:
-      '@octokit/core': '>=6'
-
   '@octokit/plugin-rest-endpoint-methods@17.0.0':
     resolution: {integrity: sha512-B5yCyIlOJFPqUUeiD0cnBJwWJO8lkJs5d8+ze9QDP6SvfiXSz1BF+91+0MeI1d2yxgOhU/O+CvtiZ9jSkHhFAw==}
     engines: {node: '>= 20'}
@@ -790,10 +778,6 @@ packages:
 
   '@octokit/request@10.0.8':
     resolution: {integrity: sha512-SJZNwY9pur9Agf7l87ywFi14W+Hd9Jg6Ifivsd33+/bGUQIjNujdFiXII2/qSlN2ybqUHfp5xpekMEjIBTjlSw==}
-    engines: {node: '>= 20'}
-
-  '@octokit/rest@22.0.1':
-    resolution: {integrity: sha512-Jzbhzl3CEexhnivb1iQ0KJ7s5vvjMWcmRtq5aUsKmKDrRW6z3r84ngmiFKFvpZjpiU/9/S6ITPFRpn5s/3uQJw==}
     engines: {node: '>= 20'}
 
   '@octokit/types@16.0.0':
@@ -1147,8 +1131,8 @@ packages:
       '@typescript/native-preview': ^7.0.0-dev.20260124.1
       typescript: ^5.9.3
 
-  '@savvy-web/github-action-effects@0.4.0':
-    resolution: {integrity: sha512-R1ROc1C1K7+t2MPXA1OunqoZvH/EOJuPWR4ORmPDS8QCVFbLQT79NH5QZDkkB8xM9AQr1LhHmxrQQOqq7UplfQ==}
+  '@savvy-web/github-action-effects@0.5.0':
+    resolution: {integrity: sha512-OqNx5HpsQcxF9q2ff2gLJf3NIbdqzgvs+sXcjxAZZr2cUuYonLcMEgFszcOvFiOuan6RJ1Z1O13y39lIH1HA/Q==}
     peerDependencies:
       '@actions/cache': ^4.0.0
       '@actions/core': ^3.0.0
@@ -4068,10 +4052,6 @@ snapshots:
       '@octokit/core': 7.0.6
       '@octokit/types': 16.0.0
 
-  '@octokit/plugin-request-log@6.0.0(@octokit/core@7.0.6)':
-    dependencies:
-      '@octokit/core': 7.0.6
-
   '@octokit/plugin-rest-endpoint-methods@17.0.0(@octokit/core@7.0.6)':
     dependencies:
       '@octokit/core': 7.0.6
@@ -4089,13 +4069,6 @@ snapshots:
       fast-content-type-parse: 3.0.0
       json-with-bigint: 3.5.7
       universal-user-agent: 7.0.3
-
-  '@octokit/rest@22.0.1':
-    dependencies:
-      '@octokit/core': 7.0.6
-      '@octokit/plugin-paginate-rest': 14.0.0(@octokit/core@7.0.6)
-      '@octokit/plugin-request-log': 6.0.0(@octokit/core@7.0.6)
-      '@octokit/plugin-rest-endpoint-methods': 17.0.0(@octokit/core@7.0.6)
 
   '@octokit/types@16.0.0':
     dependencies:
@@ -4424,7 +4397,7 @@ snapshots:
       - bufferutil
       - utf-8-validate
 
-  '@savvy-web/github-action-effects@0.4.0(56ffc6140b9890a20b03958495271931)':
+  '@savvy-web/github-action-effects@0.5.0(56ffc6140b9890a20b03958495271931)':
     dependencies:
       '@actions/core': 3.0.0
       '@effect/platform': 0.94.5(effect@3.19.19)
