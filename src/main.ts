@@ -28,28 +28,21 @@ import {
 	Action,
 	ActionOutputs,
 	CheckRun,
-	CheckRunLive,
 	CommandRunner,
-	CommandRunnerLive,
-	DryRunLive,
-	GitBranchLive,
-	GitCommitLive,
 	GitHubApp,
 	GitHubAppLive,
-	GitHubClientLive,
-	GitHubGraphQLLive,
-	NpmRegistryLive,
-	PullRequestLive,
 } from "@savvy-web/github-action-effects";
-import { Duration, Effect, Layer, Schema } from "effect";
+import type { Layer } from "effect";
+import { Duration, Effect, Schema } from "effect";
+import { makeAppLayer } from "./layers/app.js";
 import type { ChangesetFile, DependencyUpdateResult, PullRequestResult } from "./schemas/domain.js";
-import { BranchManager, BranchManagerLive } from "./services/branch.js";
+import { BranchManager } from "./services/branch.js";
 import { createChangesets } from "./services/changesets.js";
-import { ConfigDeps, ConfigDepsLive } from "./services/config-deps.js";
+import { ConfigDeps } from "./services/config-deps.js";
 import { captureLockfileState, compareLockfiles } from "./services/lockfile.js";
-import { PnpmUpgrade, PnpmUpgradeLive } from "./services/pnpm-upgrade.js";
-import { RegularDeps, RegularDepsLive } from "./services/regular-deps.js";
-import { Report, ReportLive } from "./services/report.js";
+import { PnpmUpgrade } from "./services/pnpm-upgrade.js";
+import { RegularDeps } from "./services/regular-deps.js";
+import { Report } from "./services/report.js";
 import { formatWorkspaceYaml, readWorkspaceYaml } from "./services/workspace-yaml.js";
 
 /**
@@ -169,29 +162,7 @@ export const program = Effect.gen(function* () {
 	yield* ghApp
 		.withToken(inputs["app-id"], inputs["app-private-key"], (token) =>
 			Effect.gen(function* () {
-				// Build all dependent layers from the token
-				const ghClient = GitHubClientLive(token);
-				const ghGraphql = GitHubGraphQLLive.pipe(Layer.provide(ghClient));
-				const npmRegistry = NpmRegistryLive.pipe(Layer.provide(CommandRunnerLive));
-				const gitBranch = GitBranchLive.pipe(Layer.provide(ghClient));
-				const gitCommit = GitCommitLive.pipe(Layer.provide(ghClient));
-				const prLayer = PullRequestLive.pipe(Layer.provide(Layer.merge(ghClient, ghGraphql)));
-				const appLayer = Layer.mergeAll(
-					ghClient,
-					gitBranch,
-					gitCommit,
-					CheckRunLive.pipe(Layer.provide(ghClient)),
-					prLayer,
-					npmRegistry,
-					PnpmUpgradeLive.pipe(Layer.provide(CommandRunnerLive)),
-					ConfigDepsLive.pipe(Layer.provide(npmRegistry)),
-					RegularDepsLive.pipe(Layer.provide(npmRegistry)),
-					BranchManagerLive.pipe(Layer.provide(Layer.mergeAll(gitBranch, gitCommit, CommandRunnerLive))),
-					ReportLive.pipe(Layer.provide(prLayer)),
-					CommandRunnerLive,
-					DryRunLive(dryRun),
-				);
-
+				const appLayer = makeAppLayer(token, dryRun);
 				yield* innerProgram(inputs, dryRun, appLayer);
 			}),
 		)
