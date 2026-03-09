@@ -463,6 +463,7 @@ export const program = Effect.gen(function* () {
 			changesets: { schema: Schema.Boolean, default: true },
 			"auto-merge": { schema: Schema.Literal("", "merge", "squash", "rebase"), default: "" as const },
 			"dry-run": { schema: Schema.Boolean, default: false },
+			timeout: { schema: Schema.NumberFromString, default: "180" },
 		},
 		(parsed) => {
 			// Cross-validate: at least one update type must be active
@@ -502,23 +503,31 @@ export const program = Effect.gen(function* () {
 
 	// Step 2: Generate GitHub App token and run the main workflow
 	const ghApp = yield* GitHubApp;
-	yield* ghApp.withToken(inputs["app-id"], inputs["app-private-key"], (token) =>
-		Effect.gen(function* () {
-			// Build all dependent layers from the token
-			const ghClient = GitHubClientLive(token);
-			const appLayer = Layer.mergeAll(
-				ghClient,
-				GitBranchLive.pipe(Layer.provide(ghClient)),
-				GitCommitLive.pipe(Layer.provide(ghClient)),
-				CheckRunLive.pipe(Layer.provide(ghClient)),
-				GitHubGraphQLLive.pipe(Layer.provide(ghClient)),
-				CommandRunnerLive,
-				DryRunLive(dryRun),
-			);
+	const timeoutSeconds = inputs.timeout;
+	yield* ghApp
+		.withToken(inputs["app-id"], inputs["app-private-key"], (token) =>
+			Effect.gen(function* () {
+				// Build all dependent layers from the token
+				const ghClient = GitHubClientLive(token);
+				const appLayer = Layer.mergeAll(
+					ghClient,
+					GitBranchLive.pipe(Layer.provide(ghClient)),
+					GitCommitLive.pipe(Layer.provide(ghClient)),
+					CheckRunLive.pipe(Layer.provide(ghClient)),
+					GitHubGraphQLLive.pipe(Layer.provide(ghClient)),
+					CommandRunnerLive,
+					DryRunLive(dryRun),
+				);
 
-			yield* Effect.provide(innerProgram(inputs, dryRun), appLayer);
-		}),
-	);
+				yield* Effect.provide(innerProgram(inputs, dryRun), appLayer);
+			}),
+		)
+		.pipe(
+			Effect.timeoutFail({
+				duration: Duration.seconds(timeoutSeconds),
+				onTimeout: () => new Error(`Action timed out after ${timeoutSeconds} seconds`),
+			}),
+		);
 });
 
 /**
@@ -763,10 +772,6 @@ const innerProgram = (
 // Run the main action
 Action.run(
 	program.pipe(
-		Effect.timeoutFail({
-			duration: Duration.seconds(180),
-			onTimeout: () => new Error("Action timed out after 180 seconds"),
-		}),
 		Effect.catchAll((error) =>
 			Effect.gen(function* () {
 				const outs = yield* ActionOutputs;
