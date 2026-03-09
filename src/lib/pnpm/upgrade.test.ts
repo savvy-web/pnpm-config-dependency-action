@@ -153,34 +153,34 @@ describe("formatPnpmVersion", () => {
 describe("resolveLatestInRange", () => {
 	const versionList = ["10.27.0", "10.28.0", "10.28.2", "10.29.0", "10.29.1", "11.0.0", "11.0.0-beta.1"];
 
-	it("finds the highest version satisfying ^current", () => {
-		const result = resolveLatestInRange(versionList, "10.28.2");
+	it("finds the highest version satisfying ^current", async () => {
+		const result = await Effect.runPromise(resolveLatestInRange(versionList, "10.28.2"));
 		expect(result).toBe("10.29.1");
 	});
 
-	it("returns current if it is the highest in range", () => {
-		const result = resolveLatestInRange(versionList, "10.29.1");
+	it("returns current if it is the highest in range", async () => {
+		const result = await Effect.runPromise(resolveLatestInRange(versionList, "10.29.1"));
 		expect(result).toBe("10.29.1");
 	});
 
-	it("skips pre-release versions", () => {
-		const result = resolveLatestInRange(versionList, "11.0.0");
+	it("skips pre-release versions", async () => {
+		const result = await Effect.runPromise(resolveLatestInRange(versionList, "11.0.0"));
 		// Only 11.0.0 is stable in the 11.x range
 		expect(result).toBe("11.0.0");
 	});
 
-	it("returns null when no versions match the range", () => {
-		const result = resolveLatestInRange(versionList, "12.0.0");
+	it("returns null when no versions match the range", async () => {
+		const result = await Effect.runPromise(resolveLatestInRange(versionList, "12.0.0"));
 		expect(result).toBeNull();
 	});
 
-	it("returns null for empty versions array", () => {
-		const result = resolveLatestInRange([], "10.28.2");
+	it("returns null for empty versions array", async () => {
+		const result = await Effect.runPromise(resolveLatestInRange([], "10.28.2"));
 		expect(result).toBeNull();
 	});
 
-	it("does not jump to next major version", () => {
-		const result = resolveLatestInRange(versionList, "10.27.0");
+	it("does not jump to next major version", async () => {
+		const result = await Effect.runPromise(resolveLatestInRange(versionList, "10.27.0"));
 		expect(result).toBe("10.29.1");
 	});
 });

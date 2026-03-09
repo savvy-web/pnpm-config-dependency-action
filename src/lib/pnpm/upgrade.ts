@@ -9,9 +9,8 @@
  */
 
 import { readFileSync, writeFileSync } from "node:fs";
-import { CommandRunner } from "@savvy-web/github-action-effects";
+import { CommandRunner, SemverResolver } from "@savvy-web/github-action-effects";
 import { Effect } from "effect";
-import * as semver from "semver";
 
 import { FileSystemError } from "../errors/types.js";
 
@@ -79,7 +78,7 @@ export const parsePnpmVersion = (raw: string, stripPnpmPrefix = false): ParsedPn
 	}
 
 	// Validate as semver
-	if (!semver.valid(value)) return null;
+	if (!/^\d+\.\d+\.\d+/.test(value)) return null;
 
 	return { version: value, hasCaret, hasSha };
 };
@@ -98,13 +97,27 @@ export const formatPnpmVersion = (version: string, hasCaret: boolean): string =>
  * @param current - The current version (used to construct `^current` range)
  * @returns The highest version satisfying `^current`, or null if none found
  */
-export const resolveLatestInRange = (versions: ReadonlyArray<string>, current: string): string | null => {
-	// Filter out pre-release versions
-	const stableVersions = versions.filter((v) => !semver.prerelease(v));
+export const resolveLatestInRange = (
+	versions: ReadonlyArray<string>,
+	current: string,
+): Effect.Effect<string | null, never, never> =>
+	Effect.gen(function* () {
+		// Filter out pre-release versions
+		const stableVersions: string[] = [];
+		for (const v of versions) {
+			const parsed = yield* SemverResolver.parse(v).pipe(Effect.option);
+			if (parsed._tag === "Some" && !parsed.value.prerelease) {
+				stableVersions.push(v);
+			}
+		}
 
-	const result = semver.maxSatisfying(stableVersions, `^${current}`);
-	return result;
-};
+		if (stableVersions.length === 0) return null;
+
+		const result = yield* SemverResolver.latestInRange(stableVersions, `^${current}`).pipe(
+			Effect.catchAll(() => Effect.succeed(null as string | null)),
+		);
+		return result;
+	});
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Internal Helpers
@@ -177,13 +190,18 @@ export const upgradePnpm = (
 		});
 
 		// Step 5: Resolve latest version for each field
-		const pmResolved = packageManagerParsed ? resolveLatestInRange(allVersions, packageManagerParsed.version) : null;
-		const deResolved = devEnginesParsed ? resolveLatestInRange(allVersions, devEnginesParsed.version) : null;
+		const pmResolved = packageManagerParsed
+			? yield* resolveLatestInRange(allVersions, packageManagerParsed.version)
+			: null;
+		const deResolved = devEnginesParsed ? yield* resolveLatestInRange(allVersions, devEnginesParsed.version) : null;
 
 		// Determine the highest resolved version across both fields
 		let resolved: string | null = null;
 		if (pmResolved && deResolved) {
-			resolved = semver.gt(pmResolved, deResolved) ? pmResolved : deResolved;
+			const cmp = yield* SemverResolver.compare(pmResolved, deResolved).pipe(
+				Effect.catchAll(() => Effect.succeed(0 as -1 | 0 | 1)),
+			);
+			resolved = cmp > 0 ? pmResolved : deResolved;
 		} else {
 			resolved = pmResolved ?? deResolved;
 		}
@@ -194,14 +212,17 @@ export const upgradePnpm = (
 		}
 
 		// Determine the current version (the highest between the two fields)
-		const currentVersion = (() => {
+		const currentVersion = yield* Effect.gen(function* () {
 			const pmVersion = packageManagerParsed?.version;
 			const deVersion = devEnginesParsed?.version;
 			if (pmVersion && deVersion) {
-				return semver.gt(pmVersion, deVersion) ? pmVersion : deVersion;
+				const cmp = yield* SemverResolver.compare(pmVersion, deVersion).pipe(
+					Effect.catchAll(() => Effect.succeed(0 as -1 | 0 | 1)),
+				);
+				return cmp > 0 ? pmVersion : deVersion;
 			}
 			return pmVersion ?? deVersion ?? resolved;
-		})();
+		});
 
 		// Check if already up-to-date
 		if (resolved === currentVersion) {

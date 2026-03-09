@@ -56,7 +56,6 @@
 		"@pnpm/workspace.read-manifest": "^1000.2.10",
 		"@savvy-web/github-action-effects": "^0.5.0",
 		"effect": "^3.19.16",
-		"semver": "^7.7.4",
 		"workspace-tools": "^0.41.0",
 		"yaml": "^2.8.2"
 	},
@@ -65,8 +64,7 @@
 		"@savvy-web/commitlint": "^0.4.0",
 		"@savvy-web/github-action-builder": "^0.2.1",
 		"@savvy-web/lint-staged": "^0.5.0",
-		"@savvy-web/vitest": "^0.2.0",
-		"@types/semver": "^7.7.1"
+		"@savvy-web/vitest": "^0.2.0"
 	},
 	"packageManager": "pnpm@10.30.3+sha512.c961d1e0a2d8e354ecaa5166b822516668b7f44cb5bd95122d590dd81922f606f5473b6d23ec4a5be05e7fcd18e8488d47d978bbe981872f1145d06e9a740017",
 	"devEngines": {
