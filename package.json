@@ -20,9 +20,9 @@
 	},
 	"type": "module",
 	"scripts": {
-		"build": "turbo run build:prod --log-order=grouped",
+		"build": "turbo run build:prod --log-order=grouped --output-logs=full --log-prefix=none",
 		"build:prod": "github-action-builder build",
-		"ci:build": "CI=\"true\" turbo run build:prod --log-order=grouped --output-logs=full",
+		"ci:build": "CI=\"true\" turbo run build:prod --log-order=grouped --output-logs=full --log-prefix=none",
 		"ci:test": "CI=\"true\" vitest run --coverage",
 		"ci:version": "savvy-changesets version && biome format --write .",
 		"commit:check": "savvy-commit check",

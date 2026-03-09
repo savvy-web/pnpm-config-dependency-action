@@ -23,9 +23,9 @@
  */
 
 import { context } from "@actions/github";
-import type { ActionInputError } from "@savvy-web/github-action-effects";
 import {
 	Action,
+	ActionInputError,
 	ActionOutputs,
 	CheckRun,
 	CommandRunner,
@@ -127,12 +127,11 @@ export const program = Effect.gen(function* () {
 			const hasPnpm = parsed["update-pnpm"];
 			if (!hasConfig && !hasDeps && !hasPnpm) {
 				return Effect.fail(
-					new (class extends Error {
-						readonly _tag = "ActionInputError" as const;
-						readonly inputName = "config-dependencies";
-						readonly reason = "At least one update type must be active";
-						readonly rawValue = undefined;
-					})() as unknown as ActionInputError,
+					new ActionInputError({
+						inputName: "config-dependencies",
+						reason: "At least one update type must be active",
+						rawValue: undefined,
+					}),
 				);
 			}
 			return Effect.succeed(parsed);
