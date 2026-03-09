@@ -17,9 +17,11 @@ on:
         description: Logging verbosity
         type: choice
         options:
+          - auto
           - info
+          - verbose
           - debug
-        default: debug
+        default: auto
 concurrency:
   group: pnpm-update-${{ github.ref }}
   cancel-in-progress: true

@@ -58,6 +58,15 @@ inputs:
       Prevents the action from hanging indefinitely on slow installs or commands.
     required: false
     default: "180"
+  log-level:
+    description: |
+      Log verbosity level.
+      - auto: debug when ACTIONS_STEP_DEBUG is enabled, info otherwise
+      - info: buffered outcome summaries only
+      - verbose: unbuffered operation milestones
+      - debug: full command output and internal state
+    required: false
+    default: auto
   auto-merge:
     description: |
       Enable auto-merge on the dependency update PR.
