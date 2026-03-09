@@ -10,7 +10,7 @@
  */
 
 import { existsSync, writeFileSync } from "node:fs";
-import { CommandRunner } from "@savvy-web/github-action-effects";
+import { NpmRegistry } from "@savvy-web/github-action-effects";
 import { Effect } from "effect";
 import { stringify } from "yaml";
 import type { DependencyUpdateResult } from "../../types/index.js";
@@ -60,33 +60,12 @@ export const parseConfigEntry = (entry: string): { version: string; hash: string
  */
 const queryConfigVersion = (
 	packageName: string,
-): Effect.Effect<{ version: string; integrity: string } | null, never, CommandRunner> =>
+): Effect.Effect<{ version: string; integrity: string } | null, never, NpmRegistry> =>
 	Effect.gen(function* () {
-		const runner = yield* CommandRunner;
-
-		const result = yield* runner
-			.execCapture("sh", ["-c", `npm view ${packageName}@latest version dist.integrity --json`])
-			.pipe(Effect.catchAll(() => Effect.succeed(null)));
-
-		if (result === null) return null;
-
-		try {
-			const parsed = JSON.parse(result.stdout);
-			if (
-				parsed &&
-				typeof parsed === "object" &&
-				typeof parsed.version === "string" &&
-				typeof parsed["dist.integrity"] === "string"
-			) {
-				return {
-					version: parsed.version,
-					integrity: parsed["dist.integrity"],
-				};
-			}
-			return null;
-		} catch {
-			return null;
-		}
+		const registry = yield* NpmRegistry;
+		const info = yield* registry.getPackageInfo(packageName).pipe(Effect.catchAll(() => Effect.succeed(null)));
+		if (!info || !info.integrity) return null;
+		return { version: info.version, integrity: info.integrity };
 	});
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -103,7 +82,7 @@ const queryConfigVersion = (
 export const updateConfigDeps = (
 	deps: ReadonlyArray<string>,
 	workspaceRoot: string = process.cwd(),
-): Effect.Effect<ReadonlyArray<DependencyUpdateResult>, never, CommandRunner> =>
+): Effect.Effect<ReadonlyArray<DependencyUpdateResult>, never, NpmRegistry> =>
 	Effect.gen(function* () {
 		if (deps.length === 0) return [];
 
