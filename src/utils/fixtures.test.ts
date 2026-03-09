@@ -1,10 +1,18 @@
 /**
  * Shared test fixtures for unit tests.
  *
- * @module __test__/fixtures
+ * @module utils/fixtures.test
  */
 
-import type { ChangesetFile, DependencyUpdateResult, LockfileChange, PullRequestResult } from "../../schemas/domain.js";
+import { describe, expect, it } from "vitest";
+import type { ChangesetFile, DependencyUpdateResult, LockfileChange, PullRequestResult } from "../schemas/domain.js";
+
+describe("fixtures", () => {
+	it("exports valid fixture types", () => {
+		expect(configUpdate.type).toBe("config");
+		expect(regularUpdate.type).toBe("regular");
+	});
+});
 
 // ══════════════════════════════════════════════════════════════════════════════
 // DependencyUpdateResult fixtures

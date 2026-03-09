@@ -2,8 +2,8 @@ import type { CommandRunnerError } from "@savvy-web/github-action-effects";
 import { CommandRunner, PullRequestTest } from "@savvy-web/github-action-effects";
 import { Effect, Layer, LogLevel, Logger } from "effect";
 import { describe, expect, it } from "vitest";
-import { pnpmUpgradeUpdate } from "./lib/__test__/fixtures.js";
 import { createOrUpdatePR, generatePRBody, runCommands } from "./main.js";
+import { pnpmUpgradeUpdate } from "./utils/fixtures.test.js";
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Test Helpers

@@ -9,50 +9,17 @@
  */
 
 import { readFileSync, writeFileSync } from "node:fs";
-import { join, matchesGlob } from "node:path";
+import { join } from "node:path";
 import { NpmRegistry } from "@savvy-web/github-action-effects";
 import { Effect } from "effect";
 import { getPackageInfosAsync } from "workspace-tools";
 import { FileSystemError } from "../../errors/errors.js";
 import type { DependencyUpdateResult } from "../../schemas/domain.js";
-import { detectIndent } from "./upgrade.js";
+import { matchesPattern, parseSpecifier } from "../../utils/deps.js";
+import { detectIndent } from "../../utils/pnpm.js";
 
-// ══════════════════════════════════════════════════════════════════════════════
-// Pure Helpers (exported for testing)
-// ══════════════════════════════════════════════════════════════════════════════
-
-/**
- * Check if a dependency name matches a glob pattern.
- *
- * Uses Node's native `path.matchesGlob` for safe pattern matching
- * without regex metacharacter injection issues.
- *
- * - Exact match: `effect` matches `effect`
- * - Scoped wildcard: `@savvy-web/*` matches `@savvy-web/changesets`
- * - Bare wildcard: `*` matches anything
- */
-export const matchesPattern = (depName: string, pattern: string): boolean => {
-	return matchesGlob(depName, pattern);
-};
-
-/**
- * Parse a version specifier into prefix and version.
- *
- * Returns null for catalog: and workspace: specifiers (should be skipped).
- */
-export const parseSpecifier = (specifier: string): { prefix: string; version: string } | null => {
-	if (specifier.startsWith("catalog:")) return null;
-	if (specifier.startsWith("workspace:")) return null;
-
-	// Match optional prefix (^ or ~) followed by a semver-like version
-	const match = specifier.match(/^(\^|~)?(\d+\.\d+\.\d+.*)$/);
-	if (!match) return null;
-
-	return {
-		prefix: match[1] ?? "",
-		version: match[2],
-	};
-};
+// Re-export for backwards compatibility
+export { matchesPattern, parseSpecifier };
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Internal Helpers

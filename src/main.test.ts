@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-
+import { cleanVersion, generateCommitMessage, generatePRBody, generateSummary, npmUrl } from "./main.js";
 import {
 	configUpdate,
 	configUpdateNew,
@@ -10,8 +10,7 @@ import {
 	regularUpdateGlob,
 	regularUpdates,
 	rootChangeset,
-} from "./lib/__test__/fixtures.js";
-import { cleanVersion, generateCommitMessage, generatePRBody, generateSummary, npmUrl } from "./main.js";
+} from "./utils/fixtures.test.js";
 
 describe("cleanVersion", () => {
 	it("strips +sha512-... suffix", () => {

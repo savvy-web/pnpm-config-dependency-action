@@ -15,39 +15,11 @@ import { Effect } from "effect";
 import { stringify } from "yaml";
 import { FileSystemError } from "../../errors/errors.js";
 import type { DependencyUpdateResult } from "../../schemas/domain.js";
+import { parseConfigEntry } from "../../utils/deps.js";
 import { STRINGIFY_OPTIONS, readWorkspaceYaml, sortContent } from "./format.js";
 
-// ══════════════════════════════════════════════════════════════════════════════
-// Pure Helpers (exported for testing)
-// ══════════════════════════════════════════════════════════════════════════════
-
-/**
- * Parse a config dependency entry from pnpm-workspace.yaml.
- *
- * Config dependency entries have the format `version+sha512-base64hash`
- * or just `version` (no hash). Cannot split on `+` naively because
- * the base64 hash itself contains `+` characters.
- *
- * @example
- * parseConfigEntry("0.6.3+sha512-abc==") // { version: "0.6.3", hash: "sha512-abc==" }
- * parseConfigEntry("0.6.3")              // { version: "0.6.3", hash: null }
- */
-export const parseConfigEntry = (entry: string): { version: string; hash: string | null } | null => {
-	if (!entry || entry.trim().length === 0) return null;
-
-	// Find the first occurrence of "+sha" which marks the boundary
-	// between version and integrity hash
-	const shaIndex = entry.indexOf("+sha");
-	if (shaIndex === -1) {
-		// No hash suffix — entry is just a version
-		return { version: entry, hash: null };
-	}
-
-	return {
-		version: entry.substring(0, shaIndex),
-		hash: entry.substring(shaIndex + 1), // skip the "+"
-	};
-};
+// Re-export for backwards compatibility
+export { parseConfigEntry };
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Internal Helpers

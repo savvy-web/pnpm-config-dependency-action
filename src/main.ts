@@ -53,6 +53,7 @@ import { formatWorkspaceYaml, readWorkspaceYaml } from "./lib/pnpm/format.js";
 import { updateRegularDeps } from "./lib/pnpm/regular.js";
 import { upgradePnpm } from "./lib/pnpm/upgrade.js";
 import type { ChangesetFile, DependencyUpdateResult, PullRequestResult } from "./schemas/domain.js";
+import { cleanVersion, npmUrl } from "./utils/markdown.js";
 
 /**
  * Result of running custom commands.
@@ -184,19 +185,8 @@ ${updates.map((u) => `- ${u.dependency}: ${u.from ?? "new"} -> ${u.to}`).join("\
 Signed-off-by: ${botName} <${botEmail}>`;
 };
 
-/**
- * Generate npm package URL.
- */
-export const npmUrl = (pkg: string): string => `https://www.npmjs.com/package/${pkg}`;
-
-/**
- * Extract clean version from pnpm version string (removes hash suffix).
- */
-export const cleanVersion = (version: string | null): string | null => {
-	if (!version) return null;
-	// Remove +sha512-... suffix if present
-	return version.split("+")[0];
-};
+// Re-export for backwards compatibility with tests
+export { cleanVersion, npmUrl };
 
 /**
  * Generate PR body with dependency changes (Dependabot-style formatting).
