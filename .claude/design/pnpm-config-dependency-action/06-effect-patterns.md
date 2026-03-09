@@ -4,135 +4,70 @@
 
 ## Service Architecture
 
-The action uses Effect's Service and Layer system for clean dependency injection:
+Services are organized in two tiers:
+
+1. **Library services** from `@savvy-web/github-action-effects` (infrastructure)
+2. **Domain services** defined in `src/services/` (application logic)
+
+### Library Services
+
+**Action plumbing** (provided by `Action.run()` automatically):
+
+- `ActionOutputs` - Set outputs (`set`), mask secrets (`setSecret`), write job
+  summary (`summary`), fail the action (`setFailed`)
+- `ActionLoggerLayer` - Routes `Effect.logDebug` to `core.debug()`, `Effect.logInfo`
+  to `core.info()`, etc.
+- `NodeContext.layer` - Platform layer provided automatically
+
+**Token lifecycle:**
+
+- `GitHubApp` / `GitHubAppLive` - Generate and automatically revoke GitHub App tokens
+  via `withToken(appId, privateKey, callback)`
+
+**Infrastructure services** (constructed from token inside `GitHubApp.withToken()`):
+
+- `GitHubClient` / `GitHubClientLive(token)` - Octokit wrapper with `rest()` and `repo`
+- `GitBranch` / `GitBranchLive` - Branch CRUD: `exists`, `create`, `delete`, `getSha`
+- `GitCommit` / `GitCommitLive` - Git Data API: `createTree`, `createCommit`, `updateRef`
+- `CheckRun` / `CheckRunLive` - Check run lifecycle: `withCheckRun`, `complete`
+- `PullRequest` / `PullRequestLive` - PR CRUD + auto-merge via GraphQL
+- `NpmRegistry` / `NpmRegistryLive` - npm registry queries (version, integrity)
+- `CommandRunner` / `CommandRunnerLive` - Shell command execution: `exec`, `execCapture`
+- `DryRun` / `DryRunLive(flag)` - Dry-run mode flag
+
+### Domain Services (src/services/)
+
+Each domain service uses `Context.Tag` + `Layer`:
+
+- `BranchManager` / `BranchManagerLive` - Depends on `GitBranch`, `GitCommit`, `CommandRunner`
+- `PnpmUpgrade` / `PnpmUpgradeLive` - Depends on `CommandRunner`
+- `ConfigDeps` / `ConfigDepsLive` - Depends on `NpmRegistry`
+- `RegularDeps` / `RegularDepsLive` - Depends on `NpmRegistry`
+- `Report` / `ReportLive` - Depends on `PullRequest`
+
+Stateless services (`Lockfile`, `Changesets`, `WorkspaceYaml`) export standalone
+helper functions used directly by `main.ts`.
+
+### Layer Composition
+
+All layers are wired together in `src/layers/app.ts`:
 
 ```typescript
-import { Context, Effect, Layer } from "effect";
-import { Command } from "@effect/platform";
-import { NodeContext } from "@effect/platform-node";
+// Action.run provides plumbing services + GitHubApp
+Action.run(program, GitHubAppLive);
 
-// ══════════════════════════════════════════════════════════════════════════════
-// Service Definitions (Tags)
-// ══════════════════════════════════════════════════════════════════════════════
-
-/** GitHub API client service */
-class GitHubClient extends Context.Tag("GitHubClient")<
- GitHubClient,
- {
-  readonly createBranch: (name: string, sha: string) => Effect.Effect<void, GitHubApiError>;
-  readonly createPR: (data: PRData) => Effect.Effect<PullRequest, GitHubApiError>;
-  readonly createCheckRun: (name: string) => Effect.Effect<CheckRun, GitHubApiError>;
-  readonly enableAutoMerge: (nodeId: string, method: "MERGE" | "SQUASH" | "REBASE") => Effect.Effect<void, GitHubApiError>;
- }
->() {}
-
-/** pnpm command executor service */
-class PnpmExecutor extends Context.Tag("PnpmExecutor")<
- PnpmExecutor,
- {
-  readonly addConfig: (dep: string) => Effect.Effect<DependencyUpdateResult, PnpmError>;
-  readonly update: (pattern: string) => Effect.Effect<DependencyUpdateResult, PnpmError>;
-  readonly install: () => Effect.Effect<void, PnpmError>;
-  readonly run: (command: string) => Effect.Effect<string, PnpmError>; // Generic shell command execution
- }
->() {}
-
-/** Git command executor service */
-class GitExecutor extends Context.Tag("GitExecutor")<
- GitExecutor,
- {
-  readonly checkout: (branch: string) => Effect.Effect<void, GitError>;
-  readonly commit: (message: string) => Effect.Effect<void, GitError>;
-  readonly push: (branch: string, force?: boolean) => Effect.Effect<void, GitError>;
-  readonly status: () => Effect.Effect<GitStatus, GitError>;
- }
->() {}
-
-// ══════════════════════════════════════════════════════════════════════════════
-// Layer Implementations
-// ══════════════════════════════════════════════════════════════════════════════
-
-/** Create PnpmExecutor using @effect/platform Command */
-const PnpmExecutorLive = Layer.effect(
- PnpmExecutor,
+// Inside program:
+const ghApp = yield* GitHubApp;
+yield* ghApp.withToken(appId, privateKey, (token) =>
  Effect.gen(function* () {
-  return {
-   addConfig: (dep) =>
-    Effect.gen(function* () {
-     const result = yield* Command.make("pnpm", "add", "--config", dep).pipe(
-      Command.string,
-      Effect.mapError((e) => new PnpmError({ command: "add --config", dependency: dep, ...e }))
-     );
-     return parseUpdateResult(result, dep, "config");
-    }),
-
-   update: (pattern) =>
-    Effect.gen(function* () {
-     const result = yield* Command.make("pnpm", "up", pattern, "--latest").pipe(
-      Command.string,
-      Effect.mapError((e) => new PnpmError({ command: "up --latest", dependency: pattern, ...e }))
-     );
-     return parseUpdateResult(result, pattern, "regular");
-    }),
-
-   install: () =>
-    Command.make("pnpm", "install").pipe(
-     Command.exitCode,
-     Effect.filterOrFail(
-      (code) => code === 0,
-      () => new PnpmError({ command: "install", exitCode: 1, stderr: "Install failed" })
-     ),
-     Effect.asVoid
-    )
-  };
- })
+  const appLayer = makeAppLayer(token, dryRun);
+  yield* Effect.provide(innerProgram(inputs, dryRun), appLayer);
+ }),
 );
-
-/** Create GitHubClient from token */
-const GitHubClientLive = (token: string) =>
- Layer.succeed(GitHubClient, {
-  createBranch: (name, sha) =>
-   Effect.tryPromise({
-    try: () => octokit.rest.git.createRef({ ...context.repo, ref: `refs/heads/${name}`, sha }),
-    catch: (e) => new GitHubApiError({ operation: "createRef", message: String(e) })
-   }).pipe(Effect.asVoid),
-
-  createPR: (data) =>
-   Effect.tryPromise({
-    try: () => octokit.rest.pulls.create({ ...context.repo, ...data }),
-    catch: (e) => new GitHubApiError({ operation: "pulls.create", message: String(e) })
-   }).pipe(Effect.map((r) => ({ number: r.data.number, url: r.data.html_url, created: true, nodeId: r.data.node_id }))),
-
-  enableAutoMerge: (nodeId, method) =>
-   Effect.tryPromise({
-    try: () => octokit.graphql(`
-     mutation($pullRequestId: ID!, $mergeMethod: PullRequestMergeMethod!) {
-      enablePullRequestAutoMerge(input: { pullRequestId: $pullRequestId, mergeMethod: $mergeMethod }) {
-       pullRequest { id }
-      }
-     }
-    `, { pullRequestId: nodeId, mergeMethod: method }),
-    catch: (e) => new GitHubApiError({ operation: "enablePullRequestAutoMerge", message: String(e) })
-   }).pipe(Effect.asVoid),
-
-  createCheckRun: (name) =>
-   Effect.tryPromise({
-    try: () => octokit.rest.checks.create({ ...context.repo, name, head_sha: context.sha, status: "in_progress" }),
-    catch: (e) => new GitHubApiError({ operation: "checks.create", message: String(e) })
-   }).pipe(Effect.map((r) => ({ id: r.data.id, name, status: "in_progress" as const })))
- });
-
-// ══════════════════════════════════════════════════════════════════════════════
-// Composed Application Layer
-// ══════════════════════════════════════════════════════════════════════════════
-
-const makeAppLayer = (token: string) =>
- Layer.mergeAll(
-  GitHubClientLive(token),
-  PnpmExecutorLive,
-  GitExecutorLive
- ).pipe(Layer.provide(NodeContext.layer)); // Provides platform requirements
 ```
+
+`makeAppLayer` separates library layers from domain layers, then uses
+`Layer.provideMerge` to wire domain layers on top of library layers.
 
 ## Error Handling Strategy
 
@@ -144,188 +79,94 @@ Effect distinguishes between **expected errors** (typed, recoverable) and **unex
 - `GitError` - git operation failures
 - `GitHubApiError` - API call failures
 - `InvalidInputError` - validation failures
-
-**Unexpected Errors (Defects):**
-
-- Runtime exceptions
-- Network timeouts
-- Out of memory
+- `FileSystemError` - file read/write failures
+- `LockfileError` - lockfile parsing failures
 
 **Strategy by Error Type:**
 
 | Scenario | Strategy | Effect Pattern |
 | --- | --- | --- |
 | Critical errors | Fail fast | `Effect.fail()` |
-| Batch operations | Accumulate | `Effect.partition()` |
+| Batch operations | Accumulate | Sequential loop with `Effect.catchAll()` |
 | Transient failures | Retry | `Effect.retry(Schedule)` |
 | Optional features | Graceful degradation | `Effect.catchAll()` |
 
-## Typed Errors with Data.TaggedError
+## Typed Errors with Schema.TaggedError
 
 ```typescript
-import { Data } from "effect";
+import { Schema } from "effect";
 
 /** pnpm command execution error */
-export class PnpmError extends Data.TaggedError("PnpmError")<{
- readonly command: string;
- readonly dependency?: string;
- readonly exitCode?: number;
- readonly stderr?: string;
-}> {}
-
-// Pattern match on error type
-const handleError = (error: PnpmError | GitError) =>
- Effect.gen(function* () {
-  switch (error._tag) {
-   case "PnpmError":
-    yield* Effect.logError(`pnpm ${error.command} failed: ${error.stderr}`);
-    break;
-   case "GitError":
-    yield* Effect.logError(`git ${error.operation} failed: ${error.stderr}`);
-    break;
-  }
- });
+export class PnpmError extends Schema.TaggedError<PnpmError>()("PnpmError", {
+ command: NonEmptyString,
+ dependency: Schema.optional(Schema.String),
+ exitCode: Schema.Number.pipe(Schema.int()),
+ stderr: Schema.String,
+}) {
+ get message() {
+  return `pnpm ${this.command} failed (exit ${this.exitCode}): ${this.stderr}`;
+ }
+}
 ```
 
-## Error Accumulation with Effect.partition
+## Resource Management
 
-For batch operations, use `Effect.partition` to collect both successes and failures:
+### Token Lifecycle via GitHubApp.withToken
+
+Token generation and revocation are handled automatically by the library:
 
 ```typescript
-import { Effect, Array } from "effect";
-
-/**
- * Update multiple dependencies, collecting both successes and failures.
- * Continues processing even if some updates fail.
- */
-export const updateDependenciesWithAccumulation = (
- dependencies: ReadonlyArray<string>
-): Effect.Effect<
- { successful: ReadonlyArray<DependencyUpdateResult>; failed: ReadonlyArray<{ dep: string; error: PnpmError }> },
- never, // Never fails - accumulates errors instead
- PnpmExecutor
-> =>
+const ghApp = yield* GitHubApp;
+yield* ghApp.withToken(appId, privateKey, (token) =>
  Effect.gen(function* () {
-  const pnpm = yield* PnpmExecutor;
-
-  // Effect.partition separates successes and failures
-  const [failures, successes] = yield* Effect.partition(
-   dependencies,
-   (dep) => pnpm.addConfig(dep).pipe(
-    Effect.map((result) => ({ dep, result })),
-    Effect.mapError((error) => ({ dep, error }))
-   )
-  );
-
-  // Log failures but don't fail the effect
-  if (failures.length > 0) {
-   yield* Effect.logWarning(`${failures.length} dependency updates failed`);
-   for (const { dep, error } of failures) {
-    yield* Effect.logWarning(`  - ${dep}: ${error.stderr}`);
-   }
-  }
-
-  return {
-   successful: successes.map((s) => s.result),
-   failed: failures
-  };
- });
-```
-
-## Retry Policies with Schedule
-
-Use `Schedule` for sophisticated retry logic:
-
-```typescript
-import { Effect, Schedule } from "effect";
-
-// Exponential backoff: 100ms, 200ms, 400ms (max 3 retries)
-const exponentialBackoff = Schedule.exponential("100 millis").pipe(
- Schedule.compose(Schedule.recurs(3)),
- Schedule.jittered // Add ±25% randomness to prevent thundering herd
+  // Token is valid here
+  // Automatically revoked when this callback completes (success or failure)
+ }),
 );
-
-// Only retry on specific errors (e.g., rate limits, network issues)
-const retryableErrors = (error: GitHubApiError) =>
- error.statusCode === 429 || error.statusCode >= 500;
-
-// Retry GitHub API calls
-export const createPullRequestWithRetry = (data: PRData) =>
- Effect.gen(function* () {
-  const github = yield* GitHubClient;
-  return yield* github.createPR(data);
- }).pipe(
-  Effect.retry({
-   schedule: exponentialBackoff,
-   while: retryableErrors
-  })
- );
 ```
 
-## Resource Management with acquireUseRelease
+### Check Run Lifecycle via CheckRun.withCheckRun
 
-Ensure cleanup happens even on failure:
+Check runs are automatically finalized even on failure:
 
 ```typescript
-import { Effect, Exit } from "effect";
-
-/**
- * Wraps an operation with a GitHub check run.
- * The check run is always finalized (success/failure) even if the operation throws.
- */
-export const withCheckRun = <A, E, R>(
- name: string,
- operation: (checkRun: CheckRun) => Effect.Effect<A, E, R>
-): Effect.Effect<A, E | GitHubApiError, R | GitHubClient> =>
- Effect.acquireUseRelease(
-  // Acquire: Create check run
-  Effect.gen(function* () {
-   const github = yield* GitHubClient;
-   return yield* github.createCheckRun(name);
-  }),
-
-  // Use: Run the operation
-  operation,
-
-  // Release: Always finalize the check run
-  (checkRun, exit) =>
-   Effect.gen(function* () {
-    const github = yield* GitHubClient;
-    const [status, conclusion, summary] = Exit.match(exit, {
-     onFailure: (cause) => ["completed", "failure", `Failed: ${cause}`] as const,
-     onSuccess: () => ["completed", "success", "Completed successfully"] as const
-    });
-    yield* github.updateCheckRun(checkRun.id, status, conclusion, summary);
-   }).pipe(Effect.orDie) // Don't let cleanup errors propagate
- );
+const checkRunService = yield* CheckRun;
+yield* checkRunService.withCheckRun(name, headSha, (checkRunId) =>
+ Effect.gen(function* () {
+  // Check run is "in_progress" here
+  // Use checkRunService.complete(checkRunId, conclusion, output) to finalize
+ }),
+);
 ```
 
 ## Running the Effect Program
 
 ```typescript
-import { Effect, Layer } from "effect";
-import { NodeRuntime } from "@effect/platform-node";
+import { Action, ActionOutputs, GitHubApp, GitHubAppLive } from "@savvy-web/github-action-effects";
+import { Duration, Effect } from "effect";
+import { makeAppLayer } from "./layers/app.js";
 
-// Compose all layers
-const AppLive = Layer.mergeAll(
- GitHubClientLive(token),
- PnpmExecutorLive,
- GitExecutorLive
-).pipe(Layer.provide(NodeContext.layer));
-
-// Main program
-const program = Effect.gen(function* () {
- // All services available via yield*
- const github = yield* GitHubClient;
- const pnpm = yield* PnpmExecutor;
- const git = yield* GitExecutor;
-
- // ... orchestration logic
+export const program = Effect.gen(function* () {
+ const inputs = yield* Action.parseInputs({ ... });
+ const ghApp = yield* GitHubApp;
+ yield* ghApp.withToken(inputs["app-id"], inputs["app-private-key"], (token) =>
+  Effect.gen(function* () {
+   const appLayer = makeAppLayer(token, inputs["dry-run"]);
+   yield* Effect.provide(innerProgram(inputs, inputs["dry-run"]), appLayer);
+  }),
+ );
 });
 
-// Run with all layers provided
-const runnable = program.pipe(Effect.provide(AppLive));
-
-// Execute
-NodeRuntime.runMain(runnable);
+Action.run(
+ program.pipe(
+  Effect.timeoutFail({ duration: Duration.seconds(180), ... }),
+  Effect.catchAll((error) => ...),
+ ),
+ GitHubAppLive,
+);
 ```
+
+**Testing:** The `program` is exported for testability. Tests mock
+`@savvy-web/github-action-effects` via `vi.mock()` to prevent module-level
+`Action.run` execution, then test the exported `program` Effect directly
+with mock service layers.

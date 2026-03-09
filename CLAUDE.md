@@ -6,23 +6,25 @@ code in this repository.
 ## Project Status
 
 This is a **GitHub Action** for updating pnpm config dependencies and regular
-dependencies. It runs in three phases (pre/main/post) using Effect-TS for
-typed error handling, service injection, and retry logic.
+dependencies. It runs as a single-phase entry point (`main.ts`) using Effect-TS
+for typed error handling, service injection, and retry logic. Domain logic is
+wrapped as Effect services (`Context.Tag` + `Layer`) in `src/services/`, with
+layer composition in `src/layers/app.ts`.
 
 For architecture and implementation details, load sections as needed:
-→ @./.claude/design/pnpm-config-dependency-action/_index.md
+-> @./.claude/design/pnpm-config-dependency-action/_index.md
 
 Load the index first, then follow its navigation guide to load specific
 sections based on what you are working on. Do not load all sections at once.
 
 Key sections:
 
-- Action phases (pre/main/post): → @./04-module-entry-points.md
-- Library modules (pnpm, github, lockfile): → @./05-module-library.md
-- Effect-TS patterns and services: → @./06-effect-patterns.md
-- GitHub API integration: → @./07-github-integration.md
-- Type definitions: → @./03-type-definitions.md
-- Architecture overview: → @./02-architecture.md
+- Architecture overview: -> @./02-architecture.md
+- Single-phase entry point: -> @./04-module-entry-points.md
+- Services and utilities: -> @./05-module-library.md
+- Effect-TS patterns and services: -> @./06-effect-patterns.md
+- GitHub API integration: -> @./07-github-integration.md
+- Type definitions: -> @./03-type-definitions.md
 
 Skip for simple bug fixes or test-only changes.
 
@@ -43,7 +45,6 @@ pnpm run test:coverage     # Run tests with coverage report
 
 ```bash
 pnpm run build             # Build all packages (dev + prod)
-pnpm run build:dev         # Build development output only
 pnpm run build:prod        # Build production/npm output only
 ```
 
@@ -51,7 +52,7 @@ pnpm run build:prod        # Build production/npm output only
 
 ```bash
 # Run a specific test file
-pnpm vitest run src/lib/pnpm/regular.test.ts
+pnpm vitest run src/services/regular-deps.test.ts
 
 # Run tests matching a pattern
 pnpm vitest run --testNamePattern="parsePnpmVersion"
@@ -62,16 +63,24 @@ pnpm vitest run --testNamePattern="parsePnpmVersion"
 ### Repository Structure
 
 - **Type**: Single-package GitHub Action (not a multi-package monorepo)
-- **Entry points**: `src/pre.ts`, `src/main.ts`, `src/post.ts`
-- **Modules**: `src/lib/` (github/, pnpm/, lockfile/, changeset/, errors/, services/)
+- **Entry point**: `src/main.ts` (single-phase, no pre/post)
+- **Services**: `src/services/` (domain services with `Context.Tag` + `Layer`)
+- **Schemas**: `src/schemas/domain.ts` (Effect Schema definitions)
+- **Errors**: `src/errors/errors.ts` (Schema.TaggedError definitions)
+- **Layers**: `src/layers/app.ts` (`makeAppLayer` wires all layers)
+- **Utils**: `src/utils/` (pure helpers: deps, markdown, pnpm, semver)
 - **Shared Configs**: `lib/configs/`
 - **Build**: Turbo for caching; `typecheck` depends on `build`
 
 ### Effect-TS Patterns
 
-- **Services**: `GitHubClient`, `PnpmExecutor`, `GitExecutor` via `Context.Tag`
-- **Errors**: `Data.TaggedError` (`PnpmError`, `GitHubApiError`, `FileSystemError`)
-- **Async**: `Effect.tryPromise` wraps Octokit and shell calls
+- **Library services**: From `@savvy-web/github-action-effects`: `CommandRunner`,
+  `GitBranch`, `GitCommit`, `CheckRun`, `GitHubClient`, `NpmRegistry`, `PullRequest`
+- **Domain services**: `BranchManager`, `PnpmUpgrade`, `ConfigDeps`, `RegularDeps`,
+  `Report`, `Lockfile`, `Changesets`, `WorkspaceYaml`
+- **Errors**: `Schema.TaggedError` (`PnpmError`, `GitHubApiError`, `FileSystemError`)
+- **Entry**: `Action.run(program, GitHubAppLive)` with `Action.parseInputs()`
+- **Token**: `GitHubApp.withToken()` for automatic token lifecycle
 - **Tests**: Mock services via Effect `Layer.succeed`; `vi.mock()` for
   `@actions/core` and `@actions/github`
 
@@ -121,7 +130,7 @@ Packages publish to both GitHub Packages and npm with provenance.
 ## Gotchas
 
 - Biome enforces **tabs** for indentation (not spaces)
-- Schema test `validInputs` must include **all** fields when adding new inputs
-- `makeTestGitHubClient` in test helpers must include **all** interface methods
 - GraphQL API required for auto-merge (no REST endpoint exists)
 - `PullRequest` type includes `nodeId` for GraphQL API calls
+- `@actions/core` is never imported directly (transitive via library)
+- `@actions/github` is only imported for `context.sha` in `main.ts`

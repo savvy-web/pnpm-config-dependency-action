@@ -31,10 +31,6 @@ inputs:
         @savvy-web/*
     required: false
     default: ""
-  skip-token-revoke:
-    description: Skip revoking the GitHub App token on cleanup
-    required: false
-    default: "false"
   update-pnpm:
     description: Update pnpm version in packageManager and devEngines fields
     required: false
@@ -43,13 +39,6 @@ inputs:
     description: Run without making changes (for testing)
     required: false
     default: "false"
-  log-level:
-    description: |
-      Logging verbosity level.
-      - info: Standard logging (default)
-      - debug: Verbose logging with detailed state information
-    required: false
-    default: info
   run:
     description: |
       Commands to run after dependency updates (one per line).
@@ -77,8 +66,6 @@ inputs:
     required: false
     default: ""
 outputs:
-  token:
-    description: Generated GitHub App installation token
   pr-number:
     description: Pull request number (if created or updated)
   pr-url:
@@ -89,6 +76,4 @@ outputs:
     description: Whether any dependencies were updated
 runs:
   using: node24
-  pre: dist/pre.js
   main: dist/main.js
-  post: dist/post.js

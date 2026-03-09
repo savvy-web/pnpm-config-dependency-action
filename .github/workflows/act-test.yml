@@ -1,0 +1,39 @@
+name: Local Test
+on:
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: Run without making changes (for testing)
+        type: boolean
+        default: true
+      branch:
+        description: Branch name for dependency update PR
+        type: string
+        default: pnpm/config-deps
+      log-level:
+        description: Logging verbosity
+        type: choice
+        options:
+          - info
+          - verbose
+          - debug
+        default: info
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # action pushes commits and branches
+      pull-requests: write # action creates/updates PRs
+      checks: write # action creates check runs
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: ./.github/actions/local
+        with:
+          dry-run: ${{ inputs.dry-run }}
+          branch: ${{ inputs.branch }}
+          log-level: ${{ inputs.log-level }}
