@@ -1,5 +1,11 @@
 # pnpm-config-dependency-action
 
+## 0.8.1
+
+### Bug Fixes
+
+* [`17d8b35`](https://github.com/savvy-web/pnpm-config-dependency-action/commit/17d8b358c23b3c2775a52d31f5195b3fc7709ad0) Add `log-level` action input using the standard `@savvy-web/github-action-effects` log-level setup with `auto`, `info`, `verbose`, and `debug` levels
+
 ## 0.8.0
 
 ### Breaking Changes
