@@ -44,9 +44,8 @@ import {
 	PullRequest as PullRequestService,
 } from "@savvy-web/github-action-effects";
 import { Duration, Effect, Layer, Schema } from "effect";
-
-import { commitChanges, manageBranch } from "./lib/github/branch.js";
 import type { ChangesetFile, DependencyUpdateResult, PullRequestResult } from "./schemas/domain.js";
+import { BranchManager, BranchManagerLive } from "./services/branch.js";
 import { createChangesets } from "./services/changesets.js";
 import { ConfigDeps, ConfigDepsLive } from "./services/config-deps.js";
 import { captureLockfileState, compareLockfiles } from "./services/lockfile.js";
@@ -396,16 +395,19 @@ export const program = Effect.gen(function* () {
 				const ghClient = GitHubClientLive(token);
 				const ghGraphql = GitHubGraphQLLive.pipe(Layer.provide(ghClient));
 				const npmRegistry = NpmRegistryLive.pipe(Layer.provide(CommandRunnerLive));
+				const gitBranch = GitBranchLive.pipe(Layer.provide(ghClient));
+				const gitCommit = GitCommitLive.pipe(Layer.provide(ghClient));
 				const appLayer = Layer.mergeAll(
 					ghClient,
-					GitBranchLive.pipe(Layer.provide(ghClient)),
-					GitCommitLive.pipe(Layer.provide(ghClient)),
+					gitBranch,
+					gitCommit,
 					CheckRunLive.pipe(Layer.provide(ghClient)),
 					PullRequestLive.pipe(Layer.provide(Layer.merge(ghClient, ghGraphql))),
 					npmRegistry,
 					PnpmUpgradeLive.pipe(Layer.provide(CommandRunnerLive)),
 					ConfigDepsLive.pipe(Layer.provide(npmRegistry)),
 					RegularDepsLive.pipe(Layer.provide(npmRegistry)),
+					BranchManagerLive.pipe(Layer.provide(Layer.mergeAll(gitBranch, gitCommit, CommandRunnerLive))),
 					CommandRunnerLive,
 					DryRunLive(dryRun),
 				);
@@ -455,7 +457,8 @@ const innerProgram = (
 					Effect.gen(function* () {
 						// Step 3: Manage branch
 						yield* Effect.logInfo("Step 1: Managing branch");
-						const branchResult = yield* manageBranch(inputs.branch, "main");
+						const branchManager = yield* BranchManager;
+						const branchResult = yield* branchManager.manage(inputs.branch, "main");
 						yield* Effect.logInfo(`Branch: ${branchResult.branch} (created: ${branchResult.created})`);
 
 						// Step 4: Capture lockfile state before updates
@@ -613,7 +616,7 @@ const innerProgram = (
 						} else {
 							yield* Effect.logInfo("Step 12: Committing via GitHub API");
 							const commitMessage = generateCommitMessage(allUpdates);
-							yield* commitChanges(commitMessage, inputs.branch);
+							yield* branchManager.commitChanges(commitMessage, inputs.branch);
 						}
 
 						// Step 15: Create/update PR

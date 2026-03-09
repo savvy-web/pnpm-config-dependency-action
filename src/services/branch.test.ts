@@ -8,7 +8,7 @@ import {
 } from "@savvy-web/github-action-effects";
 import { Effect, Either, Layer, LogLevel, Logger } from "effect";
 import { describe, expect, it } from "vitest";
-import { commitChanges, manageBranch } from "./branch.js";
+import { BranchManager, BranchManagerLive } from "./branch.js";
 
 /**
  * Create a GitBranch test layer with optional initial branches.
@@ -36,29 +36,39 @@ const makeTestCommandLayer = (responses?: ReadonlyMap<string, CommandResponse>) 
 };
 
 /**
- * Run an effect with the test layers for manageBranch.
+ * Run an effect that uses BranchManager with test layers.
  */
-const runManageBranch = <A, E>(
-	effect: Effect.Effect<A, E, GitBranch | typeof import("@savvy-web/github-action-effects").CommandRunner>,
+const runWithBranchManager = <A, E>(
+	effect: Effect.Effect<A, E, BranchManager>,
 	branches?: Map<string, string>,
 	responses?: ReadonlyMap<string, CommandResponse>,
 ) => {
 	const { state, layer: branchLayer } = makeTestBranchLayer(branches);
 	const cmdLayer = makeTestCommandLayer(responses);
-	const layer = Layer.merge(branchLayer, cmdLayer);
+	const commitState = GitCommitTest.empty();
+	const commitLayer = GitCommitTest.layer(commitState);
+
+	const serviceLayer = BranchManagerLive.pipe(Layer.provide(Layer.mergeAll(branchLayer, commitLayer, cmdLayer)));
+
 	return {
 		state,
+		commitState,
 		result: Effect.runPromise(
-			Effect.either(effect).pipe(Effect.provide(layer), Logger.withMinimumLogLevel(LogLevel.None)),
+			Effect.either(effect).pipe(Effect.provide(serviceLayer), Logger.withMinimumLogLevel(LogLevel.None)),
 		),
 	};
 };
 
-describe("manageBranch", () => {
+describe("BranchManager.manage", () => {
 	it("creates new branch when it does not exist", async () => {
-		// Pre-populate "main" branch SHA
 		const branches = new Map([["main", "main-sha-123"]]);
-		const { state, result } = runManageBranch(manageBranch("pnpm/config", "main"), branches);
+		const { state, result } = runWithBranchManager(
+			Effect.gen(function* () {
+				const manager = yield* BranchManager;
+				return yield* manager.manage("pnpm/config", "main");
+			}),
+			branches,
+		);
 
 		const either = await result;
 
@@ -74,12 +84,17 @@ describe("manageBranch", () => {
 	});
 
 	it("resets existing branch to default branch", async () => {
-		// Pre-populate both branches
 		const branches = new Map([
 			["main", "main-sha-456"],
 			["pnpm/config", "old-sha"],
 		]);
-		const { state, result } = runManageBranch(manageBranch("pnpm/config", "main"), branches);
+		const { state, result } = runWithBranchManager(
+			Effect.gen(function* () {
+				const manager = yield* BranchManager;
+				return yield* manager.manage("pnpm/config", "main");
+			}),
+			branches,
+		);
 
 		const either = await result;
 
@@ -94,7 +109,6 @@ describe("manageBranch", () => {
 	});
 
 	it("continues even if delete branch fails", async () => {
-		// Use a custom GitBranch layer where delete fails
 		const branchState: GitBranchTestState = {
 			branches: new Map([
 				["main", "main-sha"],
@@ -130,13 +144,18 @@ describe("manageBranch", () => {
 		});
 
 		const cmdLayer = CommandRunnerTest.empty();
-		const layer = Layer.merge(branchLayer, cmdLayer);
+		const commitState = GitCommitTest.empty();
+		const commitLayer = GitCommitTest.layer(commitState);
+
+		const serviceLayer = BranchManagerLive.pipe(Layer.provide(Layer.mergeAll(branchLayer, commitLayer, cmdLayer)));
 
 		const either = await Effect.runPromise(
-			Effect.either(manageBranch("pnpm/config", "main")).pipe(
-				Effect.provide(layer),
-				Logger.withMinimumLogLevel(LogLevel.None),
-			),
+			Effect.either(
+				Effect.gen(function* () {
+					const manager = yield* BranchManager;
+					return yield* manager.manage("pnpm/config", "main");
+				}),
+			).pipe(Effect.provide(serviceLayer), Logger.withMinimumLogLevel(LogLevel.None)),
 		);
 
 		expect(Either.isRight(either)).toBe(true);
@@ -144,7 +163,13 @@ describe("manageBranch", () => {
 
 	it("defaults to 'main' when no default branch specified", async () => {
 		const branches = new Map([["main", "sha"]]);
-		const { result } = runManageBranch(manageBranch("pnpm/config"), branches);
+		const { result } = runWithBranchManager(
+			Effect.gen(function* () {
+				const manager = yield* BranchManager;
+				return yield* manager.manage("pnpm/config");
+			}),
+			branches,
+		);
 
 		const either = await result;
 
@@ -155,23 +180,22 @@ describe("manageBranch", () => {
 	});
 });
 
-describe("commitChanges", () => {
+describe("BranchManager.commitChanges", () => {
 	it("returns early when there are no changes", async () => {
-		const commitState = GitCommitTest.empty();
-
-		// git status --porcelain returns empty
 		const responses = new Map<string, CommandResponse>([
 			["git status --porcelain", { exitCode: 0, stdout: "", stderr: "" }],
 		]);
 
-		const layer = Layer.mergeAll(GitCommitTest.layer(commitState), CommandRunnerTest.layer(responses));
-
-		const either = await Effect.runPromise(
-			Effect.either(commitChanges("test commit", "pnpm/config")).pipe(
-				Effect.provide(layer),
-				Logger.withMinimumLogLevel(LogLevel.None),
-			),
+		const { commitState, result } = runWithBranchManager(
+			Effect.gen(function* () {
+				const manager = yield* BranchManager;
+				return yield* manager.commitChanges("test commit", "pnpm/config");
+			}),
+			undefined,
+			responses,
 		);
+
+		const either = await result;
 
 		expect(Either.isRight(either)).toBe(true);
 		// No commits should have been created
@@ -179,9 +203,6 @@ describe("commitChanges", () => {
 	});
 
 	it("commits changed files via GitHub API", async () => {
-		const commitState = GitCommitTest.empty();
-
-		// git status --porcelain returns a modified file
 		const responses = new Map<string, CommandResponse>([
 			[
 				"git status --porcelain",
@@ -195,14 +216,16 @@ describe("commitChanges", () => {
 			["git checkout -B pnpm/config origin/pnpm/config", { exitCode: 0, stdout: "", stderr: "" }],
 		]);
 
-		const layer = Layer.mergeAll(GitCommitTest.layer(commitState), CommandRunnerTest.layer(responses));
-
-		const either = await Effect.runPromise(
-			Effect.either(commitChanges("chore: update deps", "pnpm/config")).pipe(
-				Effect.provide(layer),
-				Logger.withMinimumLogLevel(LogLevel.None),
-			),
+		const { commitState, result } = runWithBranchManager(
+			Effect.gen(function* () {
+				const manager = yield* BranchManager;
+				return yield* manager.commitChanges("chore: update deps", "pnpm/config");
+			}),
+			undefined,
+			responses,
 		);
+
+		const either = await result;
 
 		expect(Either.isRight(either)).toBe(true);
 		// A tree and commit should have been created via commitFiles
@@ -217,9 +240,6 @@ describe("commitChanges", () => {
 	});
 
 	it("handles deleted files with sha: null", async () => {
-		const commitState = GitCommitTest.empty();
-
-		// Deleted file in git status
 		const responses = new Map<string, CommandResponse>([
 			[
 				"git status --porcelain",
@@ -233,14 +253,16 @@ describe("commitChanges", () => {
 			["git checkout -B branch origin/branch", { exitCode: 0, stdout: "", stderr: "" }],
 		]);
 
-		const layer = Layer.mergeAll(GitCommitTest.layer(commitState), CommandRunnerTest.layer(responses));
-
-		const either = await Effect.runPromise(
-			Effect.either(commitChanges("update", "branch")).pipe(
-				Effect.provide(layer),
-				Logger.withMinimumLogLevel(LogLevel.None),
-			),
+		const { commitState, result } = runWithBranchManager(
+			Effect.gen(function* () {
+				const manager = yield* BranchManager;
+				return yield* manager.commitChanges("update", "branch");
+			}),
+			undefined,
+			responses,
 		);
+
+		const either = await result;
 
 		expect(Either.isRight(either)).toBe(true);
 		// Should have created a tree with the deletion entry
@@ -250,9 +272,6 @@ describe("commitChanges", () => {
 	});
 
 	it("skips unreadable files gracefully", async () => {
-		const commitState = GitCommitTest.empty();
-
-		// Files that don't exist on disk — readFileSync will throw
 		const responses = new Map<string, CommandResponse>([
 			[
 				"git status --porcelain",
@@ -264,14 +283,16 @@ describe("commitChanges", () => {
 			],
 		]);
 
-		const layer = Layer.mergeAll(GitCommitTest.layer(commitState), CommandRunnerTest.layer(responses));
-
-		const either = await Effect.runPromise(
-			Effect.either(commitChanges("update", "branch")).pipe(
-				Effect.provide(layer),
-				Logger.withMinimumLogLevel(LogLevel.None),
-			),
+		const { commitState, result } = runWithBranchManager(
+			Effect.gen(function* () {
+				const manager = yield* BranchManager;
+				return yield* manager.commitChanges("update", "branch");
+			}),
+			undefined,
+			responses,
 		);
+
+		const either = await result;
 
 		expect(Either.isRight(either)).toBe(true);
 		// No commit should be created since no files could be read

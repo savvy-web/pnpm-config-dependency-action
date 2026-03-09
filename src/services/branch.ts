@@ -1,19 +1,58 @@
 /**
- * Branch management utilities.
+ * BranchManager service for branch management and commit operations.
  *
  * Handles creating, resetting, and switching branches for dependency updates.
- * Uses library services (GitBranch, GitCommit, CommandRunner) instead of
- * custom GitExecutor and GitHubClient services.
+ * Uses library services (GitBranch, GitCommit, CommandRunner) from
+ * `@savvy-web/github-action-effects`.
  *
- * @module github/branch
+ * @module services/branch
  */
 
 import { readFileSync } from "node:fs";
 import type { CommandRunnerError, FileChange, GitBranchError, GitCommitError } from "@savvy-web/github-action-effects";
 import { CommandRunner, GitBranch, GitCommit } from "@savvy-web/github-action-effects";
-import { Effect } from "effect";
+import { Context, Effect, Layer } from "effect";
 
-import type { BranchResult } from "../../schemas/domain.js";
+import type { BranchResult } from "../schemas/domain.js";
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Service Interface
+// ══════════════════════════════════════════════════════════════════════════════
+
+export class BranchManager extends Context.Tag("BranchManager")<
+	BranchManager,
+	{
+		readonly manage: (
+			branchName: string,
+			defaultBranch?: string,
+		) => Effect.Effect<BranchResult, GitBranchError | CommandRunnerError>;
+		readonly commitChanges: (
+			message: string,
+			branchName: string,
+		) => Effect.Effect<void, GitCommitError | CommandRunnerError>;
+	}
+>() {}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Live Layer
+// ══════════════════════════════════════════════════════════════════════════════
+
+export const BranchManagerLive = Layer.effect(
+	BranchManager,
+	Effect.gen(function* () {
+		const branch = yield* GitBranch;
+		const commit = yield* GitCommit;
+		const cmd = yield* CommandRunner;
+		return {
+			manage: (branchName, defaultBranch = "main") => manageBranchImpl(branch, cmd, branchName, defaultBranch),
+			commitChanges: (message, branchName) => commitChangesImpl(commit, cmd, message, branchName),
+		};
+	}),
+);
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Implementation
+// ══════════════════════════════════════════════════════════════════════════════
 
 /**
  * Manage the dependency update branch.
@@ -21,14 +60,13 @@ import type { BranchResult } from "../../schemas/domain.js";
  * - If branch doesn't exist: create from default branch
  * - If branch exists: delete and recreate from default branch (fresh start)
  */
-export const manageBranch = (
+const manageBranchImpl = (
+	branch: Context.Tag.Service<typeof GitBranch>,
+	cmd: Context.Tag.Service<typeof CommandRunner>,
 	branchName: string,
-	defaultBranch: string = "main",
-): Effect.Effect<BranchResult, GitBranchError | CommandRunnerError, GitBranch | CommandRunner> =>
+	defaultBranch: string,
+): Effect.Effect<BranchResult, GitBranchError | CommandRunnerError> =>
 	Effect.gen(function* () {
-		const branch = yield* GitBranch;
-		const cmd = yield* CommandRunner;
-
 		yield* Effect.logInfo(`Managing branch: ${branchName}`);
 
 		// Check if branch exists
@@ -98,14 +136,13 @@ export const manageBranch = (
  *
  * Commits are automatically verified/signed by GitHub when using a GitHub App token.
  */
-export const commitChanges = (
+const commitChangesImpl = (
+	commit: Context.Tag.Service<typeof GitCommit>,
+	cmd: Context.Tag.Service<typeof CommandRunner>,
 	message: string,
 	branchName: string,
-): Effect.Effect<void, GitCommitError | CommandRunnerError, GitCommit | CommandRunner> =>
+): Effect.Effect<void, GitCommitError | CommandRunnerError> =>
 	Effect.gen(function* () {
-		const commit = yield* GitCommit;
-		const cmd = yield* CommandRunner;
-
 		// Check if there are changes to commit
 		const statusResult = yield* cmd.execCapture("git", ["status", "--porcelain"]);
 		const lines = statusResult.stdout.split("\n").filter((l) => l.trim().length > 0);
