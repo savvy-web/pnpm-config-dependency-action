@@ -45,14 +45,14 @@ import {
 } from "@savvy-web/github-action-effects";
 import { Duration, Effect, Layer, Schema } from "effect";
 
-import { createChangesets } from "./lib/changeset/create.js";
 import { commitChanges, manageBranch } from "./lib/github/branch.js";
-import { captureLockfileState, compareLockfiles } from "./lib/lockfile/compare.js";
 import { updateConfigDeps } from "./lib/pnpm/config.js";
-import { formatWorkspaceYaml, readWorkspaceYaml } from "./lib/pnpm/format.js";
 import { updateRegularDeps } from "./lib/pnpm/regular.js";
 import { upgradePnpm } from "./lib/pnpm/upgrade.js";
 import type { ChangesetFile, DependencyUpdateResult, PullRequestResult } from "./schemas/domain.js";
+import { createChangesets } from "./services/changesets.js";
+import { captureLockfileState, compareLockfiles } from "./services/lockfile.js";
+import { formatWorkspaceYaml, readWorkspaceYaml } from "./services/workspace-yaml.js";
 import { cleanVersion, npmUrl } from "./utils/markdown.js";
 
 /**

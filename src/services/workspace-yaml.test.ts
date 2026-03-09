@@ -7,8 +7,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 const runEffect = <A>(effect: Effect.Effect<A>) =>
 	Effect.runPromise(effect.pipe(Logger.withMinimumLogLevel(LogLevel.None)));
 
-import type { PnpmWorkspaceContent } from "./format.js";
-import { formatWorkspaceYaml, getConfigDependencyVersion, readWorkspaceYaml, sortContent } from "./format.js";
+import type { PnpmWorkspaceContent } from "./workspace-yaml.js";
+import { WorkspaceYaml, WorkspaceYamlLive, getConfigDependencyVersion, sortContent } from "./workspace-yaml.js";
 
 describe("sortContent", () => {
 	it("sorts top-level keys alphabetically with packages first", () => {
@@ -97,7 +97,7 @@ describe("sortContent", () => {
 	});
 });
 
-describe("formatWorkspaceYaml", () => {
+describe("WorkspaceYaml.format", () => {
 	let tempDir: string;
 
 	beforeEach(() => {
@@ -114,26 +114,39 @@ describe("formatWorkspaceYaml", () => {
 			`onlyBuiltDependencies:\n  - sharp\n  - argon2\npackages:\n  - "pkgs/*"\n  - "apps/*"\n`,
 		);
 
-		await runEffect(formatWorkspaceYaml(tempDir));
-
-		const result = await runEffect(readWorkspaceYaml(tempDir));
-		expect(result).not.toBeNull();
-		// After formatting, packages should be first and sorted
-		const keys = Object.keys(result ?? {});
-		expect(keys[0]).toBe("packages");
-		expect(result?.packages).toEqual(["apps/*", "pkgs/*"]);
-		expect(result?.onlyBuiltDependencies).toEqual(["argon2", "sharp"]);
+		await Effect.runPromise(
+			Effect.gen(function* () {
+				const ws = yield* WorkspaceYaml;
+				yield* ws.format(tempDir);
+				const result = yield* ws.read(tempDir);
+				expect(result).not.toBeNull();
+				// After formatting, packages should be first and sorted
+				const keys = Object.keys(result ?? {});
+				expect(keys[0]).toBe("packages");
+				expect(result?.packages).toEqual(["apps/*", "pkgs/*"]);
+				expect(result?.onlyBuiltDependencies).toEqual(["argon2", "sharp"]);
+			}).pipe(Effect.provide(WorkspaceYamlLive), Logger.withMinimumLogLevel(LogLevel.None)),
+		);
 	});
 
 	it("handles missing pnpm-workspace.yaml gracefully", async () => {
-		// Should not throw when file doesn't exist
-		await runEffect(formatWorkspaceYaml(tempDir));
+		await Effect.runPromise(
+			Effect.gen(function* () {
+				const ws = yield* WorkspaceYaml;
+				yield* ws.format(tempDir);
+			}).pipe(Effect.provide(WorkspaceYamlLive), Logger.withMinimumLogLevel(LogLevel.None)),
+		);
 	});
 
 	it("handles invalid YAML gracefully", async () => {
 		writeFileSync(join(tempDir, "pnpm-workspace.yaml"), ": invalid: yaml: {{{}");
 
-		const result = await runEffect(formatWorkspaceYaml(tempDir).pipe(Effect.either));
+		const result = await Effect.runPromise(
+			Effect.gen(function* () {
+				const ws = yield* WorkspaceYaml;
+				return yield* ws.format(tempDir).pipe(Effect.either);
+			}).pipe(Effect.provide(WorkspaceYamlLive), Logger.withMinimumLogLevel(LogLevel.None)),
+		);
 
 		expect(result._tag).toBe("Left");
 	});
@@ -143,7 +156,12 @@ describe("formatWorkspaceYaml", () => {
 		writeFileSync(filepath, `packages:\n  - "pkgs/*"\n`);
 		chmodSync(filepath, 0o000);
 
-		const result = await runEffect(formatWorkspaceYaml(tempDir).pipe(Effect.either));
+		const result = await Effect.runPromise(
+			Effect.gen(function* () {
+				const ws = yield* WorkspaceYaml;
+				return yield* ws.format(tempDir).pipe(Effect.either);
+			}).pipe(Effect.provide(WorkspaceYamlLive), Logger.withMinimumLogLevel(LogLevel.None)),
+		);
 
 		expect(result._tag).toBe("Left");
 		// Restore perms for cleanup
@@ -156,7 +174,12 @@ describe("formatWorkspaceYaml", () => {
 		// Make file readable but not writable
 		chmodSync(filepath, 0o444);
 
-		const result = await runEffect(formatWorkspaceYaml(tempDir).pipe(Effect.either));
+		const result = await Effect.runPromise(
+			Effect.gen(function* () {
+				const ws = yield* WorkspaceYaml;
+				return yield* ws.format(tempDir).pipe(Effect.either);
+			}).pipe(Effect.provide(WorkspaceYamlLive), Logger.withMinimumLogLevel(LogLevel.None)),
+		);
 
 		expect(result._tag).toBe("Left");
 		// Restore perms for cleanup
@@ -164,7 +187,7 @@ describe("formatWorkspaceYaml", () => {
 	});
 });
 
-describe("readWorkspaceYaml", () => {
+describe("WorkspaceYaml.read", () => {
 	let tempDir: string;
 
 	beforeEach(() => {
@@ -181,7 +204,12 @@ describe("readWorkspaceYaml", () => {
 			`packages:\n  - "pkgs/*"\nconfigDependencies:\n  typescript: "5.4.0"\n`,
 		);
 
-		const result = await runEffect(readWorkspaceYaml(tempDir));
+		const result = await Effect.runPromise(
+			Effect.gen(function* () {
+				const ws = yield* WorkspaceYaml;
+				return yield* ws.read(tempDir);
+			}).pipe(Effect.provide(WorkspaceYamlLive), Logger.withMinimumLogLevel(LogLevel.None)),
+		);
 
 		expect(result).not.toBeNull();
 		expect(result?.packages).toEqual(["pkgs/*"]);
@@ -189,7 +217,12 @@ describe("readWorkspaceYaml", () => {
 	});
 
 	it("returns null when file does not exist", async () => {
-		const result = await runEffect(readWorkspaceYaml(tempDir));
+		const result = await Effect.runPromise(
+			Effect.gen(function* () {
+				const ws = yield* WorkspaceYaml;
+				return yield* ws.read(tempDir);
+			}).pipe(Effect.provide(WorkspaceYamlLive), Logger.withMinimumLogLevel(LogLevel.None)),
+		);
 		expect(result).toBeNull();
 	});
 });

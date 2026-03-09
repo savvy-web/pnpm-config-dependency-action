@@ -4,8 +4,14 @@ import { join } from "node:path";
 import { Effect, LogLevel, Logger } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { LockfileChange } from "../../schemas/domain.js";
-import { analyzeAffectedPackages, createChangesets, formatChangesetSummary, hasChangesets } from "./create.js";
+import type { LockfileChange } from "../schemas/domain.js";
+import {
+	Changesets,
+	ChangesetsLive,
+	analyzeAffectedPackages,
+	formatChangesetSummary,
+	hasChangesets,
+} from "./changesets.js";
 
 /**
  * Run an Effect with logging suppressed.
@@ -34,7 +40,7 @@ describe("hasChangesets", () => {
 	});
 });
 
-describe("createChangesets", () => {
+describe("Changesets.create", () => {
 	let tempDir: string;
 
 	beforeEach(() => {
@@ -50,14 +56,24 @@ describe("createChangesets", () => {
 			{ type: "regular", dependency: "effect", from: "3.0.0", to: "3.1.0", affectedPackages: ["@savvy-web/core"] },
 		];
 
-		const result = await runEffect(createChangesets(changes, tempDir));
+		const result = await runEffect(
+			Effect.gen(function* () {
+				const cs = yield* Changesets;
+				return yield* cs.create(changes, tempDir);
+			}).pipe(Effect.provide(ChangesetsLive)),
+		);
 		expect(result).toEqual([]);
 	});
 
 	it("returns empty array when no changes", async () => {
 		mkdirSync(join(tempDir, ".changeset"));
 
-		const result = await runEffect(createChangesets([], tempDir));
+		const result = await runEffect(
+			Effect.gen(function* () {
+				const cs = yield* Changesets;
+				return yield* cs.create([], tempDir);
+			}).pipe(Effect.provide(ChangesetsLive)),
+		);
 		expect(result).toEqual([]);
 	});
 
@@ -68,7 +84,12 @@ describe("createChangesets", () => {
 			{ type: "regular", dependency: "effect", from: "3.0.0", to: "3.1.0", affectedPackages: ["@savvy-web/core"] },
 		];
 
-		const result = await runEffect(createChangesets(changes, tempDir));
+		const result = await runEffect(
+			Effect.gen(function* () {
+				const cs = yield* Changesets;
+				return yield* cs.create(changes, tempDir);
+			}).pipe(Effect.provide(ChangesetsLive)),
+		);
 
 		expect(result).toHaveLength(1);
 		expect(result[0].packages).toEqual(["@savvy-web/core"]);
@@ -91,7 +112,12 @@ describe("createChangesets", () => {
 			{ type: "config", dependency: "typescript", from: "5.3.3", to: "5.4.0", affectedPackages: [] },
 		];
 
-		const result = await runEffect(createChangesets(changes, tempDir));
+		const result = await runEffect(
+			Effect.gen(function* () {
+				const cs = yield* Changesets;
+				return yield* cs.create(changes, tempDir);
+			}).pipe(Effect.provide(ChangesetsLive)),
+		);
 
 		expect(result).toHaveLength(1);
 		expect(result[0].packages).toEqual([]);
@@ -107,7 +133,12 @@ describe("createChangesets", () => {
 			{ type: "config", dependency: "typescript", from: "5.3.3", to: "5.4.0", affectedPackages: [] },
 		];
 
-		const result = await runEffect(createChangesets(changes, tempDir));
+		const result = await runEffect(
+			Effect.gen(function* () {
+				const cs = yield* Changesets;
+				return yield* cs.create(changes, tempDir);
+			}).pipe(Effect.provide(ChangesetsLive)),
+		);
 
 		expect(result).toHaveLength(1);
 		expect(result[0].packages).toEqual([]);
@@ -125,7 +156,12 @@ describe("createChangesets", () => {
 			{ type: "regular", dependency: "effect", from: "3.0.0", to: "3.1.0", affectedPackages: ["@savvy-web/core"] },
 		];
 
-		const result = await runEffect(createChangesets(changes, tempDir));
+		const result = await runEffect(
+			Effect.gen(function* () {
+				const cs = yield* Changesets;
+				return yield* cs.create(changes, tempDir);
+			}).pipe(Effect.provide(ChangesetsLive)),
+		);
 
 		expect(result).toHaveLength(2);
 		// Should have one package changeset and one root/empty changeset
@@ -148,7 +184,12 @@ describe("createChangesets", () => {
 			},
 		];
 
-		const result = await runEffect(createChangesets(changes, tempDir));
+		const result = await runEffect(
+			Effect.gen(function* () {
+				const cs = yield* Changesets;
+				return yield* cs.create(changes, tempDir);
+			}).pipe(Effect.provide(ChangesetsLive)),
+		);
 
 		// Each affected package gets its own changeset
 		expect(result).toHaveLength(2);

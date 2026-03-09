@@ -15,8 +15,8 @@ import { Effect } from "effect";
 import { stringify } from "yaml";
 import { FileSystemError } from "../../errors/errors.js";
 import type { DependencyUpdateResult } from "../../schemas/domain.js";
+import { STRINGIFY_OPTIONS, readWorkspaceYaml, sortContent } from "../../services/workspace-yaml.js";
 import { parseConfigEntry } from "../../utils/deps.js";
-import { STRINGIFY_OPTIONS, readWorkspaceYaml, sortContent } from "./format.js";
 
 // Re-export for backwards compatibility
 export { parseConfigEntry };

@@ -20,8 +20,8 @@ vi.mock("@pnpm/lockfile.fs", () => ({
 	readWantedLockfile: (...args: unknown[]) => mockReadWantedLockfile(...args),
 }));
 
-import type { LockfileChange } from "../../schemas/domain.js";
-import { captureLockfileState, compareLockfiles, groupChangesByPackage } from "./compare.js";
+import type { LockfileChange } from "../schemas/domain.js";
+import { Lockfile, LockfileLive, groupChangesByPackage } from "./lockfile.js";
 
 // Mock workspace-tools so buildImporterToPackageMap doesn't hit the filesystem
 vi.mock("workspace-tools", () => ({
@@ -48,20 +48,30 @@ const makeLockfile = (overrides: Partial<LockfileObject> = {}): LockfileObject =
 	}) as LockfileObject;
 
 /**
- * Run compareLockfiles with logging suppressed.
+ * Run Lockfile.compare via the Live layer with logging suppressed.
  */
 const runCompare = (before: LockfileObject, after: LockfileObject) =>
-	Effect.runPromise(compareLockfiles(before, after, "/workspace").pipe(Logger.withMinimumLogLevel(LogLevel.None)));
+	Effect.runPromise(
+		Effect.gen(function* () {
+			const lockfile = yield* Lockfile;
+			return yield* lockfile.compare(before, after, "/workspace");
+		}).pipe(Effect.provide(LockfileLive), Logger.withMinimumLogLevel(LogLevel.None)),
+	);
 
 const runEffect = <A, E>(effect: Effect.Effect<A, E>) =>
 	Effect.runPromise(Effect.either(effect).pipe(Logger.withMinimumLogLevel(LogLevel.None)));
 
-describe("captureLockfileState", () => {
+describe("Lockfile.capture", () => {
 	it("returns lockfile object on success", async () => {
 		const fakeLockfile = { lockfileVersion: "9.0", importers: {} };
 		mockReadWantedLockfile.mockResolvedValueOnce(fakeLockfile);
 
-		const result = await runEffect(captureLockfileState("/workspace"));
+		const result = await runEffect(
+			Effect.gen(function* () {
+				const lockfile = yield* Lockfile;
+				return yield* lockfile.capture("/workspace");
+			}).pipe(Effect.provide(LockfileLive)),
+		);
 
 		expect(Either.isRight(result)).toBe(true);
 		if (Either.isRight(result)) {
@@ -72,7 +82,12 @@ describe("captureLockfileState", () => {
 	it("returns null when lockfile does not exist", async () => {
 		mockReadWantedLockfile.mockResolvedValueOnce(null);
 
-		const result = await runEffect(captureLockfileState("/workspace"));
+		const result = await runEffect(
+			Effect.gen(function* () {
+				const lockfile = yield* Lockfile;
+				return yield* lockfile.capture("/workspace");
+			}).pipe(Effect.provide(LockfileLive)),
+		);
 
 		expect(Either.isRight(result)).toBe(true);
 		if (Either.isRight(result)) {
@@ -83,7 +98,12 @@ describe("captureLockfileState", () => {
 	it("returns LockfileError when read fails", async () => {
 		mockReadWantedLockfile.mockRejectedValueOnce(new Error("ENOENT"));
 
-		const result = await runEffect(captureLockfileState("/workspace"));
+		const result = await runEffect(
+			Effect.gen(function* () {
+				const lockfile = yield* Lockfile;
+				return yield* lockfile.capture("/workspace");
+			}).pipe(Effect.provide(LockfileLive)),
+		);
 
 		expect(Either.isLeft(result)).toBe(true);
 		if (Either.isLeft(result)) {
@@ -92,11 +112,14 @@ describe("captureLockfileState", () => {
 	});
 });
 
-describe("compareLockfiles - null handling", () => {
+describe("Lockfile.compare - null handling", () => {
 	it("returns empty array when before is null", async () => {
 		const after = makeLockfile();
 		const changes = await Effect.runPromise(
-			compareLockfiles(null, after, "/workspace").pipe(Logger.withMinimumLogLevel(LogLevel.None)),
+			Effect.gen(function* () {
+				const lockfile = yield* Lockfile;
+				return yield* lockfile.compare(null, after, "/workspace");
+			}).pipe(Effect.provide(LockfileLive), Logger.withMinimumLogLevel(LogLevel.None)),
 		);
 		expect(changes).toEqual([]);
 	});
@@ -104,20 +127,26 @@ describe("compareLockfiles - null handling", () => {
 	it("returns empty array when after is null", async () => {
 		const before = makeLockfile();
 		const changes = await Effect.runPromise(
-			compareLockfiles(before, null, "/workspace").pipe(Logger.withMinimumLogLevel(LogLevel.None)),
+			Effect.gen(function* () {
+				const lockfile = yield* Lockfile;
+				return yield* lockfile.compare(before, null, "/workspace");
+			}).pipe(Effect.provide(LockfileLive), Logger.withMinimumLogLevel(LogLevel.None)),
 		);
 		expect(changes).toEqual([]);
 	});
 
 	it("returns empty array when both are null", async () => {
 		const changes = await Effect.runPromise(
-			compareLockfiles(null, null, "/workspace").pipe(Logger.withMinimumLogLevel(LogLevel.None)),
+			Effect.gen(function* () {
+				const lockfile = yield* Lockfile;
+				return yield* lockfile.compare(null, null, "/workspace");
+			}).pipe(Effect.provide(LockfileLive), Logger.withMinimumLogLevel(LogLevel.None)),
 		);
 		expect(changes).toEqual([]);
 	});
 });
 
-describe("compareLockfiles - removed catalogs", () => {
+describe("Lockfile.compare - removed catalogs", () => {
 	it("detects removed catalog entries", async () => {
 		const before = makeLockfile({
 			catalogs: {
@@ -170,7 +199,7 @@ describe("compareLockfiles - removed catalogs", () => {
 	});
 });
 
-describe("compareLockfiles - named catalogs", () => {
+describe("Lockfile.compare - named catalogs", () => {
 	it("detects changes in non-default catalog and finds affected packages", async () => {
 		const before = makeLockfile({
 			catalogs: {
@@ -212,7 +241,7 @@ describe("compareLockfiles - named catalogs", () => {
 	});
 });
 
-describe("compareLockfiles - importer specifier changes", () => {
+describe("Lockfile.compare - importer specifier changes", () => {
 	it("detects non-catalog specifier changes in importers", async () => {
 		const before = makeLockfile({
 			importers: {
@@ -418,7 +447,7 @@ describe("groupChangesByPackage", () => {
 	});
 });
 
-describe("compareLockfiles - catalog resolved version changes", () => {
+describe("Lockfile.compare - catalog resolved version changes", () => {
 	it("detects resolved version change when specifier is unchanged", async () => {
 		const before = makeLockfile({
 			catalogs: {

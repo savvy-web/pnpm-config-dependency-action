@@ -1,17 +1,17 @@
 /**
- * pnpm-workspace.yaml formatting utility.
+ * WorkspaceYaml service for pnpm-workspace.yaml formatting and reading.
  *
  * Formats the workspace file consistently to match @savvy-web/lint-staged PnpmWorkspace handler,
  * avoiding lint-staged hook changes after our action commits.
  *
- * @module pnpm/format
+ * @module services/workspace-yaml
  */
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { Effect } from "effect";
+import { Context, Effect, Layer } from "effect";
 import { parse, stringify } from "yaml";
 
-import { FileSystemError } from "../../errors/errors.js";
+import { FileSystemError } from "../errors/errors.js";
 
 /**
  * Shape of pnpm-workspace.yaml content.
@@ -90,12 +90,73 @@ export const sortContent = (content: PnpmWorkspaceContent): PnpmWorkspaceContent
 };
 
 /**
+ * Get config dependency version from pnpm-workspace.yaml.
+ */
+export const getConfigDependencyVersion = (
+	dependency: string,
+	workspaceRoot: string = process.cwd(),
+): Effect.Effect<string | null, FileSystemError> =>
+	Effect.gen(function* () {
+		const content = yield* readWorkspaceYamlImpl(workspaceRoot);
+
+		if (!content?.configDependencies) {
+			return null;
+		}
+
+		const entry = content.configDependencies[dependency];
+		if (!entry) {
+			return null;
+		}
+
+		// Extract version from entry (format: "version+sha512-...")
+		const version = entry.split("+")[0];
+		return version || null;
+	});
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Service Interface
+// ══════════════════════════════════════════════════════════════════════════════
+
+export class WorkspaceYaml extends Context.Tag("WorkspaceYaml")<
+	WorkspaceYaml,
+	{
+		readonly format: (workspaceRoot?: string) => Effect.Effect<void, FileSystemError>;
+		readonly read: (workspaceRoot?: string) => Effect.Effect<PnpmWorkspaceContent | null, FileSystemError>;
+	}
+>() {}
+
+export const WorkspaceYamlLive = Layer.succeed(WorkspaceYaml, {
+	format: (workspaceRoot = process.cwd()) => formatWorkspaceYamlImpl(workspaceRoot),
+	read: (workspaceRoot = process.cwd()) => readWorkspaceYamlImpl(workspaceRoot),
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Implementation Functions
+// ══════════════════════════════════════════════════════════════════════════════
+
+/**
  * Format pnpm-workspace.yaml file.
  *
  * Reads, sorts, formats, and writes back the workspace file.
  * This ensures consistency with the lint-staged handler.
+ *
+ * Standalone function exported for direct use by consumers that
+ * haven't yet migrated to the WorkspaceYaml service.
  */
 export const formatWorkspaceYaml = (workspaceRoot: string = process.cwd()): Effect.Effect<void, FileSystemError> =>
+	formatWorkspaceYamlImpl(workspaceRoot);
+
+/**
+ * Read pnpm-workspace.yaml content.
+ *
+ * Standalone function exported for direct use by consumers that
+ * haven't yet migrated to the WorkspaceYaml service.
+ */
+export const readWorkspaceYaml = (
+	workspaceRoot: string = process.cwd(),
+): Effect.Effect<PnpmWorkspaceContent | null, FileSystemError> => readWorkspaceYamlImpl(workspaceRoot);
+
+const formatWorkspaceYamlImpl = (workspaceRoot: string): Effect.Effect<void, FileSystemError> =>
 	Effect.gen(function* () {
 		const filepath = `${workspaceRoot}/pnpm-workspace.yaml`;
 
@@ -147,9 +208,7 @@ export const formatWorkspaceYaml = (workspaceRoot: string = process.cwd()): Effe
 /**
  * Read pnpm-workspace.yaml content.
  */
-export const readWorkspaceYaml = (
-	workspaceRoot: string = process.cwd(),
-): Effect.Effect<PnpmWorkspaceContent | null, FileSystemError> =>
+const readWorkspaceYamlImpl = (workspaceRoot: string): Effect.Effect<PnpmWorkspaceContent | null, FileSystemError> =>
 	Effect.gen(function* () {
 		const filepath = `${workspaceRoot}/pnpm-workspace.yaml`;
 
@@ -176,28 +235,4 @@ export const readWorkspaceYaml = (
 					reason: `Invalid YAML: ${e}`,
 				}),
 		});
-	});
-
-/**
- * Get config dependency version from pnpm-workspace.yaml.
- */
-export const getConfigDependencyVersion = (
-	dependency: string,
-	workspaceRoot: string = process.cwd(),
-): Effect.Effect<string | null, FileSystemError> =>
-	Effect.gen(function* () {
-		const content = yield* readWorkspaceYaml(workspaceRoot);
-
-		if (!content?.configDependencies) {
-			return null;
-		}
-
-		const entry = content.configDependencies[dependency];
-		if (!entry) {
-			return null;
-		}
-
-		// Extract version from entry (format: "version+sha512-...")
-		const version = entry.split("+")[0];
-		return version || null;
 	});

@@ -1,25 +1,98 @@
 /**
- * Lockfile comparison utilities for detecting dependency changes.
+ * Lockfile service for capturing and comparing pnpm lockfile state.
  *
  * Uses @pnpm/lockfile.fs to read and compare lockfile snapshots.
  *
- * @module lockfile/compare
+ * @module services/lockfile
  */
 
 import { normalize } from "node:path";
 import { readWantedLockfile } from "@pnpm/lockfile.fs";
 import type { CatalogSnapshots, LockfileObject, ResolvedCatalogEntry } from "@pnpm/lockfile.types";
-import { Effect } from "effect";
+import { Context, Effect, Layer } from "effect";
 import { getPackageInfosAsync } from "workspace-tools";
-import { LockfileError } from "../../errors/errors.js";
-import type { LockfileChange } from "../../schemas/domain.js";
+import { LockfileError } from "../errors/errors.js";
+import type { LockfileChange } from "../schemas/domain.js";
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Service Interface
+// ══════════════════════════════════════════════════════════════════════════════
+
+export class Lockfile extends Context.Tag("Lockfile")<
+	Lockfile,
+	{
+		readonly capture: (workspaceRoot?: string) => Effect.Effect<LockfileObject | null, LockfileError>;
+		readonly compare: (
+			before: LockfileObject | null,
+			after: LockfileObject | null,
+			workspaceRoot?: string,
+		) => Effect.Effect<ReadonlyArray<LockfileChange>, LockfileError>;
+	}
+>() {}
+
+export const LockfileLive = Layer.succeed(Lockfile, {
+	capture: (workspaceRoot = process.cwd()) => captureLockfileStateImpl(workspaceRoot),
+	compare: (before, after, workspaceRoot = process.cwd()) => compareLockfilesImpl(before, after, workspaceRoot),
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Standalone Function Exports
+// ══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Capture current lockfile state.
+ *
+ * Standalone function exported for direct use by consumers that
+ * haven't yet migrated to the Lockfile service.
+ */
+export const captureLockfileState = (
+	workspaceRoot: string = process.cwd(),
+): Effect.Effect<LockfileObject | null, LockfileError> => captureLockfileStateImpl(workspaceRoot);
+
+/**
+ * Compare two lockfile states to detect dependency changes.
+ *
+ * Standalone function exported for direct use by consumers that
+ * haven't yet migrated to the Lockfile service.
+ */
+export const compareLockfiles = (
+	before: LockfileObject | null,
+	after: LockfileObject | null,
+	workspaceRoot: string = process.cwd(),
+): Effect.Effect<ReadonlyArray<LockfileChange>, LockfileError> => compareLockfilesImpl(before, after, workspaceRoot);
+
+/**
+ * Group lockfile changes by affected package.
+ */
+export const groupChangesByPackage = (changes: ReadonlyArray<LockfileChange>): Map<string, LockfileChange[]> => {
+	const grouped = new Map<string, LockfileChange[]>();
+
+	for (const change of changes) {
+		if (change.type === "config") {
+			// Config changes go under a special "root" key
+			const existing = grouped.get("(root)") ?? [];
+			existing.push(change);
+			grouped.set("(root)", existing);
+		} else {
+			for (const pkg of change.affectedPackages) {
+				const existing = grouped.get(pkg) ?? [];
+				existing.push(change);
+				grouped.set(pkg, existing);
+			}
+		}
+	}
+
+	return grouped;
+};
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Implementation Functions
+// ══════════════════════════════════════════════════════════════════════════════
 
 /**
  * Capture current lockfile state.
  */
-export const captureLockfileState = (
-	workspaceRoot: string = process.cwd(),
-): Effect.Effect<LockfileObject | null, LockfileError> =>
+const captureLockfileStateImpl = (workspaceRoot: string): Effect.Effect<LockfileObject | null, LockfileError> =>
 	Effect.tryPromise({
 		try: () => readWantedLockfile(workspaceRoot, { ignoreIncompatible: true }),
 		catch: (e) =>
@@ -28,6 +101,14 @@ export const captureLockfileState = (
 				reason: String(e),
 			}),
 	});
+
+/**
+ * Dependency snapshot from an importer (package).
+ */
+interface DependencySnapshot {
+	specifier: string;
+	version: string;
+}
 
 /**
  * Build a map from importer path to package name.
@@ -62,10 +143,10 @@ const buildImporterToPackageMap = (workspaceRoot: string): Effect.Effect<Map<str
 /**
  * Compare two lockfile states to detect dependency changes.
  */
-export const compareLockfiles = (
+const compareLockfilesImpl = (
 	before: LockfileObject | null,
 	after: LockfileObject | null,
-	workspaceRoot: string = process.cwd(),
+	workspaceRoot: string,
 ): Effect.Effect<ReadonlyArray<LockfileChange>, LockfileError> =>
 	Effect.gen(function* () {
 		if (!before || !after) {
@@ -124,14 +205,6 @@ export const compareLockfiles = (
 
 		return changes;
 	});
-
-/**
- * Dependency snapshot from an importer (package).
- */
-interface DependencySnapshot {
-	specifier: string;
-	version: string;
-}
 
 /**
  * Find packages that use a specific catalog entry.
@@ -325,27 +398,3 @@ const compareImporters = (
 
 		return changes;
 	});
-
-/**
- * Group lockfile changes by affected package.
- */
-export const groupChangesByPackage = (changes: ReadonlyArray<LockfileChange>): Map<string, LockfileChange[]> => {
-	const grouped = new Map<string, LockfileChange[]>();
-
-	for (const change of changes) {
-		if (change.type === "config") {
-			// Config changes go under a special "root" key
-			const existing = grouped.get("(root)") ?? [];
-			existing.push(change);
-			grouped.set("(root)", existing);
-		} else {
-			for (const pkg of change.affectedPackages) {
-				const existing = grouped.get(pkg) ?? [];
-				existing.push(change);
-				grouped.set(pkg, existing);
-			}
-		}
-	}
-
-	return grouped;
-};
