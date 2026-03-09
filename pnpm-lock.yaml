@@ -57,8 +57,8 @@ importers:
         specifier: ^1000.3.0
         version: 1000.3.0
       '@savvy-web/github-action-effects':
-        specifier: ^0.6.2
-        version: 0.6.2(58883ffe49bee87860537fe41b960b37)
+        specifier: ^0.6.3
+        version: 0.6.3(58883ffe49bee87860537fe41b960b37)
       effect:
         specifier: ^3.19.16
         version: 3.19.19
@@ -1295,8 +1295,8 @@ packages:
       '@typescript/native-preview': ^7.0.0-dev.20260124.1
       typescript: ^5.9.3
 
-  '@savvy-web/github-action-effects@0.6.2':
-    resolution: {integrity: sha512-bvPC0Ctzkr256y8s6+2+KetmTXfoJI6UcNGmizXyPGDwzyAJ3lK2tolduq5tmdkNba0rxhLJKp1jsDjgIx/w0g==}
+  '@savvy-web/github-action-effects@0.6.3':
+    resolution: {integrity: sha512-XUukyltsrDwirOTT5J5naTxi8tGXUYBdnMnQ+u8b5mb8SXEAS9N51P4VVP34tYm9KPLRjwa6zxQPWQjjHPPIXQ==}
     peerDependencies:
       '@actions/cache': ^4.0.0
       '@actions/core': ^3.0.0
@@ -4754,7 +4754,7 @@ snapshots:
       - bufferutil
       - utf-8-validate
 
-  '@savvy-web/github-action-effects@0.6.2(58883ffe49bee87860537fe41b960b37)':
+  '@savvy-web/github-action-effects@0.6.3(58883ffe49bee87860537fe41b960b37)':
     dependencies:
       '@actions/core': 3.0.0
       '@effect/opentelemetry': 0.61.0(@effect/platform@0.94.5(effect@3.19.19))(@opentelemetry/api@1.9.0)(@opentelemetry/resources@2.6.0(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-logs@0.213.0(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-metrics@2.6.0(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-trace-base@2.6.0(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-trace-node@2.6.0(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-trace-web@2.6.0(@opentelemetry/api@1.9.0))(@opentelemetry/semantic-conventions@1.40.0)(effect@3.19.19)
