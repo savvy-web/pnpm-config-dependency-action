@@ -1,5 +1,22 @@
 # pnpm-config-dependency-action
 
+## 0.8.0
+
+### Breaking Changes
+
+* [`035cae1`](https://github.com/savvy-web/pnpm-config-dependency-action/commit/035cae1369b48cc1b3c9151637dbd7ee5902b215) Collapse three-phase execution (pre/main/post) into single-phase architecture
+* Remove `skip-token-revoke` and `log-level` inputs from action.yml
+* Remove `token` output from action.yml
+
+### Features
+
+* [`035cae1`](https://github.com/savvy-web/pnpm-config-dependency-action/commit/035cae1369b48cc1b3c9151637dbd7ee5902b215) Upgrade @savvy-web/github-action-effects from v0.3.0 to v0.4.0
+* Use `GitHubApp.withToken()` bracket pattern for automatic token lifecycle management
+* Use `CheckRun.withCheckRun()` bracket pattern for check run lifecycle
+* Use `Action.parseInputs()` for declarative, Schema-based input parsing
+* Replace custom services (GitHubClient, GitExecutor, PnpmExecutor) with library equivalents (CommandRunner, GitBranch, GitCommit, GitHubClient)
+* Use `AutoMerge.enable()` from library for auto-merge support
+
 ## 0.7.1
 
 ### Dependencies
