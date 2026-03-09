@@ -7,7 +7,7 @@ import {
 	DependencyUpdateResult,
 	LockfileChange,
 	NonEmptyString,
-	PullRequest,
+	PullRequestResult,
 } from "./index.js";
 
 describe("NonEmptyString", () => {
@@ -84,8 +84,8 @@ describe("ChangesetFile", () => {
 	});
 });
 
-describe("PullRequest", () => {
-	const decode = Schema.decodeUnknownSync(PullRequest);
+describe("PullRequestResult", () => {
+	const decode = Schema.decodeUnknownSync(PullRequestResult);
 
 	it("decodes valid pull request", () => {
 		const result = decode({

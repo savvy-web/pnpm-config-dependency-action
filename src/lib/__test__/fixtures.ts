@@ -4,7 +4,7 @@
  * @module __test__/fixtures
  */
 
-import type { ChangesetFile, DependencyUpdateResult, LockfileChange, PullRequest } from "../../types/index.js";
+import type { ChangesetFile, DependencyUpdateResult, LockfileChange, PullRequestResult } from "../../types/index.js";
 
 // ══════════════════════════════════════════════════════════════════════════════
 // DependencyUpdateResult fixtures
@@ -116,10 +116,10 @@ export const rootChangeset: ChangesetFile = {
 };
 
 // ══════════════════════════════════════════════════════════════════════════════
-// PullRequest fixtures
+// PullRequestResult fixtures
 // ══════════════════════════════════════════════════════════════════════════════
 
-export const pullRequest: PullRequest = {
+export const pullRequest: PullRequestResult = {
 	number: 42,
 	url: "https://github.com/savvy-web/repo/pull/42",
 	created: true,

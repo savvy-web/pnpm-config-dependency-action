@@ -15,5 +15,5 @@ export type {
 	DependencyChange,
 	DependencyUpdateResult,
 	LockfileChange,
-	PullRequest,
+	PullRequestResult,
 } from "../lib/schemas/index.js";

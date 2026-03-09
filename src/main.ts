@@ -51,7 +51,7 @@ import { updateConfigDeps } from "./lib/pnpm/config.js";
 import { formatWorkspaceYaml, readWorkspaceYaml } from "./lib/pnpm/format.js";
 import { updateRegularDeps } from "./lib/pnpm/regular.js";
 import { upgradePnpm } from "./lib/pnpm/upgrade.js";
-import type { ChangesetFile, DependencyUpdateResult, PullRequest } from "./types/index.js";
+import type { ChangesetFile, DependencyUpdateResult, PullRequestResult } from "./types/index.js";
 
 /**
  * Result of running custom commands.
@@ -110,7 +110,7 @@ export const createOrUpdatePR = (
 	branch: string,
 	updates: ReadonlyArray<DependencyUpdateResult>,
 	changesets: ReadonlyArray<ChangesetFile>,
-): Effect.Effect<PullRequest, never, GitHubClient> =>
+): Effect.Effect<PullRequestResult, never, GitHubClient> =>
 	Effect.gen(function* () {
 		const client = yield* GitHubClient;
 		const { owner, repo } = yield* client.repo.pipe(Effect.orDie);
@@ -172,7 +172,7 @@ export const createOrUpdatePR = (
 				url: existingPR.url,
 				created: false,
 				nodeId: existingPR.nodeId,
-			} as PullRequest;
+			} as PullRequestResult;
 		}
 
 		yield* Effect.logInfo("Creating new PR");
@@ -205,10 +205,10 @@ export const createOrUpdatePR = (
 							url: data.html_url,
 							created: true,
 							nodeId: data.node_id,
-						}) as PullRequest,
+						}) as PullRequestResult,
 				),
 				Effect.catchAll(() =>
-					Effect.succeed({ number: 0, url: "", created: false, nodeId: "" } as unknown as PullRequest),
+					Effect.succeed({ number: 0, url: "", created: false, nodeId: "" } as unknown as PullRequestResult),
 				),
 			);
 
@@ -337,7 +337,7 @@ export const generatePRBody = (
 export const generateSummary = (
 	updates: ReadonlyArray<DependencyUpdateResult>,
 	changesets: ReadonlyArray<ChangesetFile>,
-	pr: PullRequest | null,
+	pr: PullRequestResult | null,
 	dryRun: boolean,
 ): string => {
 	const { heading, table, link, code, details, codeBlock, bold, list } = GithubMarkdown;
@@ -680,7 +680,7 @@ const innerProgram = (
 						}
 
 						// Step 15: Create/update PR
-						let pr: PullRequest | null = null;
+						let pr: PullRequestResult | null = null;
 						if (dryRun) {
 							yield* Effect.logInfo("Step 13: [DRY RUN] Skipping PR creation/update");
 						} else {

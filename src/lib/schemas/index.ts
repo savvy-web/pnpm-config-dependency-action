@@ -128,17 +128,17 @@ export type ChangesetFile = typeof ChangesetFile.Type;
 /**
  * Pull request information.
  */
-export const PullRequest = Schema.Struct({
+export const PullRequestResult = Schema.Struct({
 	number: Schema.Number.pipe(Schema.positive()),
 	url: Schema.String.pipe(Schema.startsWith("https://")),
 	created: Schema.Boolean,
 	nodeId: Schema.String,
 }).annotations({
-	identifier: "PullRequest",
-	title: "Pull Request",
+	identifier: "PullRequestResult",
+	title: "Pull Request Result",
 });
 
-export type PullRequest = typeof PullRequest.Type;
+export type PullRequestResult = typeof PullRequestResult.Type;
 
 /**
  * Lockfile change detected during comparison.
