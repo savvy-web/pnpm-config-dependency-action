@@ -48,10 +48,10 @@ import { Duration, Effect, Layer, Schema } from "effect";
 import { commitChanges, manageBranch } from "./lib/github/branch.js";
 import { updateConfigDeps } from "./lib/pnpm/config.js";
 import { updateRegularDeps } from "./lib/pnpm/regular.js";
-import { upgradePnpm } from "./lib/pnpm/upgrade.js";
 import type { ChangesetFile, DependencyUpdateResult, PullRequestResult } from "./schemas/domain.js";
 import { createChangesets } from "./services/changesets.js";
 import { captureLockfileState, compareLockfiles } from "./services/lockfile.js";
+import { PnpmUpgrade, PnpmUpgradeLive } from "./services/pnpm-upgrade.js";
 import { formatWorkspaceYaml, readWorkspaceYaml } from "./services/workspace-yaml.js";
 import { cleanVersion, npmUrl } from "./utils/markdown.js";
 
@@ -402,6 +402,7 @@ export const program = Effect.gen(function* () {
 					CheckRunLive.pipe(Layer.provide(ghClient)),
 					PullRequestLive.pipe(Layer.provide(Layer.merge(ghClient, ghGraphql))),
 					NpmRegistryLive.pipe(Layer.provide(CommandRunnerLive)),
+					PnpmUpgradeLive.pipe(Layer.provide(CommandRunnerLive)),
 					CommandRunnerLive,
 					DryRunLive(dryRun),
 				);
@@ -468,7 +469,8 @@ const innerProgram = (
 						const configUpdatesFromPnpm: DependencyUpdateResult[] = [];
 						if (inputs["update-pnpm"]) {
 							yield* Effect.logInfo("Step 3: Upgrading pnpm");
-							const pnpmUpgrade = yield* upgradePnpm().pipe(
+							const pnpmUpgradeService = yield* PnpmUpgrade;
+							const pnpmUpgrade = yield* pnpmUpgradeService.upgrade().pipe(
 								Effect.catchAll((error) => {
 									return Effect.gen(function* () {
 										yield* Effect.logWarning(`Failed to upgrade pnpm: ${error.reason}`);

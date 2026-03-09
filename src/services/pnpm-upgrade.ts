@@ -1,24 +1,21 @@
 /**
- * pnpm self-upgrade logic.
+ * PnpmUpgrade service for pnpm self-upgrade operations.
  *
  * Detects the current pnpm version from `packageManager` and `devEngines.packageManager`
  * fields in root `package.json`, resolves the latest version within the `^` range,
  * and upgrades via `corepack use`.
  *
- * @module pnpm/upgrade
+ * @module services/pnpm-upgrade
  */
 
 import { readFileSync, writeFileSync } from "node:fs";
+import type { CommandRunner as CommandRunnerService } from "@savvy-web/github-action-effects";
 import { CommandRunner, SemverResolver } from "@savvy-web/github-action-effects";
-import { Effect } from "effect";
+import { Context, Effect, Layer } from "effect";
 
-import { FileSystemError } from "../../errors/errors.js";
-import { detectIndent, formatPnpmVersion, parsePnpmVersion } from "../../utils/pnpm.js";
-import { resolveLatestInRange } from "../../utils/semver.js";
-
-// Re-export for backwards compatibility
-export { detectIndent, formatPnpmVersion, parsePnpmVersion, resolveLatestInRange };
-export type { ParsedPnpmVersion } from "../../utils/pnpm.js";
+import { FileSystemError } from "../errors/errors.js";
+import { detectIndent, formatPnpmVersion, parsePnpmVersion } from "../utils/pnpm.js";
+import { resolveLatestInRange } from "../utils/semver.js";
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Types
@@ -35,6 +32,27 @@ export interface PnpmUpgradeResult {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
+// Service Interface
+// ══════════════════════════════════════════════════════════════════════════════
+
+export class PnpmUpgrade extends Context.Tag("PnpmUpgrade")<
+	PnpmUpgrade,
+	{
+		readonly upgrade: (workspaceRoot?: string) => Effect.Effect<PnpmUpgradeResult | null, FileSystemError>;
+	}
+>() {}
+
+export const PnpmUpgradeLive = Layer.effect(
+	PnpmUpgrade,
+	Effect.gen(function* () {
+		const runner = yield* CommandRunner;
+		return {
+			upgrade: (workspaceRoot = process.cwd()) => upgradePnpmImpl(runner, workspaceRoot),
+		};
+	}),
+);
+
+// ══════════════════════════════════════════════════════════════════════════════
 // Internal Helpers
 // ══════════════════════════════════════════════════════════════════════════════
 
@@ -43,24 +61,16 @@ const fsReadError = (path: string, e: unknown) => new FileSystemError({ operatio
 const fsWriteError = (path: string, e: unknown) => new FileSystemError({ operation: "write", path, reason: String(e) });
 
 // ══════════════════════════════════════════════════════════════════════════════
-// Main Upgrade Function
+// Implementation
 // ══════════════════════════════════════════════════════════════════════════════
 
 /**
- * Upgrade pnpm to the latest version within the `^` range.
- *
- * 1. Reads root `package.json`
- * 2. Parses `packageManager` and `devEngines.packageManager` fields
- * 3. Queries available pnpm versions via `npm view pnpm versions --json`
- * 4. Resolves the latest version in the `^` range
- * 5. Runs `corepack use pnpm@<version>` to update `packageManager`
- * 6. Updates `devEngines.packageManager.version` if present
- *
- * @returns Upgrade result, or null if no upgrade was needed
+ * Core upgrade implementation that accepts a runner directly.
  */
-export const upgradePnpm = (
-	workspaceRoot: string = process.cwd(),
-): Effect.Effect<PnpmUpgradeResult | null, FileSystemError, CommandRunner> =>
+const upgradePnpmImpl = (
+	runner: CommandRunnerService,
+	workspaceRoot: string,
+): Effect.Effect<PnpmUpgradeResult | null, FileSystemError> =>
 	Effect.gen(function* () {
 		const packageJsonPath = `${workspaceRoot}/package.json`;
 
@@ -94,7 +104,6 @@ export const upgradePnpm = (
 		}
 
 		// Step 4: Query available pnpm versions
-		const runner = yield* CommandRunner;
 		const versionsResult = yield* runner
 			.execCapture("sh", ["-c", "npm view pnpm versions --json"])
 			.pipe(Effect.mapError((e) => fsReadError("npm registry", `Failed to query pnpm versions: ${e.stderr}`)));

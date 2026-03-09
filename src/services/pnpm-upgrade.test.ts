@@ -3,10 +3,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { CommandRunner as CommandRunnerService } from "@savvy-web/github-action-effects";
 import { CommandRunner } from "@savvy-web/github-action-effects";
+import type { Context } from "effect";
 import { Effect, Layer, LogLevel, Logger } from "effect";
 import { describe, expect, it } from "vitest";
 
-import { formatPnpmVersion, parsePnpmVersion, resolveLatestInRange, upgradePnpm } from "./upgrade.js";
+import { formatPnpmVersion, parsePnpmVersion } from "../utils/pnpm.js";
+import { resolveLatestInRange } from "../utils/semver.js";
+import { PnpmUpgrade, PnpmUpgradeLive } from "./pnpm-upgrade.js";
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Test Helpers
@@ -37,33 +40,45 @@ const makeRunner = (
 		args?: ReadonlyArray<string>,
 	) => Effect.Effect<{ exitCode: number; stdout: string; stderr: string }, never>,
 ): CommandRunnerService => ({
-	exec: (_cmd, _args) => Effect.succeed(0),
+	exec: (_cmd, _args) => Effect.void,
 	execCapture: execCaptureOverride ?? defaultExecCapture,
 	execJson: (_cmd, _args, _schema) => Effect.die("not implemented"),
 	execLines: (_cmd, _args) => Effect.succeed([]),
 });
 
-const runWithRunner = <A, E>(
-	effect: Effect.Effect<A, E, CommandRunner>,
+const runWithService = <A, E>(
+	fn: (service: Context.Tag.Service<typeof PnpmUpgrade>) => Effect.Effect<A, E>,
 	execCaptureOverride?: (
 		command: string,
 		args?: ReadonlyArray<string>,
 	) => Effect.Effect<{ exitCode: number; stdout: string; stderr: string }, never>,
 ) => {
-	const layer = Layer.succeed(CommandRunner, makeRunner(execCaptureOverride));
-	return Effect.runPromise(effect.pipe(Effect.provide(layer), Logger.withMinimumLogLevel(LogLevel.None)));
+	const commandRunnerLayer = Layer.succeed(CommandRunner, makeRunner(execCaptureOverride));
+	const layer = PnpmUpgradeLive.pipe(Layer.provide(commandRunnerLayer));
+	return Effect.runPromise(
+		Effect.gen(function* () {
+			const service = yield* PnpmUpgrade;
+			return yield* fn(service);
+		}).pipe(Effect.provide(layer), Logger.withMinimumLogLevel(LogLevel.None)),
+	);
 };
 
-const runWithRunnerEither = <A, E>(
-	effect: Effect.Effect<A, E, CommandRunner>,
+const runWithServiceEither = <A, E>(
+	fn: (service: Context.Tag.Service<typeof PnpmUpgrade>) => Effect.Effect<A, E>,
 	execCaptureOverride?: (
 		command: string,
 		args?: ReadonlyArray<string>,
 	) => Effect.Effect<{ exitCode: number; stdout: string; stderr: string }, never>,
 ) => {
-	const layer = Layer.succeed(CommandRunner, makeRunner(execCaptureOverride));
+	const commandRunnerLayer = Layer.succeed(CommandRunner, makeRunner(execCaptureOverride));
+	const layer = PnpmUpgradeLive.pipe(Layer.provide(commandRunnerLayer));
 	return Effect.runPromise(
-		Effect.either(effect).pipe(Effect.provide(layer), Logger.withMinimumLogLevel(LogLevel.None)),
+		Effect.either(
+			Effect.gen(function* () {
+				const service = yield* PnpmUpgrade;
+				return yield* fn(service);
+			}),
+		).pipe(Effect.provide(layer), Logger.withMinimumLogLevel(LogLevel.None)),
 	);
 };
 
@@ -186,10 +201,10 @@ describe("resolveLatestInRange", () => {
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
-// upgradePnpm (Effect integration tests)
+// PnpmUpgrade service (Effect integration tests)
 // ══════════════════════════════════════════════════════════════════════════════
 
-describe("upgradePnpm", () => {
+describe("PnpmUpgrade service", () => {
 	/** Helper to extract the shell command from execCapture args */
 	const getShellCmd = (_command: string, args?: ReadonlyArray<string>) => args?.[1] ?? "";
 
@@ -215,7 +230,7 @@ describe("upgradePnpm", () => {
 		const dir = makeTempDir();
 		writePackageJson(dir, { name: "test", version: "1.0.0" });
 
-		const result = await runWithRunner(upgradePnpm(dir));
+		const result = await runWithService((s) => s.upgrade(dir));
 		expect(result).toBeNull();
 	});
 
@@ -223,7 +238,7 @@ describe("upgradePnpm", () => {
 		const dir = makeTempDir();
 		writePackageJson(dir, { name: "test", packageManager: "yarn@4.0.0" });
 
-		const result = await runWithRunner(upgradePnpm(dir));
+		const result = await runWithService((s) => s.upgrade(dir));
 		expect(result).toBeNull();
 	});
 
@@ -233,7 +248,7 @@ describe("upgradePnpm", () => {
 
 		const capturedCmds: string[] = [];
 
-		const result = await runWithRunner(upgradePnpm(dir), makeMockExecCapture(dir, { capturedCmds }));
+		const result = await runWithService((s) => s.upgrade(dir), makeMockExecCapture(dir, { capturedCmds }));
 
 		expect(result).not.toBeNull();
 		expect(result?.from).toBe("10.28.2");
@@ -246,7 +261,7 @@ describe("upgradePnpm", () => {
 		const dir = makeTempDir();
 		writePackageJson(dir, { name: "test", packageManager: "pnpm@10.29.1" });
 
-		const result = await runWithRunner(upgradePnpm(dir), makeMockExecCapture(dir));
+		const result = await runWithService((s) => s.upgrade(dir), makeMockExecCapture(dir));
 
 		expect(result).toBeNull();
 	});
@@ -261,7 +276,7 @@ describe("upgradePnpm", () => {
 			},
 		});
 
-		const result = await runWithRunner(upgradePnpm(dir), makeMockExecCapture(dir));
+		const result = await runWithService((s) => s.upgrade(dir), makeMockExecCapture(dir));
 
 		expect(result).not.toBeNull();
 		expect(result?.from).toBe("10.28.2");
@@ -284,7 +299,7 @@ describe("upgradePnpm", () => {
 			},
 		});
 
-		await runWithRunner(upgradePnpm(dir), makeMockExecCapture(dir));
+		await runWithService((s) => s.upgrade(dir), makeMockExecCapture(dir));
 
 		const pkg = readPackageJson(dir);
 		expect(pkg.devEngines.packageManager.version).toBe("^10.29.1");
@@ -299,7 +314,7 @@ describe("upgradePnpm", () => {
 			},
 		});
 
-		const result = await runWithRunner(upgradePnpm(dir), makeMockExecCapture(dir, { skipCorepack: true }));
+		const result = await runWithService((s) => s.upgrade(dir), makeMockExecCapture(dir, { skipCorepack: true }));
 
 		expect(result).not.toBeNull();
 		expect(result?.from).toBe("10.28.2");
@@ -318,7 +333,7 @@ describe("upgradePnpm", () => {
 			},
 		});
 
-		const result = await runWithRunner(upgradePnpm(dir), makeMockExecCapture(dir));
+		const result = await runWithService((s) => s.upgrade(dir), makeMockExecCapture(dir));
 
 		expect(result).not.toBeNull();
 		expect(result?.packageManagerUpdated).toBe(true);
@@ -341,7 +356,7 @@ describe("upgradePnpm", () => {
 			)}\n`,
 		);
 
-		await runWithRunner(upgradePnpm(dir), makeMockExecCapture(dir));
+		await runWithService((s) => s.upgrade(dir), makeMockExecCapture(dir));
 
 		const raw = readFileSync(join(dir, "package.json"), "utf-8");
 		// Verify tab indentation is preserved
@@ -364,19 +379,22 @@ describe("upgradePnpm", () => {
 			)}\n`,
 		);
 
-		await runWithRunner(upgradePnpm(dir), (_command, args) => {
-			const cmd = getShellCmd(_command, args);
-			if (cmd.includes("npm view")) {
-				return Effect.succeed({ exitCode: 0, stdout: versions, stderr: "" });
-			}
-			if (cmd.includes("corepack use")) {
-				const pkg = readPackageJson(dir);
-				pkg.packageManager = "pnpm@10.29.1+sha512.fake";
-				// Simulate corepack preserving space indentation
-				writeFileSync(join(dir, "package.json"), `${JSON.stringify(pkg, null, 2)}\n`);
-			}
-			return Effect.succeed({ exitCode: 0, stdout: "ok", stderr: "" });
-		});
+		await runWithService(
+			(s) => s.upgrade(dir),
+			(_command, args) => {
+				const cmd = getShellCmd(_command, args);
+				if (cmd.includes("npm view")) {
+					return Effect.succeed({ exitCode: 0, stdout: versions, stderr: "" });
+				}
+				if (cmd.includes("corepack use")) {
+					const pkg = readPackageJson(dir);
+					pkg.packageManager = "pnpm@10.29.1+sha512.fake";
+					// Simulate corepack preserving space indentation
+					writeFileSync(join(dir, "package.json"), `${JSON.stringify(pkg, null, 2)}\n`);
+				}
+				return Effect.succeed({ exitCode: 0, stdout: "ok", stderr: "" });
+			},
+		);
 
 		const raw = readFileSync(join(dir, "package.json"), "utf-8");
 		// Verify space indentation is preserved (not tabs)
@@ -388,7 +406,7 @@ describe("upgradePnpm", () => {
 		const dir = makeTempDir();
 		writePackageJson(dir, { name: "test", packageManager: "pnpm@11.0.0" });
 
-		const result = await runWithRunner(upgradePnpm(dir), makeMockExecCapture(dir));
+		const result = await runWithService((s) => s.upgrade(dir), makeMockExecCapture(dir));
 
 		// 11.0.0 is the only stable version in 11.x range, so it's already latest
 		expect(result).toBeNull();
@@ -398,7 +416,7 @@ describe("upgradePnpm", () => {
 		const dir = makeTempDir();
 		writePackageJson(dir, { name: "test", packageManager: "pnpm@12.0.0" });
 
-		const result = await runWithRunner(upgradePnpm(dir), makeMockExecCapture(dir));
+		const result = await runWithService((s) => s.upgrade(dir), makeMockExecCapture(dir));
 
 		expect(result).toBeNull();
 	});
@@ -407,7 +425,7 @@ describe("upgradePnpm", () => {
 		const dir = makeTempDir();
 		// No package.json written
 
-		const result = await runWithRunnerEither(upgradePnpm(dir));
+		const result = await runWithServiceEither((s) => s.upgrade(dir));
 
 		expect(result._tag).toBe("Left");
 		if (result._tag === "Left") {
@@ -419,7 +437,7 @@ describe("upgradePnpm", () => {
 		const dir = makeTempDir();
 		writeFileSync(join(dir, "package.json"), "{ not valid json");
 
-		const result = await runWithRunnerEither(upgradePnpm(dir));
+		const result = await runWithServiceEither((s) => s.upgrade(dir));
 
 		expect(result._tag).toBe("Left");
 		if (result._tag === "Left") {
@@ -431,13 +449,16 @@ describe("upgradePnpm", () => {
 		const dir = makeTempDir();
 		writePackageJson(dir, { name: "test", packageManager: "pnpm@10.28.2" });
 
-		const result = await runWithRunnerEither(upgradePnpm(dir), (_command, args) => {
-			const cmd = getShellCmd(_command, args);
-			if (cmd.includes("npm view")) {
-				return Effect.succeed({ exitCode: 0, stdout: "not json", stderr: "" });
-			}
-			return Effect.succeed({ exitCode: 0, stdout: "ok", stderr: "" });
-		});
+		const result = await runWithServiceEither(
+			(s) => s.upgrade(dir),
+			(_command, args) => {
+				const cmd = getShellCmd(_command, args);
+				if (cmd.includes("npm view")) {
+					return Effect.succeed({ exitCode: 0, stdout: "not json", stderr: "" });
+				}
+				return Effect.succeed({ exitCode: 0, stdout: "ok", stderr: "" });
+			},
+		);
 
 		expect(result._tag).toBe("Left");
 		if (result._tag === "Left") {
