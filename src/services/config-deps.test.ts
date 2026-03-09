@@ -1,13 +1,12 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { NpmRegistry } from "@savvy-web/github-action-effects";
 import { NpmRegistryTest } from "@savvy-web/github-action-effects";
-import { Effect, LogLevel, Logger } from "effect";
+import { Effect, Layer, LogLevel, Logger } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
-
-import { parseConfigEntry, updateConfigDeps } from "./config.js";
+import { parseConfigEntry } from "../utils/deps.js";
+import { ConfigDeps, ConfigDepsLive } from "./config-deps.js";
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Test Helpers
@@ -46,12 +45,20 @@ const makeRegistryState = (
 	return map;
 };
 
-const runWithRegistry = <A, E>(
-	effect: Effect.Effect<A, E, NpmRegistry>,
+const runWithService = <A, E>(
+	fn: (service: ConfigDeps) => Effect.Effect<A, E>,
 	packages?: Record<string, { version: string; integrity?: string }>,
 ) => {
-	const layer = packages ? NpmRegistryTest.layer({ packages: makeRegistryState(packages) }) : NpmRegistryTest.empty();
-	return Effect.runPromise(effect.pipe(Effect.provide(layer), Logger.withMinimumLogLevel(LogLevel.None)));
+	const registryLayer = packages
+		? NpmRegistryTest.layer({ packages: makeRegistryState(packages) })
+		: NpmRegistryTest.empty();
+	const layer = ConfigDepsLive.pipe(Layer.provide(registryLayer));
+	return Effect.runPromise(
+		Effect.gen(function* () {
+			const service = yield* ConfigDeps;
+			return yield* fn(service);
+		}).pipe(Effect.provide(layer), Logger.withMinimumLogLevel(LogLevel.None)),
+	);
 };
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -84,10 +91,10 @@ describe("parseConfigEntry", () => {
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
-// updateConfigDeps (Effect integration tests)
+// ConfigDeps service (Effect integration tests)
 // ══════════════════════════════════════════════════════════════════════════════
 
-describe("updateConfigDeps", () => {
+describe("ConfigDeps.updateConfigDeps", () => {
 	let tempDir: string;
 
 	beforeEach(() => {
@@ -107,33 +114,33 @@ describe("updateConfigDeps", () => {
 	};
 
 	it("returns empty array when no deps provided", async () => {
-		const result = await runWithRegistry(updateConfigDeps([]));
+		const result = await runWithService((s) => s.updateConfigDeps([]));
 		expect(result).toEqual([]);
 	});
 
 	it("returns empty array when no workspace yaml exists", async () => {
-		const result = await runWithRegistry(updateConfigDeps(["typescript"], tempDir));
+		const result = await runWithService((s) => s.updateConfigDeps(["typescript"], tempDir));
 		expect(result).toEqual([]);
 	});
 
 	it("returns empty array when no configDependencies section", async () => {
 		writeWorkspaceYaml(`packages:\n  - "pkgs/*"\n`);
 
-		const result = await runWithRegistry(updateConfigDeps(["typescript"], tempDir));
+		const result = await runWithService((s) => s.updateConfigDeps(["typescript"], tempDir));
 		expect(result).toEqual([]);
 	});
 
 	it("skips dep not in configDependencies", async () => {
 		writeWorkspaceYaml(`configDependencies:\n  typescript: "5.3.3"\n`);
 
-		const result = await runWithRegistry(updateConfigDeps(["nonexistent"], tempDir));
+		const result = await runWithService((s) => s.updateConfigDeps(["nonexistent"], tempDir));
 		expect(result).toEqual([]);
 	});
 
 	it("updates single dep when newer version available", async () => {
 		writeWorkspaceYaml(`configDependencies:\n  "@savvy-web/silk": "0.6.3+sha512-oldHash=="\n`);
 
-		const result = await runWithRegistry(updateConfigDeps(["@savvy-web/silk"], tempDir), {
+		const result = await runWithService((s) => s.updateConfigDeps(["@savvy-web/silk"], tempDir), {
 			"@savvy-web/silk": { version: "0.7.0", integrity: "sha512-newHash==" },
 		});
 
@@ -154,7 +161,7 @@ describe("updateConfigDeps", () => {
 	it("skips dep when already on latest version", async () => {
 		writeWorkspaceYaml(`configDependencies:\n  typescript: "5.4.0+sha512-existingHash=="\n`);
 
-		const result = await runWithRegistry(updateConfigDeps(["typescript"], tempDir), {
+		const result = await runWithService((s) => s.updateConfigDeps(["typescript"], tempDir), {
 			typescript: { version: "5.4.0", integrity: "sha512-existingHash==" },
 		});
 
@@ -164,7 +171,7 @@ describe("updateConfigDeps", () => {
 	it("updates multiple deps", async () => {
 		writeWorkspaceYaml(`configDependencies:\n  typescript: "5.3.3"\n  "@biomejs/biome": "1.5.0+sha512-oldHash=="\n`);
 
-		const result = await runWithRegistry(updateConfigDeps(["typescript", "@biomejs/biome"], tempDir), {
+		const result = await runWithService((s) => s.updateConfigDeps(["typescript", "@biomejs/biome"], tempDir), {
 			typescript: { version: "5.4.0", integrity: "sha512-tsHash==" },
 			"@biomejs/biome": { version: "1.6.1", integrity: "sha512-biomeHash==" },
 		});
@@ -178,7 +185,7 @@ describe("updateConfigDeps", () => {
 		writeWorkspaceYaml(`configDependencies:\n  "bad-pkg": "1.0.0"\n  "good-pkg": "1.0.0"\n`);
 
 		// Only provide "good-pkg" in registry; "bad-pkg" will fail automatically
-		const result = await runWithRegistry(updateConfigDeps(["bad-pkg", "good-pkg"], tempDir), {
+		const result = await runWithService((s) => s.updateConfigDeps(["bad-pkg", "good-pkg"], tempDir), {
 			"good-pkg": { version: "2.0.0", integrity: "sha512-goodHash==" },
 		});
 
@@ -200,7 +207,7 @@ describe("updateConfigDeps", () => {
 			].join("\n"),
 		);
 
-		await runWithRegistry(updateConfigDeps(["typescript"], tempDir), {
+		await runWithService((s) => s.updateConfigDeps(["typescript"], tempDir), {
 			typescript: { version: "5.4.0", integrity: "sha512-tsHash==" },
 		});
 
@@ -213,7 +220,7 @@ describe("updateConfigDeps", () => {
 	it("reports clean versions in from/to (strips hash)", async () => {
 		writeWorkspaceYaml(`configDependencies:\n  "@savvy-web/silk": "0.6.3+sha512-P2oTH3CRDxvEqVtavf5adiX2B4=="\n`);
 
-		const result = await runWithRegistry(updateConfigDeps(["@savvy-web/silk"], tempDir), {
+		const result = await runWithService((s) => s.updateConfigDeps(["@savvy-web/silk"], tempDir), {
 			"@savvy-web/silk": { version: "0.7.0", integrity: "sha512-newHashValue==" },
 		});
 
@@ -227,7 +234,7 @@ describe("updateConfigDeps", () => {
 	it("returns empty array when registry returns no integrity", async () => {
 		writeWorkspaceYaml(`configDependencies:\n  typescript: "5.3.3"\n`);
 
-		const result = await runWithRegistry(updateConfigDeps(["typescript"], tempDir), {
+		const result = await runWithService((s) => s.updateConfigDeps(["typescript"], tempDir), {
 			typescript: { version: "5.4.0" }, // no integrity
 		});
 
@@ -238,14 +245,14 @@ describe("updateConfigDeps", () => {
 	it("skips dep when parseConfigEntry returns null (empty value)", async () => {
 		writeWorkspaceYaml(`configDependencies:\n  typescript: ""\n`);
 
-		const result = await runWithRegistry(updateConfigDeps(["typescript"], tempDir));
+		const result = await runWithService((s) => s.updateConfigDeps(["typescript"], tempDir));
 		expect(result).toHaveLength(0);
 	});
 
 	it("handles config dep without hash suffix", async () => {
 		writeWorkspaceYaml(`configDependencies:\n  typescript: "5.3.3"\n`);
 
-		const result = await runWithRegistry(updateConfigDeps(["typescript"], tempDir), {
+		const result = await runWithService((s) => s.updateConfigDeps(["typescript"], tempDir), {
 			typescript: { version: "5.4.0", integrity: "sha512-tsHash==" },
 		});
 

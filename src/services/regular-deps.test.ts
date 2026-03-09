@@ -1,12 +1,11 @@
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { NpmRegistry } from "@savvy-web/github-action-effects";
 import { NpmRegistryTest } from "@savvy-web/github-action-effects";
-import { Effect, LogLevel, Logger } from "effect";
+import { Effect, Layer, LogLevel, Logger } from "effect";
 import { describe, expect, it, vi } from "vitest";
-
-import { matchesPattern, parseSpecifier, updateRegularDeps } from "./regular.js";
+import { matchesPattern, parseSpecifier } from "../utils/deps.js";
+import { RegularDeps, RegularDepsLive } from "./regular-deps.js";
 
 // Mock workspace-tools to return our test workspace info
 const { mockGetPackageInfosAsync } = vi.hoisted(() => ({
@@ -59,9 +58,17 @@ const makeRegistryState = (
 	return map;
 };
 
-const runWithRegistry = <A, E>(effect: Effect.Effect<A, E, NpmRegistry>, packages?: Record<string, string>) => {
-	const layer = packages ? NpmRegistryTest.layer({ packages: makeRegistryState(packages) }) : NpmRegistryTest.empty();
-	return Effect.runPromise(effect.pipe(Effect.provide(layer), Logger.withMinimumLogLevel(LogLevel.None)));
+const runWithService = <A, E>(fn: (service: RegularDeps) => Effect.Effect<A, E>, packages?: Record<string, string>) => {
+	const registryLayer = packages
+		? NpmRegistryTest.layer({ packages: makeRegistryState(packages) })
+		: NpmRegistryTest.empty();
+	const layer = RegularDepsLive.pipe(Layer.provide(registryLayer));
+	return Effect.runPromise(
+		Effect.gen(function* () {
+			const service = yield* RegularDeps;
+			return yield* fn(service);
+		}).pipe(Effect.provide(layer), Logger.withMinimumLogLevel(LogLevel.None)),
+	);
 };
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -139,12 +146,12 @@ describe("parseSpecifier", () => {
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
-// updateRegularDeps (Effect integration tests)
+// RegularDeps service (Effect integration tests)
 // ══════════════════════════════════════════════════════════════════════════════
 
-describe("updateRegularDeps", () => {
+describe("RegularDeps.updateRegularDeps", () => {
 	it("returns empty array when no patterns provided", async () => {
-		const result = await runWithRegistry(updateRegularDeps([]));
+		const result = await runWithService((s) => s.updateRegularDeps([]));
 		expect(result).toEqual([]);
 	});
 
@@ -157,7 +164,7 @@ describe("updateRegularDeps", () => {
 
 		mockGetPackageInfosAsync.mockResolvedValue({});
 
-		const result = await runWithRegistry(updateRegularDeps(["effect"], dir), {
+		const result = await runWithService((s) => s.updateRegularDeps(["effect"], dir), {
 			effect: "3.1.0",
 		});
 
@@ -183,7 +190,7 @@ describe("updateRegularDeps", () => {
 
 		mockGetPackageInfosAsync.mockResolvedValue({});
 
-		const result = await runWithRegistry(updateRegularDeps(["effect"], dir), {
+		const result = await runWithService((s) => s.updateRegularDeps(["effect"], dir), {
 			effect: "3.1.0",
 		});
 
@@ -202,7 +209,7 @@ describe("updateRegularDeps", () => {
 
 		mockGetPackageInfosAsync.mockResolvedValue({});
 
-		const result = await runWithRegistry(updateRegularDeps(["@savvy-web/*"], dir), {
+		const result = await runWithService((s) => s.updateRegularDeps(["@savvy-web/*"], dir), {
 			"@savvy-web/core": "1.1.0",
 			"@savvy-web/utils": "1.2.0",
 		});
@@ -224,7 +231,7 @@ describe("updateRegularDeps", () => {
 
 		mockGetPackageInfosAsync.mockResolvedValue({});
 
-		const result = await runWithRegistry(updateRegularDeps(["effect", "@effect/*"], dir), {
+		const result = await runWithService((s) => s.updateRegularDeps(["effect", "@effect/*"], dir), {
 			"@effect/schema": "0.61.0",
 		});
 
@@ -256,7 +263,7 @@ describe("updateRegularDeps", () => {
 			},
 		});
 
-		const result = await runWithRegistry(updateRegularDeps(["effect"], dir), {
+		const result = await runWithService((s) => s.updateRegularDeps(["effect"], dir), {
 			effect: "3.1.0",
 		});
 
@@ -284,7 +291,7 @@ describe("updateRegularDeps", () => {
 		mockGetPackageInfosAsync.mockResolvedValue({});
 
 		// Only provide "good-pkg" in registry; "bad-pkg" will fail automatically
-		const result = await runWithRegistry(updateRegularDeps(["bad-pkg", "good-pkg"], dir), {
+		const result = await runWithService((s) => s.updateRegularDeps(["bad-pkg", "good-pkg"], dir), {
 			"good-pkg": "2.0.0",
 		});
 
@@ -302,7 +309,7 @@ describe("updateRegularDeps", () => {
 
 		mockGetPackageInfosAsync.mockResolvedValue({});
 
-		const result = await runWithRegistry(updateRegularDeps(["effect"], dir), {
+		const result = await runWithService((s) => s.updateRegularDeps(["effect"], dir), {
 			effect: "3.1.0",
 		});
 
@@ -323,7 +330,7 @@ describe("updateRegularDeps", () => {
 
 		mockGetPackageInfosAsync.mockResolvedValue({});
 
-		const result = await runWithRegistry(updateRegularDeps(["effect"], dir), {
+		const result = await runWithService((s) => s.updateRegularDeps(["effect"], dir), {
 			effect: "3.1.0",
 		});
 
@@ -345,7 +352,7 @@ describe("updateRegularDeps", () => {
 
 		mockGetPackageInfosAsync.mockResolvedValue({});
 
-		const result = await runWithRegistry(updateRegularDeps(["effect"], dir));
+		const result = await runWithService((s) => s.updateRegularDeps(["effect"], dir));
 
 		// No deps match the pattern, so empty result
 		expect(result).toHaveLength(0);
@@ -360,7 +367,7 @@ describe("updateRegularDeps", () => {
 
 		mockGetPackageInfosAsync.mockRejectedValue(new Error("workspace detection failed"));
 
-		const result = await runWithRegistry(updateRegularDeps(["effect"], dir), {
+		const result = await runWithService((s) => s.updateRegularDeps(["effect"], dir), {
 			effect: "3.1.0",
 		});
 
@@ -384,7 +391,7 @@ describe("updateRegularDeps", () => {
 		mockGetPackageInfosAsync.mockResolvedValue({});
 
 		// Empty registry — no packages registered, so query will fail
-		const result = await runWithRegistry(updateRegularDeps(["effect"], dir));
+		const result = await runWithService((s) => s.updateRegularDeps(["effect"], dir));
 
 		// queryLatestVersion returns null when registry query fails
 		expect(result).toHaveLength(0);
@@ -399,7 +406,7 @@ describe("updateRegularDeps", () => {
 
 		mockGetPackageInfosAsync.mockResolvedValue({});
 
-		const result = await runWithRegistry(updateRegularDeps(["effect"], dir), {
+		const result = await runWithService((s) => s.updateRegularDeps(["effect"], dir), {
 			effect: "3.1.0",
 		});
 
@@ -419,7 +426,7 @@ describe("updateRegularDeps", () => {
 
 		mockGetPackageInfosAsync.mockResolvedValue({});
 
-		const result = await runWithRegistry(updateRegularDeps(["effect"], dir), {
+		const result = await runWithService((s) => s.updateRegularDeps(["effect"], dir), {
 			effect: "3.1.0",
 		});
 

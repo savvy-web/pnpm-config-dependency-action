@@ -1,25 +1,48 @@
 /**
- * Config dependency updates via direct YAML editing.
+ * ConfigDeps service for updating pnpm config dependencies.
  *
  * Instead of using `pnpm add --config` (which promotes all workspace
  * dependencies to the default catalog when `catalogMode: strict` is enabled),
- * this module queries npm directly for latest versions and edits
+ * this service queries npm directly for latest versions and edits
  * `pnpm-workspace.yaml` in place.
  *
- * @module pnpm/config
+ * @module services/config-deps
  */
 
 import { existsSync, writeFileSync } from "node:fs";
+import type { NpmRegistry as NpmRegistryService } from "@savvy-web/github-action-effects";
 import { NpmRegistry } from "@savvy-web/github-action-effects";
-import { Effect } from "effect";
+import { Context, Effect, Layer } from "effect";
 import { stringify } from "yaml";
-import { FileSystemError } from "../../errors/errors.js";
-import type { DependencyUpdateResult } from "../../schemas/domain.js";
-import { STRINGIFY_OPTIONS, readWorkspaceYaml, sortContent } from "../../services/workspace-yaml.js";
-import { parseConfigEntry } from "../../utils/deps.js";
 
-// Re-export for backwards compatibility
-export { parseConfigEntry };
+import { FileSystemError } from "../errors/errors.js";
+import type { DependencyUpdateResult } from "../schemas/domain.js";
+import { parseConfigEntry } from "../utils/deps.js";
+import { STRINGIFY_OPTIONS, readWorkspaceYaml, sortContent } from "./workspace-yaml.js";
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Service Interface
+// ══════════════════════════════════════════════════════════════════════════════
+
+export class ConfigDeps extends Context.Tag("ConfigDeps")<
+	ConfigDeps,
+	{
+		readonly updateConfigDeps: (
+			deps: ReadonlyArray<string>,
+			workspaceRoot?: string,
+		) => Effect.Effect<ReadonlyArray<DependencyUpdateResult>>;
+	}
+>() {}
+
+export const ConfigDepsLive = Layer.effect(
+	ConfigDeps,
+	Effect.gen(function* () {
+		const registry = yield* NpmRegistry;
+		return {
+			updateConfigDeps: (deps, workspaceRoot = process.cwd()) => updateConfigDepsImpl(deps, registry, workspaceRoot),
+		};
+	}),
+);
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Internal Helpers
@@ -32,29 +55,27 @@ export { parseConfigEntry };
  */
 const queryConfigVersion = (
 	packageName: string,
-): Effect.Effect<{ version: string; integrity: string } | null, never, NpmRegistry> =>
+	registry: NpmRegistryService,
+): Effect.Effect<{ version: string; integrity: string } | null> =>
 	Effect.gen(function* () {
-		const registry = yield* NpmRegistry;
 		const info = yield* registry.getPackageInfo(packageName).pipe(Effect.catchAll(() => Effect.succeed(null)));
 		if (!info || !info.integrity) return null;
 		return { version: info.version, integrity: info.integrity };
 	});
 
 // ══════════════════════════════════════════════════════════════════════════════
-// Main Export
+// Implementation
 // ══════════════════════════════════════════════════════════════════════════════
 
 /**
  * Update config dependencies by querying npm for latest versions and
  * editing pnpm-workspace.yaml directly.
- *
- * This avoids `pnpm add --config` which promotes all workspace
- * dependencies to the default catalog when `catalogMode: strict` is enabled.
  */
-export const updateConfigDeps = (
+const updateConfigDepsImpl = (
 	deps: ReadonlyArray<string>,
-	workspaceRoot: string = process.cwd(),
-): Effect.Effect<ReadonlyArray<DependencyUpdateResult>, never, NpmRegistry> =>
+	registry: NpmRegistryService,
+	workspaceRoot: string,
+): Effect.Effect<ReadonlyArray<DependencyUpdateResult>> =>
 	Effect.gen(function* () {
 		if (deps.length === 0) return [];
 
@@ -99,7 +120,7 @@ export const updateConfigDeps = (
 
 			// Query npm for latest version + integrity
 			yield* Effect.logInfo(`Querying npm for latest version of ${dep}`);
-			const latest = yield* queryConfigVersion(dep);
+			const latest = yield* queryConfigVersion(dep, registry);
 
 			if (!latest) {
 				yield* Effect.logWarning(`Could not query latest version for ${dep}`);

@@ -1,25 +1,49 @@
 /**
- * Regular dependency updates via direct npm queries.
+ * RegularDeps service for updating regular (non-config) dependencies.
  *
  * Instead of using `pnpm up --latest` (which can promote deps to catalogs
- * when `catalogMode: strict` is enabled), this module queries npm directly
+ * when `catalogMode: strict` is enabled), this service queries npm directly
  * for latest versions and updates package.json specifiers in place.
  *
- * @module pnpm/regular
+ * @module services/regular-deps
  */
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import type { NpmRegistry as NpmRegistryService } from "@savvy-web/github-action-effects";
 import { NpmRegistry } from "@savvy-web/github-action-effects";
-import { Effect } from "effect";
+import { Context, Effect, Layer } from "effect";
 import { getPackageInfosAsync } from "workspace-tools";
-import { FileSystemError } from "../../errors/errors.js";
-import type { DependencyUpdateResult } from "../../schemas/domain.js";
-import { matchesPattern, parseSpecifier } from "../../utils/deps.js";
-import { detectIndent } from "../../utils/pnpm.js";
 
-// Re-export for backwards compatibility
-export { matchesPattern, parseSpecifier };
+import { FileSystemError } from "../errors/errors.js";
+import type { DependencyUpdateResult } from "../schemas/domain.js";
+import { matchesPattern, parseSpecifier } from "../utils/deps.js";
+import { detectIndent } from "../utils/pnpm.js";
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Service Interface
+// ══════════════════════════════════════════════════════════════════════════════
+
+export class RegularDeps extends Context.Tag("RegularDeps")<
+	RegularDeps,
+	{
+		readonly updateRegularDeps: (
+			patterns: ReadonlyArray<string>,
+			workspaceRoot?: string,
+		) => Effect.Effect<ReadonlyArray<DependencyUpdateResult>>;
+	}
+>() {}
+
+export const RegularDepsLive = Layer.effect(
+	RegularDeps,
+	Effect.gen(function* () {
+		const registry = yield* NpmRegistry;
+		return {
+			updateRegularDeps: (patterns, workspaceRoot = process.cwd()) =>
+				updateRegularDepsImpl(patterns, registry, workspaceRoot),
+		};
+	}),
+);
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Internal Helpers
@@ -28,9 +52,8 @@ export { matchesPattern, parseSpecifier };
 /**
  * Query npm for the latest published version of a package.
  */
-const queryLatestVersion = (packageName: string): Effect.Effect<string | null, never, NpmRegistry> =>
+const queryLatestVersion = (packageName: string, registry: NpmRegistryService): Effect.Effect<string | null> =>
 	Effect.gen(function* () {
-		const registry = yield* NpmRegistry;
 		const version = yield* registry
 			.getLatestVersion(packageName)
 			.pipe(Effect.catchAll(() => Effect.succeed(null as string | null)));
@@ -138,20 +161,18 @@ const updatePackageJson = (pkgPath: string, updates: Map<string, string>): Effec
 	});
 
 // ══════════════════════════════════════════════════════════════════════════════
-// Main Export
+// Implementation
 // ══════════════════════════════════════════════════════════════════════════════
 
 /**
  * Update regular dependencies by querying npm for latest versions and
  * updating package.json specifiers directly.
- *
- * This avoids `pnpm up --latest` which can promote deps to catalogs
- * when `catalogMode: strict` is enabled.
  */
-export const updateRegularDeps = (
+const updateRegularDepsImpl = (
 	patterns: ReadonlyArray<string>,
-	workspaceRoot: string = process.cwd(),
-): Effect.Effect<ReadonlyArray<DependencyUpdateResult>, never, NpmRegistry> =>
+	registry: NpmRegistryService,
+	workspaceRoot: string,
+): Effect.Effect<ReadonlyArray<DependencyUpdateResult>> =>
 	Effect.gen(function* () {
 		if (patterns.length === 0) return [];
 
@@ -200,7 +221,7 @@ export const updateRegularDeps = (
 		const fileUpdates = new Map<string, Map<string, string>>();
 
 		for (const [depName, entries] of depMap) {
-			const latest = yield* queryLatestVersion(depName);
+			const latest = yield* queryLatestVersion(depName, registry);
 
 			if (!latest) {
 				yield* Effect.logWarning(`Could not query latest version for ${depName}`);

@@ -46,12 +46,12 @@ import {
 import { Duration, Effect, Layer, Schema } from "effect";
 
 import { commitChanges, manageBranch } from "./lib/github/branch.js";
-import { updateConfigDeps } from "./lib/pnpm/config.js";
-import { updateRegularDeps } from "./lib/pnpm/regular.js";
 import type { ChangesetFile, DependencyUpdateResult, PullRequestResult } from "./schemas/domain.js";
 import { createChangesets } from "./services/changesets.js";
+import { ConfigDeps, ConfigDepsLive } from "./services/config-deps.js";
 import { captureLockfileState, compareLockfiles } from "./services/lockfile.js";
 import { PnpmUpgrade, PnpmUpgradeLive } from "./services/pnpm-upgrade.js";
+import { RegularDeps, RegularDepsLive } from "./services/regular-deps.js";
 import { formatWorkspaceYaml, readWorkspaceYaml } from "./services/workspace-yaml.js";
 import { cleanVersion, npmUrl } from "./utils/markdown.js";
 
@@ -395,14 +395,17 @@ export const program = Effect.gen(function* () {
 				// Build all dependent layers from the token
 				const ghClient = GitHubClientLive(token);
 				const ghGraphql = GitHubGraphQLLive.pipe(Layer.provide(ghClient));
+				const npmRegistry = NpmRegistryLive.pipe(Layer.provide(CommandRunnerLive));
 				const appLayer = Layer.mergeAll(
 					ghClient,
 					GitBranchLive.pipe(Layer.provide(ghClient)),
 					GitCommitLive.pipe(Layer.provide(ghClient)),
 					CheckRunLive.pipe(Layer.provide(ghClient)),
 					PullRequestLive.pipe(Layer.provide(Layer.merge(ghClient, ghGraphql))),
-					NpmRegistryLive.pipe(Layer.provide(CommandRunnerLive)),
+					npmRegistry,
 					PnpmUpgradeLive.pipe(Layer.provide(CommandRunnerLive)),
+					ConfigDepsLive.pipe(Layer.provide(npmRegistry)),
+					RegularDepsLive.pipe(Layer.provide(npmRegistry)),
 					CommandRunnerLive,
 					DryRunLive(dryRun),
 				);
@@ -498,12 +501,14 @@ const innerProgram = (
 						const workspaceBefore = yield* readWorkspaceYaml().pipe(Effect.catchAll(() => Effect.succeed(null)));
 						yield* Effect.logDebug(`pnpm-workspace.yaml (before): ${JSON.stringify(workspaceBefore)}`);
 
-						const configUpdates = yield* updateConfigDeps(inputs["config-dependencies"]);
+						const configDepsService = yield* ConfigDeps;
+						const configUpdates = yield* configDepsService.updateConfigDeps(inputs["config-dependencies"]);
 						yield* Effect.logDebug(`Config dependency updates: ${JSON.stringify(configUpdates)}`);
 
 						// Step 7: Update regular dependencies
 						yield* Effect.logInfo("Step 5: Updating regular dependencies");
-						const regularUpdates = yield* updateRegularDeps(inputs.dependencies);
+						const regularDepsService = yield* RegularDeps;
+						const regularUpdates = yield* regularDepsService.updateRegularDeps(inputs.dependencies);
 
 						// Step 8: Clean install
 						if (configUpdates.length > 0 || regularUpdates.length > 0 || configUpdatesFromPnpm.length > 0) {
