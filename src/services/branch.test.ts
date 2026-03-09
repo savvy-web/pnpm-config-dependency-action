@@ -212,8 +212,8 @@ describe("BranchManager.commitChanges", () => {
 					stderr: "",
 				},
 			],
-			["git fetch origin", { exitCode: 0, stdout: "", stderr: "" }],
-			["git checkout -B pnpm/config origin/pnpm/config", { exitCode: 0, stdout: "", stderr: "" }],
+			["git fetch origin pnpm/config", { exitCode: 0, stdout: "", stderr: "" }],
+			["git reset --hard origin/pnpm/config", { exitCode: 0, stdout: "", stderr: "" }],
 		]);
 
 		const { commitState, result } = runWithBranchManager(
@@ -249,8 +249,8 @@ describe("BranchManager.commitChanges", () => {
 					stderr: "",
 				},
 			],
-			["git fetch origin", { exitCode: 0, stdout: "", stderr: "" }],
-			["git checkout -B branch origin/branch", { exitCode: 0, stdout: "", stderr: "" }],
+			["git fetch origin branch", { exitCode: 0, stdout: "", stderr: "" }],
+			["git reset --hard origin/branch", { exitCode: 0, stdout: "", stderr: "" }],
 		]);
 
 		const { commitState, result } = runWithBranchManager(

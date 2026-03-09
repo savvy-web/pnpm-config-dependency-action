@@ -187,7 +187,9 @@ const commitChangesImpl = (
 		const commitSha = yield* commit.commitFiles(branchName, message, fileChanges);
 		yield* Effect.logInfo(`Created commit: ${commitSha}`);
 
-		// Fetch the new commit locally so git status is clean
-		yield* cmd.exec("git", ["fetch", "origin"]);
-		yield* cmd.exec("git", ["checkout", "-B", branchName, `origin/${branchName}`]);
+		// Sync local working tree with the remote commit.
+		// Use reset --hard because checkout refuses to overwrite dirty/untracked files
+		// that were just committed via the GitHub API.
+		yield* cmd.exec("git", ["fetch", "origin", branchName]);
+		yield* cmd.exec("git", ["reset", "--hard", `origin/${branchName}`]);
 	});
