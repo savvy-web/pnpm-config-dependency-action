@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 
 import {
-	AuthenticationError,
 	ChangesetError,
 	DependencyUpdateFailures,
 	FileSystemError,
@@ -28,29 +27,6 @@ describe("InvalidInputError", () => {
 		const error = new InvalidInputError({ field: "appId", value: "", reason: "Must not be empty" });
 
 		expect(error.message).toBe('Invalid input for "appId": Must not be empty');
-	});
-});
-
-describe("AuthenticationError", () => {
-	it("constructs with reason only", () => {
-		const error = new AuthenticationError({ reason: "Token expired" });
-
-		expect(error._tag).toBe("AuthenticationError");
-		expect(error.reason).toBe("Token expired");
-		expect(error.appId).toBeUndefined();
-	});
-
-	it("constructs with appId", () => {
-		const error = new AuthenticationError({ reason: "Invalid key", appId: "12345" });
-
-		expect(error.appId).toBe("12345");
-		expect(error.message).toBe("Authentication failed (app: 12345): Invalid key");
-	});
-
-	it("message without appId omits app info", () => {
-		const error = new AuthenticationError({ reason: "Token expired" });
-
-		expect(error.message).toBe("Authentication failed: Token expired");
 	});
 });
 
@@ -282,7 +258,6 @@ describe("isRetryableError", () => {
 
 	it("returns false for non-retryable errors", () => {
 		expect(isRetryableError(new InvalidInputError({ field: "f", value: "v", reason: "r" }))).toBe(false);
-		expect(isRetryableError(new AuthenticationError({ reason: "r" }))).toBe(false);
 		expect(isRetryableError(new ChangesetError({ reason: "r" }))).toBe(false);
 		expect(isRetryableError(new FileSystemError({ operation: "read", path: "p", reason: "r" }))).toBe(false);
 		expect(isRetryableError(new LockfileError({ operation: "read", reason: "r" }))).toBe(false);
@@ -294,7 +269,6 @@ describe("getErrorMessage", () => {
 		expect(getErrorMessage(new InvalidInputError({ field: "f", value: "v", reason: "r" }))).toBe(
 			'Invalid input for "f": r',
 		);
-		expect(getErrorMessage(new AuthenticationError({ reason: "r" }))).toBe("Authentication failed: r");
 		expect(getErrorMessage(new GitHubApiError({ operation: "op", message: "msg" }))).toBe("msg");
 		expect(getErrorMessage(new GitError({ operation: "push", exitCode: 1, stderr: "err" }))).toBe(
 			"Git push failed (exit 1): err",

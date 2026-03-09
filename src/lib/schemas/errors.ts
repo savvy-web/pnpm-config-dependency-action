@@ -40,23 +40,6 @@ export class InvalidInputError extends Schema.TaggedError<InvalidInputError>()("
 }
 
 /**
- * GitHub App authentication error.
- */
-export class AuthenticationError extends Schema.TaggedError<AuthenticationError>()("AuthenticationError", {
-	reason: NonEmptyString.annotations({
-		description: "Why authentication failed",
-	}),
-	appId: Schema.optional(Schema.String).annotations({
-		description: "The GitHub App ID that failed authentication",
-	}),
-}) {
-	get message() {
-		const appInfo = this.appId ? ` (app: ${this.appId})` : "";
-		return `Authentication failed${appInfo}: ${this.reason}`;
-	}
-}
-
-/**
  * GitHub API error.
  */
 export class GitHubApiError extends Schema.TaggedError<GitHubApiError>()("GitHubApiError", {
@@ -240,7 +223,6 @@ export class DependencyUpdateFailures extends Schema.TaggedError<DependencyUpdat
  */
 export type ActionError =
 	| InvalidInputError
-	| AuthenticationError
 	| GitHubApiError
 	| GitError
 	| PnpmError

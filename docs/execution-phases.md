@@ -21,9 +21,8 @@ Detailed breakdown of the 14-step workflow executed in the main phase.
 
 ## Step 1: Setup
 
-- Retrieves the GitHub App installation token from state (saved by the pre
-  phase)
-- Parses and validates all action inputs using Effect Schema
+- Parses and validates all action inputs using `Action.parseInputs()`
+- Generates a GitHub App installation token via `GitHubApp.withToken()`
 - Validates that at least one of `config-dependencies`, `dependencies`, or
   `update-pnpm` is active
 - Creates a GitHub check run for status visibility in the UI

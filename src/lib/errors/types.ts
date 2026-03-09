@@ -10,7 +10,6 @@
 export type { ActionError, DependencyFailure } from "../schemas/errors.js";
 // Re-export all errors from schemas
 export {
-	AuthenticationError,
 	ChangesetError,
 	DependencyUpdateFailures,
 	FileSystemError,

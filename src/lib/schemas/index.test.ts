@@ -1,149 +1,137 @@
-import { Either } from "effect";
+import { Schema } from "effect";
 import { describe, expect, it } from "vitest";
 
-import { decodeActionInputs, decodeActionInputsEither } from "./index.js";
+import {
+	BranchResult,
+	ChangesetFile,
+	DependencyUpdateResult,
+	LockfileChange,
+	NonEmptyString,
+	PullRequest,
+} from "./index.js";
 
-const validInputs = {
-	appId: "12345",
-	appPrivateKey: "-----BEGIN RSA PRIVATE KEY-----\nfake\n-----END RSA PRIVATE KEY-----",
-	branch: "pnpm/config-deps",
-	configDependencies: ["typescript"],
-	dependencies: ["effect"],
-	run: [],
-	updatePnpm: true,
-	changesets: true,
-	autoMerge: "" as const,
-};
+describe("NonEmptyString", () => {
+	const decode = Schema.decodeUnknownSync(NonEmptyString);
 
-describe("decodeActionInputsEither", () => {
-	it("decodes valid inputs successfully", () => {
-		const result = decodeActionInputsEither(validInputs);
-		expect(Either.isRight(result)).toBe(true);
-		if (Either.isRight(result)) {
-			expect(result.right.appId).toBe("12345");
-			expect(result.right.branch).toBe("pnpm/config-deps");
-			expect(result.right.configDependencies).toEqual(["typescript"]);
-		}
+	it("accepts non-empty strings", () => {
+		expect(decode("hello")).toBe("hello");
 	});
 
-	it("fails for missing appId", () => {
-		const result = decodeActionInputsEither({ ...validInputs, appId: "" });
-		expect(Either.isLeft(result)).toBe(true);
+	it("rejects empty strings", () => {
+		expect(() => decode("")).toThrow();
 	});
+});
 
-	it("fails for missing appPrivateKey", () => {
-		const result = decodeActionInputsEither({ ...validInputs, appPrivateKey: "" });
-		expect(Either.isLeft(result)).toBe(true);
-	});
+describe("BranchResult", () => {
+	const decode = Schema.decodeUnknownSync(BranchResult);
 
-	it("fails for invalid branch name with special chars", () => {
-		const result = decodeActionInputsEither({ ...validInputs, branch: "my branch@v1!" });
-		expect(Either.isLeft(result)).toBe(true);
-	});
-
-	it("accepts valid branch names with slashes and hyphens", () => {
-		const result = decodeActionInputsEither({ ...validInputs, branch: "pnpm/config-deps_v2" });
-		expect(Either.isRight(result)).toBe(true);
-	});
-
-	it("accepts empty arrays for optional config fields", () => {
-		const result = decodeActionInputsEither({
-			...validInputs,
-			configDependencies: [],
-			dependencies: ["effect"],
+	it("decodes valid branch result", () => {
+		const result = decode({
+			branch: "pnpm/config-deps",
+			created: true,
+			upToDate: true,
+			baseRef: "main",
 		});
-		expect(Either.isRight(result)).toBe(true);
+		expect(result.branch).toBe("pnpm/config-deps");
+		expect(result.created).toBe(true);
 	});
 
-	it("accepts empty run array", () => {
-		const result = decodeActionInputsEither({ ...validInputs, run: [] });
-		expect(Either.isRight(result)).toBe(true);
-	});
-});
-
-describe("decodeActionInputs (sync)", () => {
-	it("decodes valid inputs synchronously", () => {
-		const result = decodeActionInputs(validInputs);
-		expect(result.appId).toBe("12345");
-	});
-
-	it("throws for invalid inputs", () => {
-		expect(() => decodeActionInputs({ ...validInputs, appId: "" })).toThrow();
-	});
-
-	it("throws with branch pattern message for invalid branch", () => {
-		expect(() => decodeActionInputs({ ...validInputs, branch: "invalid branch!" })).toThrow();
+	it("rejects empty branch name", () => {
+		expect(() => decode({ branch: "", created: true, upToDate: true, baseRef: "main" })).toThrow();
 	});
 });
 
-describe("autoMerge schema", () => {
-	it("accepts empty string (disabled)", () => {
-		const result = decodeActionInputsEither({ ...validInputs, autoMerge: "" });
-		expect(Either.isRight(result)).toBe(true);
-	});
+describe("DependencyUpdateResult", () => {
+	const decode = Schema.decodeUnknownSync(DependencyUpdateResult);
 
-	it("accepts merge", () => {
-		const result = decodeActionInputsEither({ ...validInputs, autoMerge: "merge" });
-		expect(Either.isRight(result)).toBe(true);
-		if (Either.isRight(result)) {
-			expect(result.right.autoMerge).toBe("merge");
-		}
-	});
-
-	it("accepts squash", () => {
-		const result = decodeActionInputsEither({ ...validInputs, autoMerge: "squash" });
-		expect(Either.isRight(result)).toBe(true);
-	});
-
-	it("accepts rebase", () => {
-		const result = decodeActionInputsEither({ ...validInputs, autoMerge: "rebase" });
-		expect(Either.isRight(result)).toBe(true);
-	});
-
-	it("rejects invalid values", () => {
-		const result = decodeActionInputsEither({ ...validInputs, autoMerge: "fast-forward" });
-		expect(Either.isLeft(result)).toBe(true);
-	});
-});
-
-describe("changesets schema", () => {
-	it("accepts true", () => {
-		const result = decodeActionInputsEither({ ...validInputs, changesets: true });
-		expect(Either.isRight(result)).toBe(true);
-		if (Either.isRight(result)) {
-			expect(result.right.changesets).toBe(true);
-		}
-	});
-
-	it("accepts false", () => {
-		const result = decodeActionInputsEither({ ...validInputs, changesets: false });
-		expect(Either.isRight(result)).toBe(true);
-		if (Either.isRight(result)) {
-			expect(result.right.changesets).toBe(false);
-		}
-	});
-});
-
-describe("PullRequest nodeId", () => {
-	it("decoded PullRequest includes nodeId field", () => {
-		const result = decodeActionInputsEither(validInputs);
-		expect(Either.isRight(result)).toBe(true);
-	});
-});
-
-describe("schema types", () => {
-	it("NonEmptyString rejects empty string via decodeActionInputsEither", () => {
-		const result = decodeActionInputsEither({
-			appId: "",
-			appPrivateKey: "key",
-			branch: "main",
-			configDependencies: ["ts"],
-			dependencies: [],
-			run: [],
-			updatePnpm: true,
-			changesets: true,
-			autoMerge: "",
+	it("decodes config dependency update", () => {
+		const result = decode({
+			dependency: "typescript",
+			from: "5.3.0",
+			to: "5.4.0",
+			type: "config",
+			package: null,
 		});
-		expect(Either.isLeft(result)).toBe(true);
+		expect(result.type).toBe("config");
+		expect(result.package).toBeNull();
+	});
+
+	it("decodes regular dependency update", () => {
+		const result = decode({
+			dependency: "effect",
+			from: null,
+			to: "3.1.0",
+			type: "regular",
+			package: "@savvy-web/core",
+		});
+		expect(result.from).toBeNull();
+		expect(result.package).toBe("@savvy-web/core");
+	});
+});
+
+describe("ChangesetFile", () => {
+	const decode = Schema.decodeUnknownSync(ChangesetFile);
+
+	it("decodes valid changeset file", () => {
+		const result = decode({
+			id: "abc123",
+			packages: ["@savvy-web/core"],
+			type: "patch",
+			summary: "Update dependencies",
+		});
+		expect(result.id).toBe("abc123");
+		expect(result.type).toBe("patch");
+	});
+});
+
+describe("PullRequest", () => {
+	const decode = Schema.decodeUnknownSync(PullRequest);
+
+	it("decodes valid pull request", () => {
+		const result = decode({
+			number: 42,
+			url: "https://github.com/owner/repo/pull/42",
+			created: true,
+			nodeId: "PR_abc123",
+		});
+		expect(result.number).toBe(42);
+		expect(result.nodeId).toBe("PR_abc123");
+	});
+
+	it("rejects non-https URL", () => {
+		expect(() =>
+			decode({
+				number: 1,
+				url: "http://github.com/pull/1",
+				created: true,
+				nodeId: "id",
+			}),
+		).toThrow();
+	});
+});
+
+describe("LockfileChange", () => {
+	const decode = Schema.decodeUnknownSync(LockfileChange);
+
+	it("decodes config lockfile change", () => {
+		const result = decode({
+			type: "config",
+			dependency: "typescript",
+			from: "5.3.0",
+			to: "5.4.0",
+			affectedPackages: [],
+		});
+		expect(result.type).toBe("config");
+	});
+
+	it("decodes regular lockfile change with affected packages", () => {
+		const result = decode({
+			type: "regular",
+			dependency: "effect",
+			from: null,
+			to: "3.1.0",
+			affectedPackages: ["@savvy-web/core", "@savvy-web/utils"],
+		});
+		expect(result.affectedPackages).toHaveLength(2);
 	});
 });

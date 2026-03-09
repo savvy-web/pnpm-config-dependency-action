@@ -7,30 +7,13 @@
  * @module types
  */
 
-import type { Octokit } from "@octokit/rest";
-
-// Re-export all types from schemas
+// Re-export types still used by domain modules
 export type {
-	ActionInputs,
-	ActionResult,
 	BranchResult,
 	ChangedPackage,
 	ChangesetFile,
-	CheckRun,
 	DependencyChange,
 	DependencyUpdateResult,
-	GitHubContext,
-	GitStatus,
-	InstallationToken,
 	LockfileChange,
-	PRData,
 	PullRequest,
 } from "../lib/schemas/index.js";
-
-/**
- * Authenticated Octokit client with installation info.
- */
-export interface AuthenticatedClient {
-	readonly octokit: Octokit;
-	readonly installationId: number;
-}

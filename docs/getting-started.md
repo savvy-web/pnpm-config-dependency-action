@@ -141,4 +141,4 @@ without modifying the repository.
 
 - [Configuration](./configuration.md) -- Explore all input options and advanced
   patterns
-- [Troubleshooting](../troubleshooting.md) -- Common issues and solutions
+- [Troubleshooting](./troubleshooting.md) -- Common issues and solutions

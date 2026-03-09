@@ -6,7 +6,7 @@ Dependency Action.
 ## Table of Contents
 
 - [Design Principles](#design-principles)
-- [Three-Phase Execution](#three-phase-execution)
+- [Single-Phase Execution](#single-phase-execution)
 - [Module Structure](#module-structure)
 - [Technology Stack](#technology-stack)
 - [Data Flow](#data-flow)
@@ -26,26 +26,17 @@ The action is built around these principles:
 4. **Complementary to Dependabot**: The action fills a specific gap (config
    dependencies) rather than replacing Dependabot entirely.
 
-## Three-Phase Execution
+## Single-Phase Execution
 
-GitHub Actions supports `pre`, `main`, and `post` scripts. The action uses all
-three phases:
-
-### Pre Phase (`src/pre.ts`)
-
-Runs before the main action. Responsible for:
-
-- Reading the `app-id` and `app-private-key` inputs
-- Authenticating as the GitHub App and generating a JWT
-- Exchanging the JWT for a short-lived installation token
-- Saving the token, installation ID, and app slug to state (persisted across
-  phases via `@savvy-web/github-action-effects` `ActionState` service)
+The action runs as a single `main.ts` entry point. Token lifecycle is managed
+automatically by `GitHubApp.withToken()`, which generates a GitHub App
+installation token at the start and revokes it on exit (success or failure).
 
 ### Main Phase (`src/main.ts`)
 
 The core orchestration logic. Executes 14 steps sequentially:
 
-1. Setup (parse inputs, retrieve token, create check run)
+1. Setup (parse inputs, generate token, create check run)
 2. Branch management (create or reset the update branch)
 3. Capture lockfile state (before)
 4. Upgrade pnpm (if `update-pnpm` is enabled)
@@ -64,32 +55,20 @@ The core orchestration logic. Executes 14 steps sequentially:
 See [Execution Phases](./execution-phases.md) for detailed information on each
 step.
 
-### Post Phase (`src/post.ts`)
-
-Runs after the main action completes (even on failure). Responsible for:
-
-- Revoking the GitHub App installation token (unless `skip-token-revoke` is
-  set)
-- Logging total execution time
-
 ## Module Structure
 
 ```text
 src/
-├── pre.ts                     # Phase 1: Token generation
-├── main.ts                    # Phase 2: Orchestration
-├── post.ts                    # Phase 3: Cleanup
+├── main.ts                    # Single entry point (Action.run)
 ├── lib/
-│   ├── inputs.ts              # Input parsing with Effect Schema validation
-│   ├── errors/types.ts        # Re-exports from schemas/errors
 │   ├── schemas/
 │   │   ├── index.ts           # Effect Schema definitions for all types
 │   │   └── errors.ts          # TaggedError definitions
-│   ├── services/index.ts      # Effect service layers (GitHub, Git, pnpm)
 │   ├── github/
-│   │   ├── auth.ts            # GitHub App JWT + installation token
 │   │   └── branch.ts          # Branch management + API commits
 │   ├── pnpm/
+│   │   ├── config.ts          # Config dependency updates
+│   │   ├── regular.ts         # Regular dependency updates
 │   │   ├── format.ts          # pnpm-workspace.yaml formatting
 │   │   └── upgrade.ts         # pnpm version upgrade logic
 │   ├── changeset/
@@ -104,9 +83,7 @@ src/
 | Technology | Purpose |
 | --- | --- |
 | [Effect](https://effect.website) | Typed error handling, service composition, schema validation |
-| [@savvy-web/github-action-effects](https://github.com/savvy-web/github-action-effects) | GitHub Actions I/O services (inputs, outputs, state, logging) |
-| [@octokit/rest](https://octokit.github.io/rest.js) | GitHub REST API client |
-| [@octokit/auth-app](https://github.com/octokit/auth-app.js) | GitHub App JWT and installation token generation |
+| [@savvy-web/github-action-effects](https://github.com/savvy-web/github-action-effects) | GitHub Actions services: inputs, outputs, token lifecycle, check runs, git operations, markdown helpers |
 | [@effect/platform](https://effect.website) | Cross-platform command execution |
 | [@pnpm/lockfile.fs](https://pnpm.io) | Official pnpm lockfile reader |
 | [workspace-tools](https://github.com/nicolo-ribaudo/workspace-tools) | Workspace package detection |
@@ -118,9 +95,9 @@ The action uses Effect for three main reasons:
 
 1. **Typed errors**: Every function signature declares what errors it can
    produce. The compiler ensures all errors are handled.
-2. **Service layers**: The `GitHubClient`, `GitExecutor`, and `PnpmExecutor`
-   services are injected via Effect's Layer system, enabling clean testing and
-   composition.
+2. **Service layers**: Services like `GitHubClient`, `CommandRunner`,
+   `GitBranch`, and `GitCommit` are injected via Effect's Layer system,
+   enabling clean testing and composition.
 3. **Error accumulation**: When updating multiple dependencies, failures are
    collected rather than stopping the entire workflow.
 
@@ -133,7 +110,7 @@ Inputs (action.yml)
   │
   ├─ update-pnpm ───────────> upgradePnpm() ──────> version change
   ├─ config-dependencies ──> pnpm add --config ──> version changes
-  ├─ dependencies ──────────> pnpm up --latest ──> version changes
+  ├─ dependencies ──────────> npm registry query ─> version changes
   │
   ├─ Lockfile (before) ───┐
   ├─ Lockfile (after) ────┤──> compareLockfiles() ──> LockfileChange[]

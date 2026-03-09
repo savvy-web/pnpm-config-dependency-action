@@ -40,6 +40,7 @@ import {
 	GitHubClient,
 	GitHubClientLive,
 	GitHubGraphQLLive,
+	GithubMarkdown,
 } from "@savvy-web/github-action-effects";
 import { Duration, Effect, Layer, Schema } from "effect";
 
@@ -112,7 +113,7 @@ export const createOrUpdatePR = (
 ): Effect.Effect<PullRequest, never, GitHubClient> =>
 	Effect.gen(function* () {
 		const client = yield* GitHubClient;
-		const { owner, repo } = yield* client.repo;
+		const { owner, repo } = yield* client.repo.pipe(Effect.orDie);
 
 		const title = "chore(deps): update pnpm config dependencies";
 		const body = generatePRBody(updates, changesets);
@@ -266,87 +267,68 @@ export const generatePRBody = (
 	updates: ReadonlyArray<DependencyUpdateResult>,
 	changesets: ReadonlyArray<ChangesetFile>,
 ): string => {
-	const lines: string[] = [];
+	const { heading, table, link, code, details, codeBlock, bold, rule } = GithubMarkdown;
+	const sections: string[] = [];
 
 	const configUpdates = updates.filter((u) => u.type === "config");
 	const regularUpdates = updates.filter((u) => u.type === "regular");
 
 	// Title section
-	lines.push("## Dependency Updates");
-	lines.push("");
+	sections.push(heading("Dependency Updates", 2));
 
 	// Summary line
 	const parts: string[] = [];
 	if (configUpdates.length > 0) parts.push(`${configUpdates.length} config`);
 	if (regularUpdates.length > 0) parts.push(`${regularUpdates.length} regular`);
-	lines.push(`Updates ${parts.join(" and ")} ${parts.length > 1 ? "dependencies" : "dependency"}.`);
-	lines.push("");
+	sections.push(`Updates ${parts.join(" and ")} ${parts.length > 1 ? "dependencies" : "dependency"}.`);
 
 	// Config dependencies section
 	if (configUpdates.length > 0) {
-		lines.push("### Config Dependencies");
-		lines.push("");
-		lines.push("| Package | From | To |");
-		lines.push("|---------|------|-----|");
-		for (const update of configUpdates) {
-			const from = cleanVersion(update.from) ?? "_new_";
-			const to = cleanVersion(update.to);
-			lines.push(`| [\`${update.dependency}\`](${npmUrl(update.dependency)}) | ${from} | ${to} |`);
-		}
-		lines.push("");
+		sections.push(heading("Config Dependencies", 3));
+		const rows = configUpdates.map((update) => [
+			link(code(update.dependency), npmUrl(update.dependency)),
+			cleanVersion(update.from) ?? "_new_",
+			cleanVersion(update.to) ?? "",
+		]);
+		sections.push(table(["Package", "From", "To"], rows));
 	}
 
 	// Regular dependencies section
 	if (regularUpdates.length > 0) {
-		lines.push("### Regular Dependencies");
-		lines.push("");
-		lines.push("| Package | From | To |");
-		lines.push("|---------|------|-----|");
-		for (const update of regularUpdates) {
-			const from = update.from ?? "_new_";
-			const to = update.to;
-			const pkgLink = update.dependency.includes("*")
-				? `\`${update.dependency}\``
-				: `[\`${update.dependency}\`](${npmUrl(update.dependency)})`;
-			lines.push(`| ${pkgLink} | ${from} | ${to} |`);
-		}
-		lines.push("");
+		sections.push(heading("Regular Dependencies", 3));
+		const rows = regularUpdates.map((update) => {
+			const pkg = update.dependency.includes("*")
+				? code(update.dependency)
+				: link(code(update.dependency), npmUrl(update.dependency));
+			return [pkg, update.from ?? "_new_", update.to];
+		});
+		sections.push(table(["Package", "From", "To"], rows));
 	}
 
 	// Changesets section - one expandable per affected package/workspace
 	if (changesets.length > 0) {
-		lines.push("### Changesets");
-		lines.push("");
-		lines.push(`${changesets.length} changeset(s) created for version management.`);
-		lines.push("");
+		sections.push(heading("Changesets", 3));
+		sections.push(`${changesets.length} changeset(s) created for version management.`);
 		for (const cs of changesets) {
-			// Empty changesets are for root workspace config deps
 			const isRootWorkspace = cs.packages.length === 0;
 			const label = isRootWorkspace ? "root workspace" : cs.packages.join(", ");
-
-			lines.push("<details>");
-			lines.push(`<summary>${label}</summary>`);
-			lines.push("");
-			lines.push(`**Changeset:** \`${cs.id}\``);
-			lines.push(`**Type:** ${cs.type}`);
-			lines.push("");
-			lines.push("```");
-			lines.push(cs.summary);
-			lines.push("```");
-			lines.push("");
-			lines.push("</details>");
-			lines.push("");
+			const content = [
+				`${bold("Changeset:")} ${code(cs.id)}`,
+				`${bold("Type:")} ${cs.type}`,
+				"",
+				codeBlock(cs.summary),
+			].join("\n");
+			sections.push(details(label, content));
 		}
 	}
 
 	// Footer
-	lines.push("---");
-	lines.push("");
-	lines.push(
-		"_This PR was automatically created by [pnpm-config-dependency-action](https://github.com/savvy-web/pnpm-config-dependency-action)_",
+	sections.push(rule());
+	sections.push(
+		`_This PR was automatically created by ${link("pnpm-config-dependency-action", "https://github.com/savvy-web/pnpm-config-dependency-action")}_`,
 	);
 
-	return lines.join("\n");
+	return sections.join("\n\n");
 };
 
 /**
@@ -358,87 +340,61 @@ export const generateSummary = (
 	pr: PullRequest | null,
 	dryRun: boolean,
 ): string => {
-	const lines: string[] = [];
+	const { heading, table, link, code, details, codeBlock, bold, list } = GithubMarkdown;
+	const sections: string[] = [];
 
-	lines.push("### Summary");
-	lines.push("");
-	lines.push(`- **Dependencies updated:** ${updates.length}`);
-	lines.push(`- **Changesets created:** ${changesets.length}`);
-
+	// Summary stats
+	sections.push(heading("Summary", 3));
+	const stats = [
+		`${bold("Dependencies updated:")} ${updates.length}`,
+		`${bold("Changesets created:")} ${changesets.length}`,
+	];
 	if (pr && pr.number > 0) {
-		lines.push(`- **Pull request:** [#${pr.number}](${pr.url})`);
+		stats.push(`${bold("Pull request:")} ${link(`#${pr.number}`, pr.url)}`);
 	}
+	sections.push(list(stats));
 
-	lines.push("");
-	lines.push("### Updated Dependencies");
-	lines.push("");
+	// Updated dependencies tables
+	sections.push(heading("Updated Dependencies", 3));
 
 	const configUpdates = updates.filter((u) => u.type === "config");
 	const regularUpdates = updates.filter((u) => u.type === "regular");
 
 	if (configUpdates.length > 0) {
-		lines.push("#### Config Dependencies");
-		lines.push("");
-		lines.push("| Package | From | To |");
-		lines.push("|---------|------|-----|");
-		for (const update of configUpdates) {
-			const from = cleanVersion(update.from) ?? "_new_";
-			const to = cleanVersion(update.to);
-			lines.push(`| \`${update.dependency}\` | ${from} | ${to} |`);
-		}
-		lines.push("");
+		sections.push(heading("Config Dependencies", 4));
+		const rows = configUpdates.map((update) => [
+			code(update.dependency),
+			cleanVersion(update.from) ?? "_new_",
+			cleanVersion(update.to) ?? "",
+		]);
+		sections.push(table(["Package", "From", "To"], rows));
 	}
 
 	if (regularUpdates.length > 0) {
-		lines.push("#### Regular Dependencies");
-		lines.push("");
-		lines.push("| Package | From | To |");
-		lines.push("|---------|------|-----|");
-		for (const update of regularUpdates) {
-			const from = update.from ?? "_new_";
-			const to = update.to;
-			lines.push(`| \`${update.dependency}\` | ${from} | ${to} |`);
-		}
-		lines.push("");
+		sections.push(heading("Regular Dependencies", 4));
+		const rows = regularUpdates.map((update) => [code(update.dependency), update.from ?? "_new_", update.to]);
+		sections.push(table(["Package", "From", "To"], rows));
 	}
 
 	// Show changeset details - one expandable per affected package/workspace
 	if (changesets.length > 0) {
-		lines.push("### Changesets Created");
-		lines.push("");
+		sections.push(heading("Changesets Created", 3));
 		for (const cs of changesets) {
 			const isRootWorkspace = cs.packages.length === 0;
 			const label = isRootWorkspace ? "root workspace" : cs.packages.join(", ");
-
-			lines.push("<details>");
-			lines.push(`<summary>${label}</summary>`);
-			lines.push("");
-			lines.push(`**Changeset:** \`${cs.id}\``);
-			lines.push("");
-			lines.push("```");
-			lines.push(cs.summary);
-			lines.push("```");
-			lines.push("");
-			lines.push("</details>");
-			lines.push("");
+			const content = [`${bold("Changeset:")} ${code(cs.id)}`, "", codeBlock(cs.summary)].join("\n");
+			sections.push(details(label, content));
 		}
 	}
 
 	// In dry-run mode, show what the PR body would look like
 	if (dryRun && updates.length > 0) {
-		lines.push("### PR Body Preview");
-		lines.push("");
-		lines.push("This is what the PR body would look like:");
-		lines.push("");
-		lines.push("<details>");
-		lines.push("<summary>View PR body</summary>");
-		lines.push("");
-		lines.push(generatePRBody(updates, changesets));
-		lines.push("");
-		lines.push("</details>");
+		sections.push(heading("PR Body Preview", 3));
+		sections.push("This is what the PR body would look like:");
+		sections.push(details("View PR body", generatePRBody(updates, changesets)));
 	}
 
-	return lines.join("\n");
+	return sections.join("\n\n");
 };
 
 /**
@@ -519,7 +475,7 @@ export const program = Effect.gen(function* () {
 					DryRunLive(dryRun),
 				);
 
-				yield* Effect.provide(innerProgram(inputs, dryRun), appLayer);
+				yield* innerProgram(inputs, dryRun, appLayer);
 			}),
 		)
 		.pipe(
@@ -544,230 +500,238 @@ const innerProgram = (
 		run: ReadonlyArray<string>;
 	},
 	dryRun: boolean,
+	// biome-ignore lint/suspicious/noExplicitAny: Layer type is complex and inferred at call site
+	appLayer: Layer.Layer<any, any>,
 ) =>
-	Effect.gen(function* () {
-		const outputs = yield* ActionOutputs;
-		const checkRunService = yield* CheckRun;
-		const headSha = context.sha;
+	Effect.provide(
+		Effect.gen(function* () {
+			const outputs = yield* ActionOutputs;
+			const checkRunService = yield* CheckRun;
+			const headSha = context.sha;
 
-		// Create check run for visibility
-		const checkRunName = dryRun ? "Dependency Updates (Dry Run)" : "Dependency Updates";
+			// Create check run for visibility
+			const checkRunName = dryRun ? "Dependency Updates (Dry Run)" : "Dependency Updates";
 
-		yield* checkRunService.withCheckRun(checkRunName, headSha, (checkRunId) =>
-			Effect.gen(function* () {
-				// Step 3: Manage branch
-				yield* Effect.logInfo("Step 1: Managing branch");
-				const branchResult = yield* manageBranch(inputs.branch, "main");
-				yield* Effect.logInfo(`Branch: ${branchResult.branch} (created: ${branchResult.created})`);
+			yield* checkRunService.withCheckRun(checkRunName, headSha, (checkRunId) =>
+				Effect.provide(
+					Effect.gen(function* () {
+						// Step 3: Manage branch
+						yield* Effect.logInfo("Step 1: Managing branch");
+						const branchResult = yield* manageBranch(inputs.branch, "main");
+						yield* Effect.logInfo(`Branch: ${branchResult.branch} (created: ${branchResult.created})`);
 
-				// Step 4: Capture lockfile state before updates
-				yield* Effect.logInfo("Step 2: Capturing lockfile state (before)");
-				const lockfileBefore = yield* captureLockfileState();
-				yield* Effect.logDebug(
-					`Lockfile state (before): ${JSON.stringify({
-						packages: Object.keys(lockfileBefore?.packages || {}).length,
-						importers: Object.keys(lockfileBefore?.importers || {}).length,
-					})}`,
-				);
-
-				// Step 5: Upgrade pnpm (if enabled)
-				const configUpdatesFromPnpm: DependencyUpdateResult[] = [];
-				if (inputs["update-pnpm"]) {
-					yield* Effect.logInfo("Step 3: Upgrading pnpm");
-					const pnpmUpgrade = yield* upgradePnpm().pipe(
-						Effect.catchAll((error) => {
-							return Effect.gen(function* () {
-								yield* Effect.logWarning(`Failed to upgrade pnpm: ${error.reason}`);
-								return null;
-							});
-						}),
-					);
-
-					if (pnpmUpgrade) {
-						yield* Effect.logInfo(`pnpm: ${pnpmUpgrade.from} -> ${pnpmUpgrade.to}`);
-						configUpdatesFromPnpm.push({
-							dependency: "pnpm",
-							from: pnpmUpgrade.from,
-							to: pnpmUpgrade.to,
-							type: "config",
-							package: null,
-						});
-					} else {
-						yield* Effect.logInfo("pnpm is already up-to-date");
-					}
-				}
-
-				// Step 6: Update config dependencies
-				yield* Effect.logInfo("Step 4: Updating config dependencies");
-				const workspaceBefore = yield* readWorkspaceYaml().pipe(Effect.catchAll(() => Effect.succeed(null)));
-				yield* Effect.logDebug(`pnpm-workspace.yaml (before): ${JSON.stringify(workspaceBefore)}`);
-
-				const configUpdates = yield* updateConfigDeps(inputs["config-dependencies"]);
-				yield* Effect.logDebug(`Config dependency updates: ${JSON.stringify(configUpdates)}`);
-
-				// Step 7: Update regular dependencies
-				yield* Effect.logInfo("Step 5: Updating regular dependencies");
-				const regularUpdates = yield* updateRegularDeps(inputs.dependencies);
-
-				// Step 8: Clean install
-				if (configUpdates.length > 0 || regularUpdates.length > 0 || configUpdatesFromPnpm.length > 0) {
-					yield* Effect.logInfo("Step 6: Running clean install");
-					const runner = yield* CommandRunner;
-					yield* runner.execCapture("sh", ["-c", "rm -rf node_modules pnpm-lock.yaml"]);
-					yield* runner.exec("pnpm", ["install"]);
-				}
-
-				// Step 9: Format pnpm-workspace.yaml
-				yield* Effect.logInfo("Step 7: Formatting pnpm-workspace.yaml");
-				yield* formatWorkspaceYaml();
-
-				const workspaceAfter = yield* readWorkspaceYaml().pipe(Effect.catchAll(() => Effect.succeed(null)));
-				yield* Effect.logDebug(`pnpm-workspace.yaml (after): ${JSON.stringify(workspaceAfter)}`);
-
-				// Step 10: Run custom commands (if specified)
-				if (inputs.run.length > 0) {
-					yield* Effect.logInfo("Step 8: Running custom commands");
-					const runCommandsResult = yield* runCommands(inputs.run);
-
-					if (runCommandsResult.failed.length > 0) {
-						const failedCommands = runCommandsResult.failed.map((f) => f.command).join(", ");
-						yield* Effect.logError(`${runCommandsResult.failed.length} command(s) failed: ${failedCommands}`);
-
-						const failureDetails = runCommandsResult.failed.map((f) => `- \`${f.command}\`: ${f.error}`).join("\n");
-
-						yield* checkRunService.complete(checkRunId, "failure", {
-							title: "Custom Commands Failed",
-							summary: `Custom commands failed:\n\n${failureDetails}`,
-						});
-
-						yield* outputs.set("has-changes", "false");
-						yield* outputs.set("updates-count", "0");
-
-						return yield* Effect.fail(new Error(`Custom commands failed: ${failedCommands}`));
-					}
-				}
-
-				// Step 11: Capture lockfile state after updates
-				yield* Effect.logInfo("Step 9: Capturing lockfile state (after)");
-				const lockfileAfter = yield* captureLockfileState();
-				yield* Effect.logDebug(
-					`Lockfile state (after): ${JSON.stringify({
-						packages: Object.keys(lockfileAfter?.packages || {}).length,
-						importers: Object.keys(lockfileAfter?.importers || {}).length,
-					})}`,
-				);
-
-				// Step 12: Detect changes
-				yield* Effect.logInfo("Step 10: Detecting changes");
-				const changes = yield* compareLockfiles(lockfileBefore, lockfileAfter);
-				yield* Effect.logDebug(`Detected changes: ${JSON.stringify(changes)}`);
-
-				const allUpdates = [...configUpdatesFromPnpm, ...configUpdates, ...regularUpdates];
-				yield* Effect.logDebug(
-					`Total updates: ${allUpdates.length} (config: ${configUpdates.length + configUpdatesFromPnpm.length}, regular: ${regularUpdates.length})`,
-				);
-
-				// Check if there are any changes via git status
-				const runner = yield* CommandRunner;
-				const statusResult = yield* runner.execCapture("git", ["status", "--porcelain"]);
-				const hasChanges = statusResult.stdout.trim().length > 0;
-				yield* Effect.logDebug(`Git status has changes: ${hasChanges}`);
-
-				if (!hasChanges && changes.length === 0) {
-					yield* Effect.logInfo("No dependency updates available");
-
-					yield* checkRunService.complete(checkRunId, "neutral", {
-						title: "No Updates",
-						summary: "No dependency updates available. All dependencies are up-to-date.",
-					});
-
-					yield* outputs.set("has-changes", "false");
-					yield* outputs.set("updates-count", "0");
-
-					return;
-				}
-
-				// Step 13: Create changesets (if enabled)
-				let changesets: ReadonlyArray<ChangesetFile> = [];
-				if (inputs.changesets) {
-					yield* Effect.logInfo("Step 11: Creating changesets");
-
-					const configChangesForChangeset = [...configUpdatesFromPnpm, ...configUpdates].map((u) => ({
-						type: "config" as const,
-						dependency: u.dependency,
-						from: u.from,
-						to: u.to,
-						affectedPackages: [] as string[],
-					}));
-
-					const allChangesForChangeset = [...configChangesForChangeset, ...changes];
-					changesets = yield* createChangesets(allChangesForChangeset);
-				} else {
-					yield* Effect.logInfo("Step 11: Skipping changesets (disabled)");
-				}
-
-				// Step 14: Commit and push
-				if (dryRun) {
-					yield* Effect.logInfo("Step 12: [DRY RUN] Skipping commit and push");
-				} else {
-					yield* Effect.logInfo("Step 12: Committing via GitHub API");
-					const commitMessage = generateCommitMessage(allUpdates);
-					yield* commitChanges(commitMessage, inputs.branch);
-				}
-
-				// Step 15: Create/update PR
-				let pr: PullRequest | null = null;
-				if (dryRun) {
-					yield* Effect.logInfo("Step 13: [DRY RUN] Skipping PR creation/update");
-				} else {
-					yield* Effect.logInfo("Step 13: Creating/updating PR");
-					const client = yield* GitHubClient;
-					pr = yield* createOrUpdatePR(inputs.branch, allUpdates, changesets).pipe(
-						Effect.provide(Layer.succeed(GitHubClient, client)),
-					);
-
-					// Enable auto-merge if configured
-					if (inputs["auto-merge"] && pr && pr.nodeId) {
-						const mergeMethod = inputs["auto-merge"].toUpperCase() as "MERGE" | "SQUASH" | "REBASE";
-						yield* AutoMerge.enable(pr.nodeId, mergeMethod).pipe(
-							Effect.tap(() => Effect.logInfo(`Auto-merge enabled (${inputs["auto-merge"]})`)),
-							Effect.catchAll((error) =>
-								Effect.logWarning(
-									`Failed to enable auto-merge: ${error.reason}. ` +
-										`Ensure the repository has "Allow auto-merge" enabled and branch protection rules configured.`,
-								),
-							),
+						// Step 4: Capture lockfile state before updates
+						yield* Effect.logInfo("Step 2: Capturing lockfile state (before)");
+						const lockfileBefore = yield* captureLockfileState();
+						yield* Effect.logDebug(
+							`Lockfile state (before): ${JSON.stringify({
+								packages: Object.keys(lockfileBefore?.packages || {}).length,
+								importers: Object.keys(lockfileBefore?.importers || {}).length,
+							})}`,
 						);
-					}
-				}
 
-				// Update check run
-				const summaryText = generateSummary(allUpdates, changesets, pr, dryRun);
-				yield* checkRunService.complete(checkRunId, "success", {
-					title: "Dependency Updates Complete",
-					summary: summaryText,
-				});
+						// Step 5: Upgrade pnpm (if enabled)
+						const configUpdatesFromPnpm: DependencyUpdateResult[] = [];
+						if (inputs["update-pnpm"]) {
+							yield* Effect.logInfo("Step 3: Upgrading pnpm");
+							const pnpmUpgrade = yield* upgradePnpm().pipe(
+								Effect.catchAll((error) => {
+									return Effect.gen(function* () {
+										yield* Effect.logWarning(`Failed to upgrade pnpm: ${error.reason}`);
+										return null;
+									});
+								}),
+							);
 
-				// Set outputs
-				yield* outputs.set("has-changes", "true");
-				yield* outputs.set("updates-count", String(allUpdates.length));
-				if (pr) {
-					yield* outputs.set("pr-number", String(pr.number));
-					yield* outputs.set("pr-url", pr.url);
-				}
+							if (pnpmUpgrade) {
+								yield* Effect.logInfo(`pnpm: ${pnpmUpgrade.from} -> ${pnpmUpgrade.to}`);
+								configUpdatesFromPnpm.push({
+									dependency: "pnpm",
+									from: pnpmUpgrade.from,
+									to: pnpmUpgrade.to,
+									type: "config",
+									package: null,
+								});
+							} else {
+								yield* Effect.logInfo("pnpm is already up-to-date");
+							}
+						}
 
-				// Write job summary
-				const jobSummaryLines = ["# Dependency Updates"];
-				if (dryRun) {
-					jobSummaryLines.push("", "> **DRY RUN MODE** - Changes detected but not committed/pushed");
-				}
-				jobSummaryLines.push("", summaryText);
-				yield* outputs.summary(jobSummaryLines.join("\n"));
+						// Step 6: Update config dependencies
+						yield* Effect.logInfo("Step 4: Updating config dependencies");
+						const workspaceBefore = yield* readWorkspaceYaml().pipe(Effect.catchAll(() => Effect.succeed(null)));
+						yield* Effect.logDebug(`pnpm-workspace.yaml (before): ${JSON.stringify(workspaceBefore)}`);
 
-				yield* Effect.logInfo("Dependency update action completed successfully");
-			}),
-		);
-	});
+						const configUpdates = yield* updateConfigDeps(inputs["config-dependencies"]);
+						yield* Effect.logDebug(`Config dependency updates: ${JSON.stringify(configUpdates)}`);
+
+						// Step 7: Update regular dependencies
+						yield* Effect.logInfo("Step 5: Updating regular dependencies");
+						const regularUpdates = yield* updateRegularDeps(inputs.dependencies);
+
+						// Step 8: Clean install
+						if (configUpdates.length > 0 || regularUpdates.length > 0 || configUpdatesFromPnpm.length > 0) {
+							yield* Effect.logInfo("Step 6: Running clean install");
+							const runner = yield* CommandRunner;
+							yield* runner.execCapture("sh", ["-c", "rm -rf node_modules pnpm-lock.yaml"]);
+							yield* runner.exec("pnpm", ["install"]);
+						}
+
+						// Step 9: Format pnpm-workspace.yaml
+						yield* Effect.logInfo("Step 7: Formatting pnpm-workspace.yaml");
+						yield* formatWorkspaceYaml();
+
+						const workspaceAfter = yield* readWorkspaceYaml().pipe(Effect.catchAll(() => Effect.succeed(null)));
+						yield* Effect.logDebug(`pnpm-workspace.yaml (after): ${JSON.stringify(workspaceAfter)}`);
+
+						// Step 10: Run custom commands (if specified)
+						if (inputs.run.length > 0) {
+							yield* Effect.logInfo("Step 8: Running custom commands");
+							const runCommandsResult = yield* runCommands(inputs.run);
+
+							if (runCommandsResult.failed.length > 0) {
+								const failedCommands = runCommandsResult.failed.map((f) => f.command).join(", ");
+								yield* Effect.logError(`${runCommandsResult.failed.length} command(s) failed: ${failedCommands}`);
+
+								const failureDetails = runCommandsResult.failed.map((f) => `- \`${f.command}\`: ${f.error}`).join("\n");
+
+								yield* checkRunService.complete(checkRunId, "failure", {
+									title: "Custom Commands Failed",
+									summary: `Custom commands failed:\n\n${failureDetails}`,
+								});
+
+								yield* outputs.set("has-changes", "false");
+								yield* outputs.set("updates-count", "0");
+
+								return yield* Effect.fail(new Error(`Custom commands failed: ${failedCommands}`));
+							}
+						}
+
+						// Step 11: Capture lockfile state after updates
+						yield* Effect.logInfo("Step 9: Capturing lockfile state (after)");
+						const lockfileAfter = yield* captureLockfileState();
+						yield* Effect.logDebug(
+							`Lockfile state (after): ${JSON.stringify({
+								packages: Object.keys(lockfileAfter?.packages || {}).length,
+								importers: Object.keys(lockfileAfter?.importers || {}).length,
+							})}`,
+						);
+
+						// Step 12: Detect changes
+						yield* Effect.logInfo("Step 10: Detecting changes");
+						const changes = yield* compareLockfiles(lockfileBefore, lockfileAfter);
+						yield* Effect.logDebug(`Detected changes: ${JSON.stringify(changes)}`);
+
+						const allUpdates = [...configUpdatesFromPnpm, ...configUpdates, ...regularUpdates];
+						yield* Effect.logDebug(
+							`Total updates: ${allUpdates.length} (config: ${configUpdates.length + configUpdatesFromPnpm.length}, regular: ${regularUpdates.length})`,
+						);
+
+						// Check if there are any changes via git status
+						const runner = yield* CommandRunner;
+						const statusResult = yield* runner.execCapture("git", ["status", "--porcelain"]);
+						const hasChanges = statusResult.stdout.trim().length > 0;
+						yield* Effect.logDebug(`Git status has changes: ${hasChanges}`);
+
+						if (!hasChanges && changes.length === 0) {
+							yield* Effect.logInfo("No dependency updates available");
+
+							yield* checkRunService.complete(checkRunId, "neutral", {
+								title: "No Updates",
+								summary: "No dependency updates available. All dependencies are up-to-date.",
+							});
+
+							yield* outputs.set("has-changes", "false");
+							yield* outputs.set("updates-count", "0");
+
+							return;
+						}
+
+						// Step 13: Create changesets (if enabled)
+						let changesets: ReadonlyArray<ChangesetFile> = [];
+						if (inputs.changesets) {
+							yield* Effect.logInfo("Step 11: Creating changesets");
+
+							const configChangesForChangeset = [...configUpdatesFromPnpm, ...configUpdates].map((u) => ({
+								type: "config" as const,
+								dependency: u.dependency,
+								from: u.from,
+								to: u.to,
+								affectedPackages: [] as string[],
+							}));
+
+							const allChangesForChangeset = [...configChangesForChangeset, ...changes];
+							changesets = yield* createChangesets(allChangesForChangeset);
+						} else {
+							yield* Effect.logInfo("Step 11: Skipping changesets (disabled)");
+						}
+
+						// Step 14: Commit and push
+						if (dryRun) {
+							yield* Effect.logInfo("Step 12: [DRY RUN] Skipping commit and push");
+						} else {
+							yield* Effect.logInfo("Step 12: Committing via GitHub API");
+							const commitMessage = generateCommitMessage(allUpdates);
+							yield* commitChanges(commitMessage, inputs.branch);
+						}
+
+						// Step 15: Create/update PR
+						let pr: PullRequest | null = null;
+						if (dryRun) {
+							yield* Effect.logInfo("Step 13: [DRY RUN] Skipping PR creation/update");
+						} else {
+							yield* Effect.logInfo("Step 13: Creating/updating PR");
+							const client = yield* GitHubClient;
+							pr = yield* createOrUpdatePR(inputs.branch, allUpdates, changesets).pipe(
+								Effect.provide(Layer.succeed(GitHubClient, client)),
+							);
+
+							// Enable auto-merge if configured
+							if (inputs["auto-merge"] && pr && pr.nodeId) {
+								const mergeMethod = inputs["auto-merge"].toUpperCase() as "MERGE" | "SQUASH" | "REBASE";
+								yield* AutoMerge.enable(pr.nodeId, mergeMethod).pipe(
+									Effect.tap(() => Effect.logInfo(`Auto-merge enabled (${inputs["auto-merge"]})`)),
+									Effect.catchAll((error) =>
+										Effect.logWarning(
+											`Failed to enable auto-merge: ${error.reason}. ` +
+												`Ensure the repository has "Allow auto-merge" enabled and branch protection rules configured.`,
+										),
+									),
+								);
+							}
+						}
+
+						// Update check run
+						const summaryText = generateSummary(allUpdates, changesets, pr, dryRun);
+						yield* checkRunService.complete(checkRunId, "success", {
+							title: "Dependency Updates Complete",
+							summary: summaryText,
+						});
+
+						// Set outputs
+						yield* outputs.set("has-changes", "true");
+						yield* outputs.set("updates-count", String(allUpdates.length));
+						if (pr) {
+							yield* outputs.set("pr-number", String(pr.number));
+							yield* outputs.set("pr-url", pr.url);
+						}
+
+						// Write job summary
+						const jobSummaryLines = ["# Dependency Updates"];
+						if (dryRun) {
+							jobSummaryLines.push("", "> **DRY RUN MODE** - Changes detected but not committed/pushed");
+						}
+						jobSummaryLines.push("", summaryText);
+						yield* outputs.summary(jobSummaryLines.join("\n"));
+
+						yield* Effect.logInfo("Dependency update action completed successfully");
+					}),
+					appLayer,
+				),
+			);
+		}),
+		appLayer,
+	);
 
 // Run the main action
 Action.run(
