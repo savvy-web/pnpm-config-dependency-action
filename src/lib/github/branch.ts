@@ -13,7 +13,7 @@ import type { CommandRunnerError, FileChange, GitBranchError, GitCommitError } f
 import { CommandRunner, GitBranch, GitCommit } from "@savvy-web/github-action-effects";
 import { Effect } from "effect";
 
-import type { BranchResult } from "../../types/index.js";
+import type { BranchResult } from "../../schemas/domain.js";
 
 /**
  * Manage the dependency update branch.

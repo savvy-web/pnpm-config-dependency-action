@@ -4,7 +4,7 @@
  * @module __test__/fixtures
  */
 
-import type { ChangesetFile, DependencyUpdateResult, LockfileChange, PullRequestResult } from "../../types/index.js";
+import type { ChangesetFile, DependencyUpdateResult, LockfileChange, PullRequestResult } from "../../schemas/domain.js";
 
 // ══════════════════════════════════════════════════════════════════════════════
 // DependencyUpdateResult fixtures

@@ -11,9 +11,8 @@ import { readWantedLockfile } from "@pnpm/lockfile.fs";
 import type { CatalogSnapshots, LockfileObject, ResolvedCatalogEntry } from "@pnpm/lockfile.types";
 import { Effect } from "effect";
 import { getPackageInfosAsync } from "workspace-tools";
-
-import type { LockfileChange } from "../../types/index.js";
-import { LockfileError } from "../errors/types.js";
+import { LockfileError } from "../../errors/errors.js";
+import type { LockfileChange } from "../../schemas/domain.js";
 
 /**
  * Capture current lockfile state.

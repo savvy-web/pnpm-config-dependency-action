@@ -11,7 +11,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { Effect } from "effect";
 import { parse, stringify } from "yaml";
 
-import { FileSystemError } from "../errors/types.js";
+import { FileSystemError } from "../../errors/errors.js";
 
 /**
  * Shape of pnpm-workspace.yaml content.

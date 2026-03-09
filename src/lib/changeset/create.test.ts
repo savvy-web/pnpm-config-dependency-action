@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { Effect, LogLevel, Logger } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { LockfileChange } from "../../types/index.js";
+import type { LockfileChange } from "../../schemas/domain.js";
 import { analyzeAffectedPackages, createChangesets, formatChangesetSummary, hasChangesets } from "./create.js";
 
 /**

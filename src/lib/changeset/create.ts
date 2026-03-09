@@ -9,10 +9,9 @@
 import { randomBytes } from "node:crypto";
 import { existsSync, writeFileSync } from "node:fs";
 import { Effect } from "effect";
-
-import type { ChangedPackage, ChangesetFile, LockfileChange } from "../../types/index.js";
-import type { ChangesetError } from "../errors/types.js";
-import { FileSystemError } from "../errors/types.js";
+import type { ChangesetError } from "../../errors/errors.js";
+import { FileSystemError } from "../../errors/errors.js";
+import type { ChangedPackage, ChangesetFile, LockfileChange } from "../../schemas/domain.js";
 import { groupChangesByPackage } from "../lockfile/compare.js";
 
 /**

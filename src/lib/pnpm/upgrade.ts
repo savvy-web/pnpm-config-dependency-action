@@ -12,7 +12,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { CommandRunner, SemverResolver } from "@savvy-web/github-action-effects";
 import { Effect } from "effect";
 
-import { FileSystemError } from "../errors/types.js";
+import { FileSystemError } from "../../errors/errors.js";
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Types

@@ -13,8 +13,8 @@ import { existsSync, writeFileSync } from "node:fs";
 import { NpmRegistry } from "@savvy-web/github-action-effects";
 import { Effect } from "effect";
 import { stringify } from "yaml";
-import type { DependencyUpdateResult } from "../../types/index.js";
-import { FileSystemError } from "../errors/types.js";
+import { FileSystemError } from "../../errors/errors.js";
+import type { DependencyUpdateResult } from "../../schemas/domain.js";
 import { STRINGIFY_OPTIONS, readWorkspaceYaml, sortContent } from "./format.js";
 
 // ══════════════════════════════════════════════════════════════════════════════

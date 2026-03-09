@@ -52,7 +52,7 @@ import { updateConfigDeps } from "./lib/pnpm/config.js";
 import { formatWorkspaceYaml, readWorkspaceYaml } from "./lib/pnpm/format.js";
 import { updateRegularDeps } from "./lib/pnpm/regular.js";
 import { upgradePnpm } from "./lib/pnpm/upgrade.js";
-import type { ChangesetFile, DependencyUpdateResult, PullRequestResult } from "./types/index.js";
+import type { ChangesetFile, DependencyUpdateResult, PullRequestResult } from "./schemas/domain.js";
 
 /**
  * Result of running custom commands.

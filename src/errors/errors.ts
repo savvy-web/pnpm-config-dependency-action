@@ -14,7 +14,7 @@ import {
 	GitOperation,
 	LockfileOperation,
 	NonEmptyString,
-} from "./index.js";
+} from "../schemas/domain.js";
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Error Schemas

@@ -20,7 +20,7 @@ vi.mock("@pnpm/lockfile.fs", () => ({
 	readWantedLockfile: (...args: unknown[]) => mockReadWantedLockfile(...args),
 }));
 
-import type { LockfileChange } from "../../types/index.js";
+import type { LockfileChange } from "../../schemas/domain.js";
 import { captureLockfileState, compareLockfiles, groupChangesByPackage } from "./compare.js";
 
 // Mock workspace-tools so buildImporterToPackageMap doesn't hit the filesystem
