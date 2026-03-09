@@ -3,3 +3,14 @@ packages:
 autoInstallPeers: true
 configDependencies:
   "@savvy-web/pnpm-plugin-silk": 0.8.0+sha512-KmEI1wt9YJkmaTdkpSQ829ZC/n6RBHuoijAco69s8flzTobym4CuS30CZ9PBBb5Jps4qEouY2zQU3BgU6LpJkw==
+onlyBuiltDependencies:
+  - "@parcel/watcher"
+  - "@savvy-web/changesets"
+  - "@savvy-web/commitlint"
+  - "@savvy-web/github-action-builder"
+  - "@savvy-web/lint-staged"
+  - "@savvy-web/vitest"
+  - core-js
+  - esbuild
+  - msgpackr-extract
+  - protobufjs
