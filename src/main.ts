@@ -112,13 +112,13 @@ export const program = Effect.gen(function* () {
 			"app-id": { schema: Schema.String, required: true, secret: false },
 			"app-private-key": { schema: Schema.String, required: true, secret: true },
 			branch: { schema: Schema.String, default: "pnpm/config-deps" },
-			"config-dependencies": { schema: Schema.Array(Schema.String), multiline: true, default: [] },
-			dependencies: { schema: Schema.Array(Schema.String), multiline: true, default: [] },
-			run: { schema: Schema.Array(Schema.String), multiline: true, default: [] },
-			"update-pnpm": { schema: Schema.Boolean, default: true },
-			changesets: { schema: Schema.Boolean, default: true },
+			"config-dependencies": { schema: Schema.String, multiline: true },
+			dependencies: { schema: Schema.String, multiline: true },
+			run: { schema: Schema.String, multiline: true },
+			"update-pnpm": { schema: Schema.BooleanFromString, default: "true" as const },
+			changesets: { schema: Schema.BooleanFromString, default: "true" as const },
 			"auto-merge": { schema: Schema.Literal("", "merge", "squash", "rebase"), default: "" as const },
-			"dry-run": { schema: Schema.Boolean, default: false },
+			"dry-run": { schema: Schema.BooleanFromString, default: "false" as const },
 			"log-level": { schema: LogLevelInput, default: "auto" as const },
 			timeout: { schema: Schema.NumberFromString, default: "180" },
 		},
@@ -168,7 +168,18 @@ export const program = Effect.gen(function* () {
 		.withToken(inputs["app-id"], inputs["app-private-key"], (token) =>
 			Effect.gen(function* () {
 				const appLayer = makeAppLayer(token, dryRun);
-				yield* innerProgram(inputs, dryRun, appLayer);
+				// getMultiline returns string[] at runtime, but ParsedInputs infers
+				// the item schema type (string). Cast to align with innerProgram's type.
+				yield* innerProgram(
+					{
+						...inputs,
+						"config-dependencies": inputs["config-dependencies"] as unknown as ReadonlyArray<string>,
+						dependencies: inputs.dependencies as unknown as ReadonlyArray<string>,
+						run: inputs.run as unknown as ReadonlyArray<string>,
+					},
+					dryRun,
+					appLayer,
+				);
 			}),
 		)
 		.pipe(
@@ -426,17 +437,6 @@ const innerProgram = (
 		appLayer,
 	);
 
-// Run the main action
-Action.run(
-	program.pipe(
-		Effect.catchAll((error) =>
-			Effect.gen(function* () {
-				const outs = yield* ActionOutputs;
-				const message = error instanceof Error ? error.message : String(error);
-				yield* outs.setFailed(`Action failed: ${message}`);
-			}),
-		),
-	),
-	GitHubAppLive,
-);
+// Run the main action — Action.run handles all error formatting via formatCause
+Action.run(program, GitHubAppLive);
 /* v8 ignore stop */
