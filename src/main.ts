@@ -38,10 +38,8 @@ import {
 	GitHubAppLive,
 	GitHubClientLive,
 	GitHubGraphQLLive,
-	GithubMarkdown,
 	NpmRegistryLive,
 	PullRequestLive,
-	PullRequest as PullRequestService,
 } from "@savvy-web/github-action-effects";
 import { Duration, Effect, Layer, Schema } from "effect";
 import type { ChangesetFile, DependencyUpdateResult, PullRequestResult } from "./schemas/domain.js";
@@ -51,8 +49,8 @@ import { ConfigDeps, ConfigDepsLive } from "./services/config-deps.js";
 import { captureLockfileState, compareLockfiles } from "./services/lockfile.js";
 import { PnpmUpgrade, PnpmUpgradeLive } from "./services/pnpm-upgrade.js";
 import { RegularDeps, RegularDepsLive } from "./services/regular-deps.js";
+import { Report, ReportLive } from "./services/report.js";
 import { formatWorkspaceYaml, readWorkspaceYaml } from "./services/workspace-yaml.js";
-import { cleanVersion, npmUrl } from "./utils/markdown.js";
 
 /**
  * Result of running custom commands.
@@ -103,226 +101,6 @@ export const runCommands = (commands: ReadonlyArray<string>): Effect.Effect<RunC
 
 		return { successful, failed };
 	});
-
-/**
- * Create or update the dependency update PR.
- */
-export const createOrUpdatePR = (
-	branch: string,
-	updates: ReadonlyArray<DependencyUpdateResult>,
-	changesets: ReadonlyArray<ChangesetFile>,
-	autoMerge?: "merge" | "squash" | "rebase",
-) =>
-	Effect.gen(function* () {
-		const pr = yield* PullRequestService;
-		const title = "chore(deps): update pnpm config dependencies";
-		const body = generatePRBody(updates, changesets);
-
-		const result = yield* pr
-			.getOrCreate({
-				head: branch,
-				base: "main",
-				title,
-				body,
-				autoMerge: autoMerge || false,
-			})
-			.pipe(
-				Effect.catchAll(() => {
-					return Effect.succeed({
-						number: 0,
-						url: "",
-						nodeId: "",
-						title: "",
-						state: "open" as const,
-						head: branch,
-						base: "main",
-						draft: false,
-						merged: false,
-						created: false,
-					});
-				}),
-			);
-
-		if (result.number > 0) {
-			const action = result.created ? "Created" : "Updated";
-			yield* Effect.logInfo(`${action} PR #${result.number}: ${result.url}`);
-		}
-
-		return {
-			number: result.number,
-			url: result.url,
-			created: result.created,
-			nodeId: result.nodeId,
-		} as PullRequestResult;
-	});
-
-/**
- * Generate commit message for dependency updates.
- *
- * Uses the app slug to attribute the sign-off to the correct bot.
- * When commits are created via the GitHub API without an explicit author,
- * and include a matching sign-off footer, GitHub will verify/sign the commit.
- */
-export const generateCommitMessage = (updates: ReadonlyArray<DependencyUpdateResult>, appSlug?: string): string => {
-	const configCount = updates.filter((u) => u.type === "config").length;
-	const regularCount = updates.filter((u) => u.type === "regular").length;
-
-	const parts: string[] = [];
-	if (configCount > 0) parts.push(`${configCount} config`);
-	if (regularCount > 0) parts.push(`${regularCount} regular`);
-
-	const botName = appSlug ? `${appSlug}[bot]` : "github-actions[bot]";
-	const botEmail = appSlug
-		? `${appSlug}[bot]@users.noreply.github.com`
-		: "41898282+github-actions[bot]@users.noreply.github.com";
-
-	return `chore(deps): update ${parts.join(" and ")} dependencies
-
-Updated dependencies:
-${updates.map((u) => `- ${u.dependency}: ${u.from ?? "new"} -> ${u.to}`).join("\n")}
-
-Signed-off-by: ${botName} <${botEmail}>`;
-};
-
-// Re-export for backwards compatibility with tests
-export { cleanVersion, npmUrl };
-
-/**
- * Generate PR body with dependency changes (Dependabot-style formatting).
- */
-export const generatePRBody = (
-	updates: ReadonlyArray<DependencyUpdateResult>,
-	changesets: ReadonlyArray<ChangesetFile>,
-): string => {
-	const { heading, table, link, code, details, codeBlock, bold, rule } = GithubMarkdown;
-	const sections: string[] = [];
-
-	const configUpdates = updates.filter((u) => u.type === "config");
-	const regularUpdates = updates.filter((u) => u.type === "regular");
-
-	// Title section
-	sections.push(heading("Dependency Updates", 2));
-
-	// Summary line
-	const parts: string[] = [];
-	if (configUpdates.length > 0) parts.push(`${configUpdates.length} config`);
-	if (regularUpdates.length > 0) parts.push(`${regularUpdates.length} regular`);
-	sections.push(`Updates ${parts.join(" and ")} ${parts.length > 1 ? "dependencies" : "dependency"}.`);
-
-	// Config dependencies section
-	if (configUpdates.length > 0) {
-		sections.push(heading("Config Dependencies", 3));
-		const rows = configUpdates.map((update) => [
-			link(code(update.dependency), npmUrl(update.dependency)),
-			cleanVersion(update.from) ?? "_new_",
-			cleanVersion(update.to) ?? "",
-		]);
-		sections.push(table(["Package", "From", "To"], rows));
-	}
-
-	// Regular dependencies section
-	if (regularUpdates.length > 0) {
-		sections.push(heading("Regular Dependencies", 3));
-		const rows = regularUpdates.map((update) => {
-			const pkg = update.dependency.includes("*")
-				? code(update.dependency)
-				: link(code(update.dependency), npmUrl(update.dependency));
-			return [pkg, update.from ?? "_new_", update.to];
-		});
-		sections.push(table(["Package", "From", "To"], rows));
-	}
-
-	// Changesets section - one expandable per affected package/workspace
-	if (changesets.length > 0) {
-		sections.push(heading("Changesets", 3));
-		sections.push(`${changesets.length} changeset(s) created for version management.`);
-		for (const cs of changesets) {
-			const isRootWorkspace = cs.packages.length === 0;
-			const label = isRootWorkspace ? "root workspace" : cs.packages.join(", ");
-			const content = [
-				`${bold("Changeset:")} ${code(cs.id)}`,
-				`${bold("Type:")} ${cs.type}`,
-				"",
-				codeBlock(cs.summary),
-			].join("\n");
-			sections.push(details(label, content));
-		}
-	}
-
-	// Footer
-	sections.push(rule());
-	sections.push(
-		`_This PR was automatically created by ${link("pnpm-config-dependency-action", "https://github.com/savvy-web/pnpm-config-dependency-action")}_`,
-	);
-
-	return sections.join("\n\n");
-};
-
-/**
- * Generate summary text for check run and job summary.
- */
-export const generateSummary = (
-	updates: ReadonlyArray<DependencyUpdateResult>,
-	changesets: ReadonlyArray<ChangesetFile>,
-	pr: PullRequestResult | null,
-	dryRun: boolean,
-): string => {
-	const { heading, table, link, code, details, codeBlock, bold, list } = GithubMarkdown;
-	const sections: string[] = [];
-
-	// Summary stats
-	sections.push(heading("Summary", 3));
-	const stats = [
-		`${bold("Dependencies updated:")} ${updates.length}`,
-		`${bold("Changesets created:")} ${changesets.length}`,
-	];
-	if (pr && pr.number > 0) {
-		stats.push(`${bold("Pull request:")} ${link(`#${pr.number}`, pr.url)}`);
-	}
-	sections.push(list(stats));
-
-	// Updated dependencies tables
-	sections.push(heading("Updated Dependencies", 3));
-
-	const configUpdates = updates.filter((u) => u.type === "config");
-	const regularUpdates = updates.filter((u) => u.type === "regular");
-
-	if (configUpdates.length > 0) {
-		sections.push(heading("Config Dependencies", 4));
-		const rows = configUpdates.map((update) => [
-			code(update.dependency),
-			cleanVersion(update.from) ?? "_new_",
-			cleanVersion(update.to) ?? "",
-		]);
-		sections.push(table(["Package", "From", "To"], rows));
-	}
-
-	if (regularUpdates.length > 0) {
-		sections.push(heading("Regular Dependencies", 4));
-		const rows = regularUpdates.map((update) => [code(update.dependency), update.from ?? "_new_", update.to]);
-		sections.push(table(["Package", "From", "To"], rows));
-	}
-
-	// Show changeset details - one expandable per affected package/workspace
-	if (changesets.length > 0) {
-		sections.push(heading("Changesets Created", 3));
-		for (const cs of changesets) {
-			const isRootWorkspace = cs.packages.length === 0;
-			const label = isRootWorkspace ? "root workspace" : cs.packages.join(", ");
-			const content = [`${bold("Changeset:")} ${code(cs.id)}`, "", codeBlock(cs.summary)].join("\n");
-			sections.push(details(label, content));
-		}
-	}
-
-	// In dry-run mode, show what the PR body would look like
-	if (dryRun && updates.length > 0) {
-		sections.push(heading("PR Body Preview", 3));
-		sections.push("This is what the PR body would look like:");
-		sections.push(details("View PR body", generatePRBody(updates, changesets)));
-	}
-
-	return sections.join("\n\n");
-};
 
 /**
  * Main action program.
@@ -397,17 +175,19 @@ export const program = Effect.gen(function* () {
 				const npmRegistry = NpmRegistryLive.pipe(Layer.provide(CommandRunnerLive));
 				const gitBranch = GitBranchLive.pipe(Layer.provide(ghClient));
 				const gitCommit = GitCommitLive.pipe(Layer.provide(ghClient));
+				const prLayer = PullRequestLive.pipe(Layer.provide(Layer.merge(ghClient, ghGraphql)));
 				const appLayer = Layer.mergeAll(
 					ghClient,
 					gitBranch,
 					gitCommit,
 					CheckRunLive.pipe(Layer.provide(ghClient)),
-					PullRequestLive.pipe(Layer.provide(Layer.merge(ghClient, ghGraphql))),
+					prLayer,
 					npmRegistry,
 					PnpmUpgradeLive.pipe(Layer.provide(CommandRunnerLive)),
 					ConfigDepsLive.pipe(Layer.provide(npmRegistry)),
 					RegularDepsLive.pipe(Layer.provide(npmRegistry)),
 					BranchManagerLive.pipe(Layer.provide(Layer.mergeAll(gitBranch, gitCommit, CommandRunnerLive))),
+					ReportLive.pipe(Layer.provide(prLayer)),
 					CommandRunnerLive,
 					DryRunLive(dryRun),
 				);
@@ -611,11 +391,12 @@ const innerProgram = (
 						}
 
 						// Step 14: Commit and push
+						const report = yield* Report;
 						if (dryRun) {
 							yield* Effect.logInfo("Step 12: [DRY RUN] Skipping commit and push");
 						} else {
 							yield* Effect.logInfo("Step 12: Committing via GitHub API");
-							const commitMessage = generateCommitMessage(allUpdates);
+							const commitMessage = report.generateCommitMessage(allUpdates);
 							yield* branchManager.commitChanges(commitMessage, inputs.branch);
 						}
 
@@ -625,11 +406,20 @@ const innerProgram = (
 							yield* Effect.logInfo("Step 13: [DRY RUN] Skipping PR creation/update");
 						} else {
 							yield* Effect.logInfo("Step 13: Creating/updating PR");
-							pr = yield* createOrUpdatePR(inputs.branch, allUpdates, changesets, inputs["auto-merge"] || undefined);
+							pr = yield* report
+								.createOrUpdatePR(inputs.branch, allUpdates, changesets, inputs["auto-merge"] || undefined)
+								.pipe(
+									Effect.catchAll((error) =>
+										Effect.gen(function* () {
+											yield* Effect.logWarning(`PR creation failed: ${error.reason}`);
+											return null;
+										}),
+									),
+								);
 						}
 
 						// Update check run
-						const summaryText = generateSummary(allUpdates, changesets, pr, dryRun);
+						const summaryText = report.generateSummary(allUpdates, changesets, pr, dryRun);
 						yield* checkRunService.complete(checkRunId, "success", {
 							title: "Dependency Updates Complete",
 							summary: summaryText,
