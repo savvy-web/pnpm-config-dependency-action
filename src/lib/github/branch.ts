@@ -168,11 +168,11 @@ export const commitChanges = (
 					});
 				}
 			} catch {
-				// File was deleted - we skip it since the library TreeEntry
-				// doesn't support sha: null for deletions. The tree will be
-				// created relative to the base tree, so missing files are
-				// implicitly kept from the parent.
-				yield* Effect.logDebug(`Skipping deleted file: ${filePath}`);
+				// File was deleted - skip because the library's TreeEntry type
+				// doesn't support sha: null for deletions. The tree is created
+				// relative to the base tree, so deleted files persist from the parent.
+				// TODO: Patch @savvy-web/github-action-effects TreeEntry to support deletions (savvy-web/github-action-effects#11)
+				yield* Effect.logWarning(`Skipping deleted file (not supported by API commit path): ${filePath}`);
 			}
 		}
 

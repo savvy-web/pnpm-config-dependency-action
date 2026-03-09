@@ -31,22 +31,49 @@ const makeTestRunner = (
 };
 
 /**
- * Create a mock GitHubClient layer.
+ * Create a mock GitHubClient layer that invokes the `fn` callback
+ * passed to `rest()`, exercising the inner Octokit callback code paths
+ * in functions like `createOrUpdatePR`.
  */
-const makeTestGitHubClient = (
-	overrides: Partial<{
-		rest: GitHubClient["rest"];
-		graphql: GitHubClient["graphql"];
-		paginate: GitHubClient["paginate"];
-		repo: GitHubClient["repo"];
-	}> = {},
-): Layer.Layer<GitHubClient> => {
+const makeTestGitHubClient = (config?: {
+	pullsList?: Array<{ number: number; html_url: string; node_id: string }>;
+	pullsCreate?: { number: number; html_url: string; node_id: string };
+	pullsCreateError?: boolean;
+	pullsUpdateError?: boolean;
+}): Layer.Layer<GitHubClient> => {
+	const fakeOctokit = {
+		rest: {
+			pulls: {
+				list: async () => ({ data: config?.pullsList ?? [] }),
+				create: async () => {
+					if (config?.pullsCreateError) throw new Error("create failed");
+					return {
+						data: config?.pullsCreate ?? { number: 0, html_url: "", node_id: "" },
+					};
+				},
+				update: async () => {
+					if (config?.pullsUpdateError) throw new Error("update failed");
+					return { data: {} };
+				},
+			},
+		},
+	};
+
 	const service: GitHubClient = {
-		rest: () => Effect.succeed(null as never),
+		rest: (_op, fn) =>
+			Effect.tryPromise({
+				try: () => fn(fakeOctokit as never).then((r) => (r as { data: unknown }).data),
+				catch: (e) =>
+					({
+						_tag: "GitHubClientError",
+						operation: _op,
+						statusCode: 500,
+						reason: String(e),
+					}) as unknown as GitHubClientError,
+			}),
 		graphql: () => Effect.succeed(null as never),
 		paginate: () => Effect.succeed([]),
 		repo: Effect.succeed({ owner: "test-owner", repo: "test-repo" }),
-		...overrides,
 	};
 	return Layer.succeed(GitHubClient, service);
 };
@@ -142,18 +169,11 @@ describe("runCommands", () => {
 describe("createOrUpdatePR", () => {
 	it("creates new PR when none exists", async () => {
 		const layer = makeTestGitHubClient({
-			rest: (operation, _fn) => {
-				if (operation === "pulls.list") {
-					return Effect.succeed(null);
-				}
-				if (operation === "pulls.create") {
-					return Effect.succeed({
-						number: 42,
-						html_url: "https://github.com/test/pull/42",
-						node_id: "PR_kwDOTest42",
-					} as never);
-				}
-				return Effect.succeed(null as never);
+			pullsList: [],
+			pullsCreate: {
+				number: 42,
+				html_url: "https://github.com/test/pull/42",
+				node_id: "PR_kwDOTest42",
 			},
 		});
 
@@ -166,22 +186,14 @@ describe("createOrUpdatePR", () => {
 	});
 
 	it("updates existing PR when found", async () => {
-		const updatedNumbers: number[] = [];
 		const layer = makeTestGitHubClient({
-			rest: (operation, _fn) => {
-				if (operation === "pulls.list") {
-					return Effect.succeed({
-						number: 10,
-						url: "https://github.com/test/pull/10",
-						nodeId: "PR_kwDOTest10",
-					} as never);
-				}
-				if (operation === "pulls.update") {
-					updatedNumbers.push(10);
-					return Effect.succeed(null as never);
-				}
-				return Effect.succeed(null as never);
-			},
+			pullsList: [
+				{
+					number: 10,
+					html_url: "https://github.com/test/pull/10",
+					node_id: "PR_kwDOTest10",
+				},
+			],
 		});
 
 		const result = await Effect.runPromise(
@@ -194,20 +206,8 @@ describe("createOrUpdatePR", () => {
 
 	it("handles create API failure gracefully (returns zero PR)", async () => {
 		const layer = makeTestGitHubClient({
-			rest: (operation) => {
-				if (operation === "pulls.list") {
-					return Effect.succeed(null);
-				}
-				if (operation === "pulls.create") {
-					return Effect.fail({
-						_tag: "GitHubClientError",
-						operation: "pulls.create",
-						statusCode: 500,
-						reason: "Internal error",
-					} as unknown as GitHubClientError);
-				}
-				return Effect.succeed(null as never);
-			},
+			pullsList: [],
+			pullsCreateError: true,
 		});
 
 		const result = await Effect.runPromise(
@@ -219,18 +219,11 @@ describe("createOrUpdatePR", () => {
 
 	it("returns nodeId from created PR", async () => {
 		const layer = makeTestGitHubClient({
-			rest: (operation) => {
-				if (operation === "pulls.list") {
-					return Effect.succeed(null);
-				}
-				if (operation === "pulls.create") {
-					return Effect.succeed({
-						number: 42,
-						html_url: "https://github.com/test/pull/42",
-						node_id: "PR_kwDOTestNode42",
-					} as never);
-				}
-				return Effect.succeed(null as never);
+			pullsList: [],
+			pullsCreate: {
+				number: 42,
+				html_url: "https://github.com/test/pull/42",
+				node_id: "PR_kwDOTestNode42",
 			},
 		});
 
@@ -243,16 +236,13 @@ describe("createOrUpdatePR", () => {
 
 	it("returns nodeId from existing PR", async () => {
 		const layer = makeTestGitHubClient({
-			rest: (operation) => {
-				if (operation === "pulls.list") {
-					return Effect.succeed({
-						number: 10,
-						url: "https://github.com/test/pull/10",
-						nodeId: "PR_kwDOExisting10",
-					} as never);
-				}
-				return Effect.succeed(null as never);
-			},
+			pullsList: [
+				{
+					number: 10,
+					html_url: "https://github.com/test/pull/10",
+					node_id: "PR_kwDOExisting10",
+				},
+			],
 		});
 
 		const result = await Effect.runPromise(
@@ -264,20 +254,8 @@ describe("createOrUpdatePR", () => {
 
 	it("returns empty nodeId on create failure", async () => {
 		const layer = makeTestGitHubClient({
-			rest: (operation) => {
-				if (operation === "pulls.list") {
-					return Effect.succeed(null);
-				}
-				if (operation === "pulls.create") {
-					return Effect.fail({
-						_tag: "GitHubClientError",
-						operation: "pulls.create",
-						statusCode: 500,
-						reason: "fail",
-					} as unknown as GitHubClientError);
-				}
-				return Effect.succeed(null as never);
-			},
+			pullsList: [],
+			pullsCreateError: true,
 		});
 
 		const result = await Effect.runPromise(
@@ -285,6 +263,91 @@ describe("createOrUpdatePR", () => {
 		);
 
 		expect(result.nodeId).toBe("");
+	});
+
+	it("handles pulls.update failure gracefully", async () => {
+		const layer = makeTestGitHubClient({
+			pullsList: [
+				{
+					number: 10,
+					html_url: "https://github.com/test/pull/10",
+					node_id: "PR_kwDOTest10",
+				},
+			],
+			pullsUpdateError: true,
+		});
+
+		const result = await Effect.runPromise(
+			createOrUpdatePR("pnpm/config", [], []).pipe(Effect.provide(layer), Logger.withMinimumLogLevel(LogLevel.None)),
+		);
+
+		// Should still return the existing PR info even if update fails
+		expect(result.number).toBe(10);
+		expect(result.created).toBe(false);
+		expect(result.nodeId).toBe("PR_kwDOTest10");
+	});
+
+	it("handles pulls.list API failure gracefully (creates new PR)", async () => {
+		const service: GitHubClient = {
+			rest: (_op, _fn) =>
+				_op === "pulls.list"
+					? Effect.fail({
+							_tag: "GitHubClientError",
+							operation: "pulls.list",
+							statusCode: 500,
+							reason: "API down",
+						} as unknown as GitHubClientError)
+					: Effect.tryPromise({
+							try: () =>
+								_fn({
+									rest: {
+										pulls: {
+											create: async () => ({
+												data: { number: 77, html_url: "https://github.com/test/pull/77", node_id: "PR_kwDO77" },
+											}),
+										},
+									},
+								} as never).then((r) => (r as { data: unknown }).data),
+							catch: (e) =>
+								({
+									_tag: "GitHubClientError",
+									operation: _op,
+									statusCode: 500,
+									reason: String(e),
+								}) as unknown as GitHubClientError,
+						}),
+			graphql: () => Effect.succeed(null as never),
+			paginate: () => Effect.succeed([]),
+			repo: Effect.succeed({ owner: "test-owner", repo: "test-repo" }),
+		};
+		const layer = Layer.succeed(GitHubClient, service);
+
+		const result = await Effect.runPromise(
+			createOrUpdatePR("pnpm/config", [], []).pipe(Effect.provide(layer), Logger.withMinimumLogLevel(LogLevel.None)),
+		);
+
+		// When list fails, existingPR is null, so it creates a new PR
+		expect(result.number).toBe(77);
+		expect(result.created).toBe(true);
+	});
+
+	it("logs created PR number when successful", async () => {
+		const layer = makeTestGitHubClient({
+			pullsList: [],
+			pullsCreate: {
+				number: 99,
+				html_url: "https://github.com/test/pull/99",
+				node_id: "PR_kwDOTest99",
+			},
+		});
+
+		const result = await Effect.runPromise(
+			createOrUpdatePR("pnpm/config", [], []).pipe(Effect.provide(layer), Logger.withMinimumLogLevel(LogLevel.None)),
+		);
+
+		expect(result.number).toBe(99);
+		expect(result.url).toBe("https://github.com/test/pull/99");
+		expect(result.created).toBe(true);
 	});
 });
 

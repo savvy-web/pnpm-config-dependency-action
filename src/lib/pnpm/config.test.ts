@@ -259,6 +259,49 @@ describe("updateConfigDeps", () => {
 		expect(result[0].to).toBe("0.7.0");
 	});
 
+	it("returns empty array when npm returns invalid JSON", async () => {
+		writeWorkspaceYaml(`configDependencies:\n  typescript: "5.3.3"\n`);
+
+		const result = await runWithRunner(
+			updateConfigDeps(["typescript"], tempDir),
+			makeExecCapture((_cmd, args) => {
+				const argStr = args?.join(" ") ?? "";
+				if (argStr.includes("npm view typescript")) {
+					return "not valid json {{{";
+				}
+				return "ok";
+			}),
+		);
+
+		// queryConfigVersion returns null on invalid JSON, so dep is skipped
+		expect(result).toHaveLength(0);
+	});
+
+	it("returns empty array when npm returns object missing required fields", async () => {
+		writeWorkspaceYaml(`configDependencies:\n  typescript: "5.3.3"\n`);
+
+		const result = await runWithRunner(
+			updateConfigDeps(["typescript"], tempDir),
+			makeExecCapture((_cmd, args) => {
+				const argStr = args?.join(" ") ?? "";
+				if (argStr.includes("npm view typescript")) {
+					return JSON.stringify({ version: "5.4.0" }); // missing dist.integrity
+				}
+				return "ok";
+			}),
+		);
+
+		// queryConfigVersion returns null when dist.integrity is missing
+		expect(result).toHaveLength(0);
+	});
+
+	it("skips dep when parseConfigEntry returns null (empty value)", async () => {
+		writeWorkspaceYaml(`configDependencies:\n  typescript: ""\n`);
+
+		const result = await runWithRunner(updateConfigDeps(["typescript"], tempDir));
+		expect(result).toHaveLength(0);
+	});
+
 	it("handles config dep without hash suffix", async () => {
 		writeWorkspaceYaml(`configDependencies:\n  typescript: "5.3.3"\n`);
 

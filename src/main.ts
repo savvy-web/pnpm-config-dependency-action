@@ -403,6 +403,7 @@ export const generateSummary = (
  * Single-phase entry point that handles token lifecycle, check runs,
  * and the full dependency update workflow.
  */
+/* v8 ignore start -- orchestration code tested via integration */
 export const program = Effect.gen(function* () {
 	yield* Effect.logInfo("Starting pnpm config dependency action");
 
@@ -503,6 +504,9 @@ const innerProgram = (
 	// biome-ignore lint/suspicious/noExplicitAny: Layer type is complex and inferred at call site
 	appLayer: Layer.Layer<any, any>,
 ) =>
+	// appLayer is provided at two levels: here (outer) for services used before
+	// withCheckRun, and again inside the withCheckRun callback (inner) because
+	// the callback signature requires R = never (all services resolved).
 	Effect.provide(
 		Effect.gen(function* () {
 			const outputs = yield* ActionOutputs;
@@ -746,3 +750,4 @@ Action.run(
 	),
 	GitHubAppLive,
 );
+/* v8 ignore stop */

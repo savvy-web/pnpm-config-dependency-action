@@ -121,6 +121,18 @@ describe("parseSpecifier", () => {
 	it("returns null for workspace: specifier", () => {
 		expect(parseSpecifier("workspace:*")).toBeNull();
 	});
+
+	it("returns null for non-semver specifier (latest)", () => {
+		expect(parseSpecifier("latest")).toBeNull();
+	});
+
+	it("returns null for URL specifier", () => {
+		expect(parseSpecifier("https://github.com/foo/bar")).toBeNull();
+	});
+
+	it("returns null for star specifier", () => {
+		expect(parseSpecifier("*")).toBeNull();
+	});
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -360,6 +372,121 @@ describe("updateRegularDeps", () => {
 			from: "^3.0.0",
 			to: "^3.1.0",
 		});
+	});
+
+	it("returns empty array when no matching deps found in package.json", async () => {
+		const dir = makeTempDir();
+		writePackageJson(dir, {
+			name: "root",
+			dependencies: { lodash: "^4.0.0" },
+		});
+
+		mockGetPackageInfosAsync.mockResolvedValue({});
+
+		const result = await runWithRunner(
+			updateRegularDeps(["effect"], dir),
+			makeExecCapture(() => "ok"),
+		);
+
+		// No deps match the pattern, so empty result
+		expect(result).toHaveLength(0);
+	});
+
+	it("continues when workspace info query fails", async () => {
+		const dir = makeTempDir();
+		writePackageJson(dir, {
+			name: "root",
+			dependencies: { effect: "^3.0.0" },
+		});
+
+		mockGetPackageInfosAsync.mockRejectedValue(new Error("workspace detection failed"));
+
+		const result = await runWithRunner(
+			updateRegularDeps(["effect"], dir),
+			makeExecCapture((_cmd, args) => {
+				const shellCmd = args?.[1] ?? "";
+				if (shellCmd.includes("npm view effect")) return '"3.1.0"';
+				return "ok";
+			}),
+		);
+
+		// Should still update root package.json even when workspace info fails
+		expect(result).toHaveLength(1);
+		expect(result[0]).toMatchObject({
+			dependency: "effect",
+			from: "^3.0.0",
+			to: "^3.1.0",
+			type: "regular",
+		});
+	});
+
+	it("returns empty when npm returns non-string JSON", async () => {
+		const dir = makeTempDir();
+		writePackageJson(dir, {
+			name: "root",
+			dependencies: { effect: "^3.0.0" },
+		});
+
+		mockGetPackageInfosAsync.mockResolvedValue({});
+
+		const result = await runWithRunner(
+			updateRegularDeps(["effect"], dir),
+			makeExecCapture((_cmd, args) => {
+				const shellCmd = args?.[1] ?? "";
+				if (shellCmd.includes("npm view effect")) return '{ "latest": "3.1.0" }';
+				return "ok";
+			}),
+		);
+
+		// queryLatestVersion returns null for non-string parsed JSON
+		expect(result).toHaveLength(0);
+	});
+
+	it("returns empty when npm returns invalid JSON", async () => {
+		const dir = makeTempDir();
+		writePackageJson(dir, {
+			name: "root",
+			dependencies: { effect: "^3.0.0" },
+		});
+
+		mockGetPackageInfosAsync.mockResolvedValue({});
+
+		const result = await runWithRunner(
+			updateRegularDeps(["effect"], dir),
+			makeExecCapture((_cmd, args) => {
+				const shellCmd = args?.[1] ?? "";
+				if (shellCmd.includes("npm view effect")) return "not json at all";
+				return "ok";
+			}),
+		);
+
+		// queryLatestVersion returns null on parse error
+		expect(result).toHaveLength(0);
+	});
+
+	it("updates deps in optionalDependencies", async () => {
+		const dir = makeTempDir();
+		writePackageJson(dir, {
+			name: "root",
+			optionalDependencies: { effect: "^3.0.0" },
+		});
+
+		mockGetPackageInfosAsync.mockResolvedValue({});
+
+		const result = await runWithRunner(
+			updateRegularDeps(["effect"], dir),
+			makeExecCapture((_cmd, args) => {
+				const shellCmd = args?.[1] ?? "";
+				if (shellCmd.includes("npm view effect")) return '"3.1.0"';
+				return "ok";
+			}),
+		);
+
+		expect(result).toHaveLength(1);
+		expect(result[0].to).toBe("^3.1.0");
+
+		const pkg = readPackageJson(dir);
+		expect(pkg.optionalDependencies.effect).toBe("^3.1.0");
 	});
 
 	it("preserves exact version (no prefix)", async () => {
