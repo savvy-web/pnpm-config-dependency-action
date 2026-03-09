@@ -10,7 +10,7 @@
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { join, matchesGlob } from "node:path";
-import { CommandRunner } from "@savvy-web/github-action-effects";
+import { NpmRegistry } from "@savvy-web/github-action-effects";
 import { Effect } from "effect";
 import { getPackageInfosAsync } from "workspace-tools";
 import type { DependencyUpdateResult } from "../../types/index.js";
@@ -61,24 +61,13 @@ export const parseSpecifier = (specifier: string): { prefix: string; version: st
 /**
  * Query npm for the latest published version of a package.
  */
-const queryLatestVersion = (packageName: string): Effect.Effect<string | null, never, CommandRunner> =>
+const queryLatestVersion = (packageName: string): Effect.Effect<string | null, never, NpmRegistry> =>
 	Effect.gen(function* () {
-		const runner = yield* CommandRunner;
-
-		const result = yield* runner
-			.execCapture("sh", ["-c", `npm view ${packageName} dist-tags.latest --json`])
-			.pipe(Effect.catchAll(() => Effect.succeed(null)));
-
-		if (result === null) return null;
-
-		try {
-			// npm view --json for dist-tags.latest returns a quoted string like "1.2.3"
-			const parsed = JSON.parse(result.stdout);
-			if (typeof parsed === "string") return parsed;
-			return null;
-		} catch {
-			return null;
-		}
+		const registry = yield* NpmRegistry;
+		const version = yield* registry
+			.getLatestVersion(packageName)
+			.pipe(Effect.catchAll(() => Effect.succeed(null as string | null)));
+		return version;
 	});
 
 interface PackageJsonDeps {
@@ -195,7 +184,7 @@ const updatePackageJson = (pkgPath: string, updates: Map<string, string>): Effec
 export const updateRegularDeps = (
 	patterns: ReadonlyArray<string>,
 	workspaceRoot: string = process.cwd(),
-): Effect.Effect<ReadonlyArray<DependencyUpdateResult>, never, CommandRunner> =>
+): Effect.Effect<ReadonlyArray<DependencyUpdateResult>, never, NpmRegistry> =>
 	Effect.gen(function* () {
 		if (patterns.length === 0) return [];
 

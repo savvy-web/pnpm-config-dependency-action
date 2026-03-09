@@ -1,9 +1,9 @@
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { CommandRunner as CommandRunnerService } from "@savvy-web/github-action-effects";
-import { CommandRunner } from "@savvy-web/github-action-effects";
-import { Effect, Layer, LogLevel, Logger } from "effect";
+import type { NpmRegistry } from "@savvy-web/github-action-effects";
+import { NpmRegistryTest } from "@savvy-web/github-action-effects";
+import { Effect, LogLevel, Logger } from "effect";
 import { describe, expect, it, vi } from "vitest";
 
 import { matchesPattern, parseSpecifier, updateRegularDeps } from "./regular.js";
@@ -31,33 +31,36 @@ const readPackageJson = (dir: string) => {
 	return JSON.parse(readFileSync(join(dir, "package.json"), "utf-8"));
 };
 
-const makeExecCapture =
-	(handler: (command: string, args?: ReadonlyArray<string>) => string) =>
-	(command: string, args?: ReadonlyArray<string>) =>
-		Effect.succeed({ exitCode: 0, stdout: handler(command, args), stderr: "" });
+const makeRegistryState = (
+	packages: Record<string, string>,
+): Map<
+	string,
+	{
+		versions: string[];
+		latest: string;
+		distTags: Record<string, string>;
+	}
+> => {
+	const map = new Map<
+		string,
+		{
+			versions: string[];
+			latest: string;
+			distTags: Record<string, string>;
+		}
+	>();
+	for (const [name, version] of Object.entries(packages)) {
+		map.set(name, {
+			versions: [version],
+			latest: version,
+			distTags: { latest: version },
+		});
+	}
+	return map;
+};
 
-const defaultExecCapture = makeExecCapture(() => "ok");
-
-const makeRunner = (
-	execCaptureOverride?: (
-		command: string,
-		args?: ReadonlyArray<string>,
-	) => Effect.Effect<{ exitCode: number; stdout: string; stderr: string }, never>,
-): CommandRunnerService => ({
-	exec: (_cmd, _args) => Effect.succeed(0),
-	execCapture: execCaptureOverride ?? defaultExecCapture,
-	execJson: (_cmd, _args, _schema) => Effect.die("not implemented"),
-	execLines: (_cmd, _args) => Effect.succeed([]),
-});
-
-const runWithRunner = <A, E>(
-	effect: Effect.Effect<A, E, CommandRunner>,
-	execCaptureOverride?: (
-		command: string,
-		args?: ReadonlyArray<string>,
-	) => Effect.Effect<{ exitCode: number; stdout: string; stderr: string }, never>,
-) => {
-	const layer = Layer.succeed(CommandRunner, makeRunner(execCaptureOverride));
+const runWithRegistry = <A, E>(effect: Effect.Effect<A, E, NpmRegistry>, packages?: Record<string, string>) => {
+	const layer = packages ? NpmRegistryTest.layer({ packages: makeRegistryState(packages) }) : NpmRegistryTest.empty();
 	return Effect.runPromise(effect.pipe(Effect.provide(layer), Logger.withMinimumLogLevel(LogLevel.None)));
 };
 
@@ -141,7 +144,7 @@ describe("parseSpecifier", () => {
 
 describe("updateRegularDeps", () => {
 	it("returns empty array when no patterns provided", async () => {
-		const result = await runWithRunner(updateRegularDeps([]));
+		const result = await runWithRegistry(updateRegularDeps([]));
 		expect(result).toEqual([]);
 	});
 
@@ -154,14 +157,9 @@ describe("updateRegularDeps", () => {
 
 		mockGetPackageInfosAsync.mockResolvedValue({});
 
-		const result = await runWithRunner(
-			updateRegularDeps(["effect"], dir),
-			makeExecCapture((_cmd, args) => {
-				const shellCmd = args?.[1] ?? "";
-				if (shellCmd.includes("npm view effect")) return '"3.1.0"';
-				return "ok";
-			}),
-		);
+		const result = await runWithRegistry(updateRegularDeps(["effect"], dir), {
+			effect: "3.1.0",
+		});
 
 		expect(result).toHaveLength(1);
 		expect(result[0]).toMatchObject({
@@ -185,14 +183,9 @@ describe("updateRegularDeps", () => {
 
 		mockGetPackageInfosAsync.mockResolvedValue({});
 
-		const result = await runWithRunner(
-			updateRegularDeps(["effect"], dir),
-			makeExecCapture((_cmd, args) => {
-				const shellCmd = args?.[1] ?? "";
-				if (shellCmd.includes("npm view effect")) return '"3.1.0"';
-				return "ok";
-			}),
-		);
+		const result = await runWithRegistry(updateRegularDeps(["effect"], dir), {
+			effect: "3.1.0",
+		});
 
 		expect(result).toHaveLength(0);
 	});
@@ -209,15 +202,10 @@ describe("updateRegularDeps", () => {
 
 		mockGetPackageInfosAsync.mockResolvedValue({});
 
-		const result = await runWithRunner(
-			updateRegularDeps(["@savvy-web/*"], dir),
-			makeExecCapture((_cmd, args) => {
-				const shellCmd = args?.[1] ?? "";
-				if (shellCmd.includes("npm view @savvy-web/core")) return '"1.1.0"';
-				if (shellCmd.includes("npm view @savvy-web/utils")) return '"1.2.0"';
-				return "ok";
-			}),
-		);
+		const result = await runWithRegistry(updateRegularDeps(["@savvy-web/*"], dir), {
+			"@savvy-web/core": "1.1.0",
+			"@savvy-web/utils": "1.2.0",
+		});
 
 		expect(result).toHaveLength(2);
 		expect(result.find((r) => r.dependency === "@savvy-web/core")?.to).toBe("^1.1.0");
@@ -236,14 +224,9 @@ describe("updateRegularDeps", () => {
 
 		mockGetPackageInfosAsync.mockResolvedValue({});
 
-		const result = await runWithRunner(
-			updateRegularDeps(["effect", "@effect/*"], dir),
-			makeExecCapture((_cmd, args) => {
-				const shellCmd = args?.[1] ?? "";
-				if (shellCmd.includes("npm view @effect/schema")) return '"0.61.0"';
-				return "ok";
-			}),
-		);
+		const result = await runWithRegistry(updateRegularDeps(["effect", "@effect/*"], dir), {
+			"@effect/schema": "0.61.0",
+		});
 
 		// Only @effect/schema should be updated, effect with catalog: should be skipped
 		expect(result).toHaveLength(1);
@@ -273,14 +256,9 @@ describe("updateRegularDeps", () => {
 			},
 		});
 
-		const result = await runWithRunner(
-			updateRegularDeps(["effect"], dir),
-			makeExecCapture((_cmd, args) => {
-				const shellCmd = args?.[1] ?? "";
-				if (shellCmd.includes("npm view effect")) return '"3.1.0"';
-				return "ok";
-			}),
-		);
+		const result = await runWithRegistry(updateRegularDeps(["effect"], dir), {
+			effect: "3.1.0",
+		});
 
 		// Should have updates for both root and workspace package
 		expect(result).toHaveLength(2);
@@ -305,15 +283,9 @@ describe("updateRegularDeps", () => {
 
 		mockGetPackageInfosAsync.mockResolvedValue({});
 
-		const result = await runWithRunner(updateRegularDeps(["bad-pkg", "good-pkg"], dir), (_cmd, args) => {
-			const shellCmd = args?.[1] ?? "";
-			if (shellCmd.includes("npm view bad-pkg")) {
-				return Effect.fail({ command: "npm view", stderr: "not found", exitCode: 1 }) as never;
-			}
-			if (shellCmd.includes("npm view good-pkg")) {
-				return Effect.succeed({ exitCode: 0, stdout: '"2.0.0"', stderr: "" });
-			}
-			return Effect.succeed({ exitCode: 0, stdout: "ok", stderr: "" });
+		// Only provide "good-pkg" in registry; "bad-pkg" will fail automatically
+		const result = await runWithRegistry(updateRegularDeps(["bad-pkg", "good-pkg"], dir), {
+			"good-pkg": "2.0.0",
 		});
 
 		// Should still update good-pkg even though bad-pkg query failed
@@ -330,14 +302,9 @@ describe("updateRegularDeps", () => {
 
 		mockGetPackageInfosAsync.mockResolvedValue({});
 
-		const result = await runWithRunner(
-			updateRegularDeps(["effect"], dir),
-			makeExecCapture((_cmd, args) => {
-				const shellCmd = args?.[1] ?? "";
-				if (shellCmd.includes("npm view effect")) return '"3.1.0"';
-				return "ok";
-			}),
-		);
+		const result = await runWithRegistry(updateRegularDeps(["effect"], dir), {
+			effect: "3.1.0",
+		});
 
 		expect(result).toHaveLength(1);
 		expect(result[0].to).toBe("~3.1.0");
@@ -356,14 +323,9 @@ describe("updateRegularDeps", () => {
 
 		mockGetPackageInfosAsync.mockResolvedValue({});
 
-		const result = await runWithRunner(
-			updateRegularDeps(["effect"], dir),
-			makeExecCapture((_cmd, args) => {
-				const shellCmd = args?.[1] ?? "";
-				if (shellCmd.includes("npm view effect")) return '"3.1.0"';
-				return "ok";
-			}),
-		);
+		const result = await runWithRegistry(updateRegularDeps(["effect"], dir), {
+			effect: "3.1.0",
+		});
 
 		// Should only have 1 result, not 2
 		expect(result).toHaveLength(1);
@@ -383,10 +345,7 @@ describe("updateRegularDeps", () => {
 
 		mockGetPackageInfosAsync.mockResolvedValue({});
 
-		const result = await runWithRunner(
-			updateRegularDeps(["effect"], dir),
-			makeExecCapture(() => "ok"),
-		);
+		const result = await runWithRegistry(updateRegularDeps(["effect"], dir));
 
 		// No deps match the pattern, so empty result
 		expect(result).toHaveLength(0);
@@ -401,14 +360,9 @@ describe("updateRegularDeps", () => {
 
 		mockGetPackageInfosAsync.mockRejectedValue(new Error("workspace detection failed"));
 
-		const result = await runWithRunner(
-			updateRegularDeps(["effect"], dir),
-			makeExecCapture((_cmd, args) => {
-				const shellCmd = args?.[1] ?? "";
-				if (shellCmd.includes("npm view effect")) return '"3.1.0"';
-				return "ok";
-			}),
-		);
+		const result = await runWithRegistry(updateRegularDeps(["effect"], dir), {
+			effect: "3.1.0",
+		});
 
 		// Should still update root package.json even when workspace info fails
 		expect(result).toHaveLength(1);
@@ -420,7 +374,7 @@ describe("updateRegularDeps", () => {
 		});
 	});
 
-	it("returns empty when npm returns non-string JSON", async () => {
+	it("returns empty when package not found in registry", async () => {
 		const dir = makeTempDir();
 		writePackageJson(dir, {
 			name: "root",
@@ -429,38 +383,10 @@ describe("updateRegularDeps", () => {
 
 		mockGetPackageInfosAsync.mockResolvedValue({});
 
-		const result = await runWithRunner(
-			updateRegularDeps(["effect"], dir),
-			makeExecCapture((_cmd, args) => {
-				const shellCmd = args?.[1] ?? "";
-				if (shellCmd.includes("npm view effect")) return '{ "latest": "3.1.0" }';
-				return "ok";
-			}),
-		);
+		// Empty registry — no packages registered, so query will fail
+		const result = await runWithRegistry(updateRegularDeps(["effect"], dir));
 
-		// queryLatestVersion returns null for non-string parsed JSON
-		expect(result).toHaveLength(0);
-	});
-
-	it("returns empty when npm returns invalid JSON", async () => {
-		const dir = makeTempDir();
-		writePackageJson(dir, {
-			name: "root",
-			dependencies: { effect: "^3.0.0" },
-		});
-
-		mockGetPackageInfosAsync.mockResolvedValue({});
-
-		const result = await runWithRunner(
-			updateRegularDeps(["effect"], dir),
-			makeExecCapture((_cmd, args) => {
-				const shellCmd = args?.[1] ?? "";
-				if (shellCmd.includes("npm view effect")) return "not json at all";
-				return "ok";
-			}),
-		);
-
-		// queryLatestVersion returns null on parse error
+		// queryLatestVersion returns null when registry query fails
 		expect(result).toHaveLength(0);
 	});
 
@@ -473,14 +399,9 @@ describe("updateRegularDeps", () => {
 
 		mockGetPackageInfosAsync.mockResolvedValue({});
 
-		const result = await runWithRunner(
-			updateRegularDeps(["effect"], dir),
-			makeExecCapture((_cmd, args) => {
-				const shellCmd = args?.[1] ?? "";
-				if (shellCmd.includes("npm view effect")) return '"3.1.0"';
-				return "ok";
-			}),
-		);
+		const result = await runWithRegistry(updateRegularDeps(["effect"], dir), {
+			effect: "3.1.0",
+		});
 
 		expect(result).toHaveLength(1);
 		expect(result[0].to).toBe("^3.1.0");
@@ -498,14 +419,9 @@ describe("updateRegularDeps", () => {
 
 		mockGetPackageInfosAsync.mockResolvedValue({});
 
-		const result = await runWithRunner(
-			updateRegularDeps(["effect"], dir),
-			makeExecCapture((_cmd, args) => {
-				const shellCmd = args?.[1] ?? "";
-				if (shellCmd.includes("npm view effect")) return '"3.1.0"';
-				return "ok";
-			}),
-		);
+		const result = await runWithRegistry(updateRegularDeps(["effect"], dir), {
+			effect: "3.1.0",
+		});
 
 		expect(result).toHaveLength(1);
 		expect(result[0].to).toBe("3.1.0");
