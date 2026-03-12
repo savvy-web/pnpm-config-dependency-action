@@ -62,44 +62,28 @@ export const hasChangesets = (workspaceRoot: string = process.cwd()): boolean =>
 /**
  * Format changeset summary from dependency changes.
  *
- * Uses the section-aware format from @savvy-web/changesets:
- * - h2 `## Dependencies` heading (recognized category, priority 10)
- * - h3 sub-headings when both config and regular changes are present
+ * Uses the section-aware format from @savvy-web/changesets with a structured
+ * GFM dependency table under the `## Dependencies` heading:
+ *
+ * | Dependency | Type | Action | From | To |
+ * | :--- | :--- | :--- | :--- | :--- |
+ * | lodash | dependency | updated | ^4.17.20 | ^4.17.21 |
  *
  * @see https://github.com/savvy-web/changesets/blob/main/docs/changeset-format.md
  */
 export const formatChangesetSummary = (changes: ReadonlyArray<LockfileChange>): string => {
-	const configChanges = changes.filter((c) => c.type === "config");
-	const regularChanges = changes.filter((c) => c.type === "regular");
+	const lines: string[] = [
+		"## Dependencies",
+		"",
+		"| Dependency | Type | Action | From | To |",
+		"| :--- | :--- | :--- | :--- | :--- |",
+	];
 
-	const lines: string[] = ["## Dependencies"];
-	lines.push("");
-
-	const hasBoth = configChanges.length > 0 && regularChanges.length > 0;
-
-	if (configChanges.length > 0) {
-		if (hasBoth) {
-			lines.push("### Config");
-			lines.push("");
-		}
-		for (const change of configChanges) {
-			lines.push(formatDependencyLine(change));
-		}
-		lines.push("");
+	for (const change of changes) {
+		lines.push(formatDependencyRow(change));
 	}
 
-	if (regularChanges.length > 0) {
-		if (hasBoth) {
-			lines.push("### Packages");
-			lines.push("");
-		}
-		for (const change of regularChanges) {
-			lines.push(formatDependencyLine(change));
-		}
-		lines.push("");
-	}
-
-	return lines.join("\n").trim();
+	return lines.join("\n");
 };
 
 /**
@@ -147,13 +131,24 @@ const generateChangesetId = (): string => {
 };
 
 /**
- * Format a single dependency change as a list item.
+ * Em dash used for missing from/to values in the dependency table.
  */
-const formatDependencyLine = (change: LockfileChange): string => {
-	if (change.from) {
-		return `- ${change.dependency}: ${change.from} → ${change.to}`;
-	}
-	return `- ${change.dependency}: ${change.to} (new)`;
+const EM_DASH = "\u2014";
+
+/**
+ * Map LockfileChange type to the dependency table Type column.
+ */
+const mapDependencyType = (type: LockfileChange["type"]): string => (type === "config" ? "config" : "dependency");
+
+/**
+ * Format a single dependency change as a GFM table row.
+ */
+const formatDependencyRow = (change: LockfileChange): string => {
+	const type = mapDependencyType(change.type);
+	const action = change.from === null ? "added" : "updated";
+	const from = change.from ?? EM_DASH;
+	const to = change.to;
+	return `| ${change.dependency} | ${type} | ${action} | ${from} | ${to} |`;
 };
 
 // ══════════════════════════════════════════════════════════════════════════════
