@@ -260,7 +260,7 @@ describe("analyzeAffectedPackages", () => {
 });
 
 describe("formatChangesetSummary", () => {
-	it("starts with ## Dependencies heading", () => {
+	it("starts with ## Dependencies heading and table header", () => {
 		const changes: LockfileChange[] = [
 			{ type: "regular", dependency: "effect", from: "3.0.0", to: "3.1.0", affectedPackages: ["@savvy-web/core"] },
 		];
@@ -268,31 +268,31 @@ describe("formatChangesetSummary", () => {
 		const result = formatChangesetSummary(changes);
 
 		expect(result).toMatch(/^## Dependencies/);
+		expect(result).toContain("| Dependency | Type | Action | From | To |");
+		expect(result).toContain("| :--- | :--- | :--- | :--- | :--- |");
 	});
 
-	it("formats config dependency changes with arrows", () => {
+	it("formats config dependency as table row with type 'config'", () => {
 		const changes: LockfileChange[] = [
 			{ type: "config", dependency: "typescript", from: "5.3.3", to: "5.4.0", affectedPackages: [] },
 		];
 
 		const result = formatChangesetSummary(changes);
 
-		expect(result).toContain("## Dependencies");
-		expect(result).toContain("- typescript: 5.3.3 → 5.4.0");
+		expect(result).toContain("| typescript | config | updated | 5.3.3 | 5.4.0 |");
 	});
 
-	it("formats regular dependency changes", () => {
+	it("formats regular dependency as table row with type 'dependency'", () => {
 		const changes: LockfileChange[] = [
 			{ type: "regular", dependency: "effect", from: "3.0.0", to: "3.1.0", affectedPackages: ["@savvy-web/core"] },
 		];
 
 		const result = formatChangesetSummary(changes);
 
-		expect(result).toContain("## Dependencies");
-		expect(result).toContain("- effect: 3.0.0 → 3.1.0");
+		expect(result).toContain("| effect | dependency | updated | 3.0.0 | 3.1.0 |");
 	});
 
-	it("handles new dependencies (from is null)", () => {
+	it("uses em dash and 'added' action when from is null", () => {
 		const changes: LockfileChange[] = [
 			{
 				type: "regular",
@@ -305,10 +305,10 @@ describe("formatChangesetSummary", () => {
 
 		const result = formatChangesetSummary(changes);
 
-		expect(result).toContain("- @effect/schema: 0.61.0 (new)");
+		expect(result).toContain("| @effect/schema | dependency | added | \u2014 | 0.61.0 |");
 	});
 
-	it("uses h3 sub-headings when both config and regular changes present", () => {
+	it("renders all changes in a single table without sub-headings", () => {
 		const changes: LockfileChange[] = [
 			{ type: "config", dependency: "typescript", from: "5.3.3", to: "5.4.0", affectedPackages: [] },
 			{ type: "regular", dependency: "effect", from: "3.0.0", to: "3.1.0", affectedPackages: ["@savvy-web/core"] },
@@ -316,31 +316,19 @@ describe("formatChangesetSummary", () => {
 
 		const result = formatChangesetSummary(changes);
 
-		expect(result).toContain("## Dependencies");
-		expect(result).toContain("### Config");
-		expect(result).toContain("### Packages");
-		expect(result).toContain("- typescript: 5.3.3 → 5.4.0");
-		expect(result).toContain("- effect: 3.0.0 → 3.1.0");
-	});
-
-	it("omits h3 sub-headings when only one change type", () => {
-		const changes: LockfileChange[] = [
-			{ type: "config", dependency: "typescript", from: "5.3.3", to: "5.4.0", affectedPackages: [] },
-		];
-
-		const result = formatChangesetSummary(changes);
-
+		expect(result).toContain("| typescript | config | updated | 5.3.3 | 5.4.0 |");
+		expect(result).toContain("| effect | dependency | updated | 3.0.0 | 3.1.0 |");
 		expect(result).not.toContain("### Config");
 		expect(result).not.toContain("### Packages");
 	});
 
-	it("handles config-only changes with new dependency", () => {
+	it("handles config-only new dependency with em dash", () => {
 		const changes: LockfileChange[] = [
 			{ type: "config", dependency: "@biomejs/biome", from: null, to: "1.6.1", affectedPackages: [] },
 		];
 
 		const result = formatChangesetSummary(changes);
 
-		expect(result).toContain("- @biomejs/biome: 1.6.1 (new)");
+		expect(result).toContain("| @biomejs/biome | config | added | \u2014 | 1.6.1 |");
 	});
 });
