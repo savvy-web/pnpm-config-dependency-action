@@ -1,5 +1,11 @@
 # pnpm-config-dependency-action
 
+## 0.9.0
+
+### Features
+
+* [`14da150`](https://github.com/savvy-web/pnpm-config-dependency-action/commit/14da150ca9e12d8dea62d65c2f9faf7221c0683e) Changeset summaries now use the structured GFM dependency table format from `@savvy-web/changesets`. The `## Dependencies` section renders a five-column table (Dependency, Type, Action, From, To) instead of bullet lists with arrows.
+
 ## 0.8.1
 
 ### Bug Fixes
