@@ -137,8 +137,12 @@ export const program = Effect.gen(function* () {
 
 	// Resolve log level
 	const resolvedLogLevel = Action.resolveLogLevel(logLevel as LogLevelInput);
+	// Map ActionLogLevel ("info" | "verbose" | "debug") to Effect LogLevel
+	// "info" = show info and above (default CI behavior)
+	// "verbose" = show all info (same as info for Effect's logger)
+	// "debug" = show debug and above (verbose output)
 	const effectLogLevel =
-		resolvedLogLevel === "debug" ? LogLevel.Debug : resolvedLogLevel === "verbose" ? LogLevel.Info : LogLevel.Warning;
+		resolvedLogLevel === "debug" ? LogLevel.Debug : resolvedLogLevel === "verbose" ? LogLevel.Debug : LogLevel.Info;
 
 	yield* Effect.logDebug("Debug mode enabled - verbose logging active");
 	yield* Effect.logDebug(

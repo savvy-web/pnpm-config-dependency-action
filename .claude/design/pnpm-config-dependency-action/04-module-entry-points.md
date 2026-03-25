@@ -15,9 +15,12 @@ Inputs are parsed using Effect's `Config.*` API:
 const appId = yield* Config.string("app-id");
 const appPrivateKey = yield* Config.secret("app-private-key");
 const branch = yield* Config.string("branch").pipe(Config.withDefault("pnpm/config-deps"));
-const configDependencies = yield* parseMultiValueInput("config-dependencies");
-const dependencies = yield* parseMultiValueInput("dependencies");
-const run = yield* parseMultiValueInput("run");
+const rawConfigDeps = yield* Config.string("config-dependencies").pipe(Config.withDefault(""));
+const configDependencies = parseMultiValueInput(rawConfigDeps);
+const rawDeps = yield* Config.string("dependencies").pipe(Config.withDefault(""));
+const dependencies = parseMultiValueInput(rawDeps);
+const rawRun = yield* Config.string("run").pipe(Config.withDefault(""));
+const run = parseMultiValueInput(rawRun);
 const updatePnpm = yield* Config.boolean("update-pnpm").pipe(Config.withDefault(true));
 const changesets = yield* Config.boolean("changesets").pipe(Config.withDefault(true));
 const autoMerge = yield* Config.string("auto-merge").pipe(Config.withDefault("" as const));
@@ -58,25 +61,15 @@ The module exports a `program` Effect and an `innerProgram` function:
   `RegularDeps`, `Report`, `Lockfile`, `Changesets`) plus library services
   (`ActionOutputs`, `CheckRun`, `CommandRunner`) in its context
 
-The module-level execution wraps with timeout and top-level error handling:
+The module-level execution uses `Action.run` which handles all error
+formatting via `formatCause` automatically:
 
 ```typescript
-Action.run(
- program.pipe(
-  Effect.timeoutFail({
-   duration: Duration.seconds(180),
-   onTimeout: () => new Error("Action timed out after 180 seconds"),
-  }),
-  Effect.catchAll((error) =>
-   Effect.gen(function* () {
-    const outs = yield* ActionOutputs;
-    yield* outs.setFailed(`Action failed: ${error.message}`);
-   }),
-  ),
- ),
- { layer: GitHubAppLive },
-);
+Action.run(program, { layer: GitHubAppLive });
 ```
+
+Timeout is applied inside `program` via `Effect.timeoutFail` using
+the configurable `timeout` input (default: 180 seconds).
 
 ### Key Exported Functions
 
