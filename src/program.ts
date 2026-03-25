@@ -18,7 +18,6 @@ import {
 	CommandRunner,
 	GitHubApp,
 } from "@savvy-web/github-action-effects";
-import type { Layer } from "effect";
 import { Config, Duration, Effect, LogLevel, Logger, Redacted } from "effect";
 import { makeAppLayer } from "./layers/app.js";
 import type { ChangesetFile, DependencyUpdateResult, PullRequestResult } from "./schemas/domain.js";
@@ -195,8 +194,7 @@ const innerProgram = (
 	},
 	dryRun: boolean,
 	headSha: string,
-	// biome-ignore lint/suspicious/noExplicitAny: Layer type is complex and inferred at call site
-	appLayer: Layer.Layer<any, any>,
+	appLayer: ReturnType<typeof makeAppLayer>,
 ) =>
 	// appLayer is provided at two levels: here (outer) for services used before
 	// withCheckRun, and again inside the withCheckRun callback (inner) because
