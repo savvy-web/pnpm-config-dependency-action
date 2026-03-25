@@ -2,6 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NpmRegistryTest } from "@savvy-web/github-action-effects";
+import type { Context } from "effect";
 import { Effect, Layer, LogLevel, Logger } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
@@ -39,14 +40,14 @@ const makeRegistryState = (
 			versions: [info.version],
 			latest: info.version,
 			distTags: { latest: info.version },
-			integrity: info.integrity,
+			...(info.integrity != null && { integrity: info.integrity }),
 		});
 	}
 	return map;
 };
 
 const runWithService = <A, E>(
-	fn: (service: ConfigDeps) => Effect.Effect<A, E>,
+	fn: (service: Context.Tag.Service<typeof ConfigDeps>) => Effect.Effect<A, E>,
 	packages?: Record<string, { version: string; integrity?: string }>,
 ) => {
 	const registryLayer = packages

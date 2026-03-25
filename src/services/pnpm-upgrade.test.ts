@@ -1,7 +1,6 @@
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { CommandRunner as CommandRunnerService } from "@savvy-web/github-action-effects";
 import { CommandRunner } from "@savvy-web/github-action-effects";
 import type { Context } from "effect";
 import { Effect, Layer, LogLevel, Logger } from "effect";
@@ -25,6 +24,8 @@ const readPackageJson = (dir: string) => {
 	return JSON.parse(readFileSync(join(dir, "package.json"), "utf-8"));
 };
 
+type CommandRunnerShape = Context.Tag.Service<typeof CommandRunner>;
+
 const versions = JSON.stringify(["10.27.0", "10.28.0", "10.28.2", "10.29.0", "10.29.1", "11.0.0"]);
 
 const makeExecCapture =
@@ -39,8 +40,8 @@ const makeRunner = (
 		command: string,
 		args?: ReadonlyArray<string>,
 	) => Effect.Effect<{ exitCode: number; stdout: string; stderr: string }, never>,
-): CommandRunnerService => ({
-	exec: (_cmd, _args) => Effect.void,
+): CommandRunnerShape => ({
+	exec: (_cmd, _args) => Effect.succeed(0),
 	execCapture: execCaptureOverride ?? defaultExecCapture,
 	execJson: (_cmd, _args, _schema) => Effect.die("not implemented"),
 	execLines: (_cmd, _args) => Effect.succeed([]),

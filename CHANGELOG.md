@@ -1,5 +1,18 @@
 # pnpm-config-dependency-action
 
+## 0.10.0
+
+### Features
+
+* [`d7c18a6`](https://github.com/savvy-web/pnpm-config-dependency-action/commit/d7c18a6b5f741b526d7048b37815d5543024816d) Migrate to @savvy-web/github-action-effects v0.11 API, replacing legacy
+  `@actions/*` imports and `Action.parseInputs()` with the modern library API.
+
+- Use Effect's `Config.*` API for typed input parsing
+- Use `ActionEnvironment` for GitHub context (SHA, repository)
+- Use `Redacted` for secure private key handling
+- Separate program logic from entry point for clean test imports
+- Wire `OctokitAuthAppLive` and `GitHubClientLive` layers for GitHub App auth
+
 ## 0.9.0
 
 ### Features

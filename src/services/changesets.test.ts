@@ -16,8 +16,8 @@ import {
 /**
  * Run an Effect with logging suppressed.
  */
-const runEffect = <A>(effect: Effect.Effect<A>) =>
-	Effect.runPromise(effect.pipe(Logger.withMinimumLogLevel(LogLevel.None)));
+const runEffect = <A, E>(effect: Effect.Effect<A, E>) =>
+	Effect.runPromise(effect.pipe(Logger.withMinimumLogLevel(LogLevel.None)) as Effect.Effect<A>);
 
 describe("hasChangesets", () => {
 	let tempDir: string;
