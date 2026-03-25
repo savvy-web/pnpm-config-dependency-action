@@ -22,19 +22,19 @@
  * @module main
  */
 
-import { context } from "@actions/github";
+import type { LogLevelInput } from "@savvy-web/github-action-effects";
 import {
 	Action,
+	ActionEnvironment,
 	ActionInputError,
 	ActionOutputs,
 	CheckRun,
 	CommandRunner,
 	GitHubApp,
 	GitHubAppLive,
-	LogLevelInput,
 } from "@savvy-web/github-action-effects";
 import type { Layer } from "effect";
-import { Duration, Effect, Schema } from "effect";
+import { Config, Duration, Effect, LogLevel, Logger, Secret } from "effect";
 import { makeAppLayer } from "./layers/app.js";
 import type { ChangesetFile, DependencyUpdateResult, PullRequestResult } from "./schemas/domain.js";
 import { BranchManager } from "./services/branch.js";
@@ -45,6 +45,7 @@ import { PnpmUpgrade } from "./services/pnpm-upgrade.js";
 import { RegularDeps } from "./services/regular-deps.js";
 import { Report } from "./services/report.js";
 import { formatWorkspaceYaml, readWorkspaceYaml } from "./services/workspace-yaml.js";
+import { parseMultiValueInput } from "./utils/input.js";
 
 /**
  * Result of running custom commands.
@@ -104,55 +105,48 @@ export const runCommands = (commands: ReadonlyArray<string>): Effect.Effect<RunC
  */
 /* v8 ignore start -- orchestration code tested via integration */
 export const program = Effect.gen(function* () {
+	// Step 1: Parse inputs via Config API
 	yield* Effect.logInfo("Starting pnpm config dependency action");
 
-	// Step 1: Parse inputs
-	const inputs = yield* Action.parseInputs(
-		{
-			"app-id": { schema: Schema.String, required: true, secret: false },
-			"app-private-key": { schema: Schema.String, required: true, secret: true },
-			branch: { schema: Schema.String, default: "pnpm/config-deps" },
-			"config-dependencies": { schema: Schema.String, multiline: true },
-			dependencies: { schema: Schema.String, multiline: true },
-			run: { schema: Schema.String, multiline: true },
-			"update-pnpm": { schema: Schema.BooleanFromString, default: "true" as const },
-			changesets: { schema: Schema.BooleanFromString, default: "true" as const },
-			"auto-merge": { schema: Schema.Literal("", "merge", "squash", "rebase"), default: "" as const },
-			"dry-run": { schema: Schema.BooleanFromString, default: "false" as const },
-			"log-level": { schema: LogLevelInput, default: "auto" as const },
-			timeout: { schema: Schema.NumberFromString, default: "180" },
-		},
-		(parsed) => {
-			// Cross-validate: at least one update type must be active
-			const hasConfig = parsed["config-dependencies"].length > 0;
-			const hasDeps = parsed.dependencies.length > 0;
-			const hasPnpm = parsed["update-pnpm"];
-			if (!hasConfig && !hasDeps && !hasPnpm) {
-				return Effect.fail(
-					new ActionInputError({
-						inputName: "config-dependencies",
-						reason: "At least one update type must be active",
-						rawValue: undefined,
-					}),
-				);
-			}
-			return Effect.succeed(parsed);
-		},
-	);
+	const appId = yield* Config.string("app-id");
+	const appPrivateKey = yield* Config.secret("app-private-key");
+	const branch = yield* Config.string("branch").pipe(Config.withDefault("pnpm/config-deps"));
+	const rawConfigDeps = yield* Config.string("config-dependencies").pipe(Config.withDefault(""));
+	const configDependencies = parseMultiValueInput(rawConfigDeps);
+	const rawDeps = yield* Config.string("dependencies").pipe(Config.withDefault(""));
+	const dependencies = parseMultiValueInput(rawDeps);
+	const rawRun = yield* Config.string("run").pipe(Config.withDefault(""));
+	const run = parseMultiValueInput(rawRun);
+	const updatePnpm = yield* Config.boolean("update-pnpm").pipe(Config.withDefault(true));
+	const changesets = yield* Config.boolean("changesets").pipe(Config.withDefault(true));
+	const autoMerge = yield* Config.string("auto-merge").pipe(Config.withDefault(""));
+	const dryRun = yield* Config.boolean("dry-run").pipe(Config.withDefault(false));
+	const logLevel = yield* Config.string("log-level").pipe(Config.withDefault("auto"));
+	const timeout = yield* Config.integer("timeout").pipe(Config.withDefault(180));
 
-	const dryRun = inputs["dry-run"];
+	// Cross-validate: at least one update type must be active
+	if (configDependencies.length === 0 && dependencies.length === 0 && !updatePnpm) {
+		yield* Effect.fail(
+			new ActionInputError({
+				inputName: "config-dependencies",
+				reason: "At least one update type must be active",
+				rawValue: undefined,
+			}),
+		);
+	}
 
-	// Set log level before any other logging
-	const resolvedLogLevel = Action.resolveLogLevel(inputs["log-level"]);
-	yield* Action.setLogLevel(resolvedLogLevel);
+	// Resolve log level
+	const resolvedLogLevel = Action.resolveLogLevel(logLevel as LogLevelInput);
+	const effectLogLevel =
+		resolvedLogLevel === "debug" ? LogLevel.Debug : resolvedLogLevel === "verbose" ? LogLevel.Info : LogLevel.Warning;
 
 	yield* Effect.logDebug("Debug mode enabled - verbose logging active");
 	yield* Effect.logDebug(
 		`Parsed inputs: ${JSON.stringify({
-			branch: inputs.branch,
-			configDependencies: inputs["config-dependencies"],
-			dependencies: inputs.dependencies,
-			updatePnpm: inputs["update-pnpm"],
+			branch,
+			configDependencies,
+			dependencies,
+			updatePnpm,
 			dryRun,
 		})}`,
 	);
@@ -163,29 +157,34 @@ export const program = Effect.gen(function* () {
 
 	// Step 2: Generate GitHub App token and run the main workflow
 	const ghApp = yield* GitHubApp;
-	const timeoutSeconds = inputs.timeout;
+	const env = yield* ActionEnvironment;
+	const github = yield* env.github;
+	const headSha = github.sha;
+
 	yield* ghApp
-		.withToken(inputs["app-id"], inputs["app-private-key"], (token) =>
+		.withToken(appId, Secret.value(appPrivateKey), (token) =>
 			Effect.gen(function* () {
 				const appLayer = makeAppLayer(token, dryRun);
-				// getMultiline returns string[] at runtime, but ParsedInputs infers
-				// the item schema type (string). Cast to align with innerProgram's type.
 				yield* innerProgram(
 					{
-						...inputs,
-						"config-dependencies": inputs["config-dependencies"] as unknown as ReadonlyArray<string>,
-						dependencies: inputs.dependencies as unknown as ReadonlyArray<string>,
-						run: inputs.run as unknown as ReadonlyArray<string>,
+						branch,
+						"config-dependencies": configDependencies,
+						dependencies,
+						"update-pnpm": updatePnpm,
+						changesets,
+						"auto-merge": autoMerge as "" | "merge" | "squash" | "rebase",
+						run,
 					},
 					dryRun,
+					headSha,
 					appLayer,
-				);
+				).pipe(Logger.withMinimumLogLevel(effectLogLevel));
 			}),
 		)
 		.pipe(
 			Effect.timeoutFail({
-				duration: Duration.seconds(timeoutSeconds),
-				onTimeout: () => new Error(`Action timed out after ${timeoutSeconds} seconds`),
+				duration: Duration.seconds(timeout),
+				onTimeout: () => new Error(`Action timed out after ${timeout} seconds`),
 			}),
 		);
 });
@@ -204,6 +203,7 @@ const innerProgram = (
 		run: ReadonlyArray<string>;
 	},
 	dryRun: boolean,
+	headSha: string,
 	// biome-ignore lint/suspicious/noExplicitAny: Layer type is complex and inferred at call site
 	appLayer: Layer.Layer<any, any>,
 ) =>
@@ -214,7 +214,6 @@ const innerProgram = (
 		Effect.gen(function* () {
 			const outputs = yield* ActionOutputs;
 			const checkRunService = yield* CheckRun;
-			const headSha = context.sha;
 
 			// Create check run for visibility
 			const checkRunName = dryRun ? "Dependency Updates (Dry Run)" : "Dependency Updates";
@@ -438,5 +437,5 @@ const innerProgram = (
 	);
 
 // Run the main action — Action.run handles all error formatting via formatCause
-Action.run(program, GitHubAppLive);
+Action.run(program, { layer: GitHubAppLive });
 /* v8 ignore stop */
