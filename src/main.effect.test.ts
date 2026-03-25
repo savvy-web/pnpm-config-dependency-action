@@ -1,5 +1,5 @@
 import type { CommandRunnerError } from "@savvy-web/github-action-effects";
-import { CommandRunner } from "@savvy-web/github-action-effects";
+import { CommandRunner, CommandRunnerTest } from "@savvy-web/github-action-effects";
 import { Effect, Layer, LogLevel, Logger } from "effect";
 import { describe, expect, it } from "vitest";
 import { runCommands } from "./main.js";
@@ -35,7 +35,7 @@ const makeTestRunner = (
 
 describe("runCommands", () => {
 	it("returns empty result for empty commands", async () => {
-		const layer = makeTestRunner();
+		const layer = CommandRunnerTest.empty();
 		const result = await Effect.runPromise(
 			runCommands([]).pipe(Effect.provide(layer), Logger.withMinimumLogLevel(LogLevel.None)),
 		);
