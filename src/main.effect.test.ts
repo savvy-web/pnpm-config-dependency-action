@@ -1,8 +1,9 @@
 import type { CommandRunnerError } from "@savvy-web/github-action-effects";
-import { CommandRunner } from "@savvy-web/github-action-effects";
+import { CommandRunner, CommandRunnerTest } from "@savvy-web/github-action-effects";
+import type { Context } from "effect";
 import { Effect, Layer, LogLevel, Logger } from "effect";
 import { describe, expect, it } from "vitest";
-import { runCommands } from "./main.js";
+import { runCommands } from "./program.js";
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Test Helpers
@@ -11,15 +12,17 @@ import { runCommands } from "./main.js";
 /**
  * Create a mock CommandRunner service.
  */
+type CommandRunnerShape = Context.Tag.Service<typeof CommandRunner>;
+
 const makeTestRunner = (
 	overrides: Partial<{
-		exec: CommandRunner["exec"];
-		execCapture: CommandRunner["execCapture"];
-		execJson: CommandRunner["execJson"];
-		execLines: CommandRunner["execLines"];
+		exec: CommandRunnerShape["exec"];
+		execCapture: CommandRunnerShape["execCapture"];
+		execJson: CommandRunnerShape["execJson"];
+		execLines: CommandRunnerShape["execLines"];
 	}> = {},
 ): Layer.Layer<CommandRunner> => {
-	const service: CommandRunner = {
+	const service: CommandRunnerShape = {
 		exec: () => Effect.succeed(0),
 		execCapture: () => Effect.succeed({ exitCode: 0, stdout: "", stderr: "" }),
 		execJson: () => Effect.succeed(null as never),
@@ -35,7 +38,7 @@ const makeTestRunner = (
 
 describe("runCommands", () => {
 	it("returns empty result for empty commands", async () => {
-		const layer = makeTestRunner();
+		const layer = CommandRunnerTest.empty();
 		const result = await Effect.runPromise(
 			runCommands([]).pipe(Effect.provide(layer), Logger.withMinimumLogLevel(LogLevel.None)),
 		);
@@ -47,7 +50,7 @@ describe("runCommands", () => {
 		const commandOrder: string[] = [];
 
 		const layer = makeTestRunner({
-			execCapture: (_cmd, args) => {
+			execCapture: (_cmd: string, args?: ReadonlyArray<string>) => {
 				// The command is passed via sh -c, so args[1] is the actual command
 				const actualCmd = args?.[1] ?? "";
 				commandOrder.push(actualCmd as string);
@@ -90,7 +93,7 @@ describe("runCommands", () => {
 
 	it("continues after failure (all commands run)", async () => {
 		const layer = makeTestRunner({
-			execCapture: (_cmd, args) => {
+			execCapture: (_cmd: string, args?: ReadonlyArray<string>) => {
 				const actualCmd = args?.[1] ?? "";
 				if (actualCmd === "pnpm test") {
 					return Effect.fail({

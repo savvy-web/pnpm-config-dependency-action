@@ -10,7 +10,6 @@
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { NpmRegistry as NpmRegistryService } from "@savvy-web/github-action-effects";
 import { NpmRegistry } from "@savvy-web/github-action-effects";
 import { Context, Effect, Layer } from "effect";
 import { getPackageInfosAsync } from "workspace-tools";
@@ -19,6 +18,8 @@ import { FileSystemError } from "../errors/errors.js";
 import type { DependencyUpdateResult } from "../schemas/domain.js";
 import { matchesPattern, parseSpecifier } from "../utils/deps.js";
 import { detectIndent } from "../utils/pnpm.js";
+
+type NpmRegistryShape = Context.Tag.Service<typeof NpmRegistry>;
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Service Interface
@@ -52,7 +53,7 @@ export const RegularDepsLive = Layer.effect(
 /**
  * Query npm for the latest published version of a package.
  */
-const queryLatestVersion = (packageName: string, registry: NpmRegistryService): Effect.Effect<string | null> =>
+const queryLatestVersion = (packageName: string, registry: NpmRegistryShape): Effect.Effect<string | null> =>
 	Effect.gen(function* () {
 		const version = yield* registry
 			.getLatestVersion(packageName)
@@ -168,7 +169,7 @@ const updatePackageJson = (pkgPath: string, updates: Map<string, string>): Effec
  */
 const updateRegularDepsImpl = (
 	patterns: ReadonlyArray<string>,
-	registry: NpmRegistryService,
+	registry: NpmRegistryShape,
 	workspaceRoot: string,
 ): Effect.Effect<ReadonlyArray<DependencyUpdateResult>> =>
 	Effect.gen(function* () {

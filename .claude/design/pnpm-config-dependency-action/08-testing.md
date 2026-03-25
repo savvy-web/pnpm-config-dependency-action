@@ -21,6 +21,7 @@
    - Commit message generation
    - Summary text generation
    - pnpm upgrade appearing in Config Dependencies table
+   - Uses `CommandRunnerTest` for mock shell execution
 
 3. **Domain schemas** (`src/schemas/domain.test.ts`) - 11 tests
 
@@ -113,9 +114,9 @@ Domain service tests provide the mock library layer to the service's Live layer:
 const testLayer = ConfigDepsLive.pipe(Layer.provide(mockNpmRegistry));
 ```
 
-**Remaining `vi.mock("@actions/core")` usage:** Some test files still mock
-`@actions/core` because `@actions/github` (directly imported for `context.sha`)
-has a transitive dependency on it.
+**No `@actions/core` mocking required:** The library implements the GitHub Actions
+protocol natively without `@actions/*` package dependencies, so `vi.mock("@actions/core")`
+is no longer needed in any test file.
 
 ## Coverage
 

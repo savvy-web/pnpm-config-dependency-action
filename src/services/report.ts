@@ -11,8 +11,10 @@
  */
 
 import type { PullRequestError } from "@savvy-web/github-action-effects";
-import { GithubMarkdown, PullRequest as PullRequestService } from "@savvy-web/github-action-effects";
+import { GithubMarkdown, PullRequest as PullRequestTag } from "@savvy-web/github-action-effects";
 import { Context, Effect, Layer } from "effect";
+
+type PullRequestShape = Context.Tag.Service<typeof PullRequestTag>;
 
 import type { ChangesetFile, DependencyUpdateResult, PullRequestResult } from "../schemas/domain.js";
 import { cleanVersion, npmUrl } from "../utils/markdown.js";
@@ -51,7 +53,7 @@ export class Report extends Context.Tag("Report")<
 export const ReportLive = Layer.effect(
 	Report,
 	Effect.gen(function* () {
-		const pullRequest = yield* PullRequestService;
+		const pullRequest = yield* PullRequestTag;
 		return {
 			createOrUpdatePR: (branch, updates, changesets, autoMerge) =>
 				createOrUpdatePRImpl(pullRequest, branch, updates, changesets, autoMerge),
@@ -72,7 +74,7 @@ export const ReportLive = Layer.effect(
  * Returns `PullRequestResult` on success, or `PullRequestError` in the error channel.
  */
 const createOrUpdatePRImpl = (
-	pr: PullRequestService,
+	pr: PullRequestShape,
 	branch: string,
 	updates: ReadonlyArray<DependencyUpdateResult>,
 	changesets: ReadonlyArray<ChangesetFile>,
