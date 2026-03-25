@@ -53,7 +53,7 @@
 	"devDependencies": {
 		"@savvy-web/changesets": "^0.6.0",
 		"@savvy-web/commitlint": "^0.4.1",
-		"@savvy-web/github-action-builder": "^0.5.1",
+		"@savvy-web/github-action-builder": "^0.6.0",
 		"@savvy-web/lint-staged": "^0.6.2",
 		"@savvy-web/vitest": "^1.0.0"
 	},

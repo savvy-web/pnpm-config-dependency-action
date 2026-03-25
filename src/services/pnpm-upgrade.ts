@@ -9,13 +9,14 @@
  */
 
 import { readFileSync, writeFileSync } from "node:fs";
-import type { CommandRunner as CommandRunnerService } from "@savvy-web/github-action-effects";
 import { CommandRunner, SemverResolver } from "@savvy-web/github-action-effects";
 import { Context, Effect, Layer } from "effect";
 
 import { FileSystemError } from "../errors/errors.js";
 import { detectIndent, formatPnpmVersion, parsePnpmVersion } from "../utils/pnpm.js";
 import { resolveLatestInRange } from "../utils/semver.js";
+
+type CommandRunnerShape = Context.Tag.Service<typeof CommandRunner>;
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Types
@@ -68,7 +69,7 @@ const fsWriteError = (path: string, e: unknown) => new FileSystemError({ operati
  * Core upgrade implementation that accepts a runner directly.
  */
 const upgradePnpmImpl = (
-	runner: CommandRunnerService,
+	runner: CommandRunnerShape,
 	workspaceRoot: string,
 ): Effect.Effect<PnpmUpgradeResult | null, FileSystemError> =>
 	Effect.gen(function* () {

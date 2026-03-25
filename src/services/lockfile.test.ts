@@ -31,12 +31,12 @@ vi.mock("workspace-tools", () => ({
 /**
  * Create a minimal LockfileObject for testing.
  */
-const makeLockfile = (overrides: Partial<LockfileObject> = {}): LockfileObject =>
+const makeLockfile = (overrides: Record<string, unknown> = {}): LockfileObject =>
 	({
 		lockfileVersion: "9.0",
 		importers: {},
 		...overrides,
-	}) as LockfileObject;
+	}) as unknown as LockfileObject;
 
 /**
  * Run Lockfile.compare via the Live layer with logging suppressed.
@@ -203,7 +203,7 @@ describe("Lockfile.compare - named catalogs", () => {
 					dependencies: {
 						effect: { specifier: "catalog:silk", version: "3.0.5" },
 					},
-				} as LockfileObject["importers"][string],
+				} as unknown,
 			},
 		});
 
@@ -218,7 +218,7 @@ describe("Lockfile.compare - named catalogs", () => {
 					dependencies: {
 						effect: { specifier: "catalog:silk", version: "3.1.2" },
 					},
-				} as LockfileObject["importers"][string],
+				} as unknown,
 			},
 		});
 
@@ -240,7 +240,7 @@ describe("Lockfile.compare - importer specifier changes", () => {
 					specifiers: {
 						lodash: "^4.17.0",
 					},
-				} as unknown as LockfileObject["importers"][string],
+				} as unknown,
 			},
 		});
 
@@ -250,7 +250,7 @@ describe("Lockfile.compare - importer specifier changes", () => {
 					specifiers: {
 						lodash: "^4.18.0",
 					},
-				} as unknown as LockfileObject["importers"][string],
+				} as unknown,
 			},
 		});
 
@@ -270,7 +270,7 @@ describe("Lockfile.compare - importer specifier changes", () => {
 					specifiers: {
 						effect: "catalog:silk",
 					},
-				} as unknown as LockfileObject["importers"][string],
+				} as unknown,
 			},
 		});
 
@@ -280,7 +280,7 @@ describe("Lockfile.compare - importer specifier changes", () => {
 					specifiers: {
 						effect: "catalog:silk",
 					},
-				} as unknown as LockfileObject["importers"][string],
+				} as unknown,
 			},
 		});
 
@@ -297,7 +297,7 @@ describe("Lockfile.compare - importer specifier changes", () => {
 						lodash: "^4.17.0",
 						underscore: "^1.13.0",
 					},
-				} as unknown as LockfileObject["importers"][string],
+				} as unknown,
 			},
 		});
 
@@ -308,7 +308,7 @@ describe("Lockfile.compare - importer specifier changes", () => {
 						lodash: "^4.17.0",
 						// underscore removed
 					},
-				} as unknown as LockfileObject["importers"][string],
+				} as unknown,
 			},
 		});
 
@@ -327,7 +327,7 @@ describe("Lockfile.compare - importer specifier changes", () => {
 					specifiers: {
 						lodash: "^4.17.0",
 					},
-				} as unknown as LockfileObject["importers"][string],
+				} as unknown,
 			},
 		});
 
@@ -337,7 +337,7 @@ describe("Lockfile.compare - importer specifier changes", () => {
 					specifiers: {
 						lodash: "^4.18.0",
 					},
-				} as unknown as LockfileObject["importers"][string],
+				} as unknown,
 			},
 		});
 
@@ -451,7 +451,7 @@ describe("Lockfile.compare - catalog resolved version changes", () => {
 					devDependencies: {
 						turbo: { specifier: "catalog:", version: "2.8.6" },
 					},
-				} as LockfileObject["importers"][string],
+				} as unknown,
 			},
 		});
 
@@ -466,7 +466,7 @@ describe("Lockfile.compare - catalog resolved version changes", () => {
 					devDependencies: {
 						turbo: { specifier: "catalog:", version: "2.8.7" },
 					},
-				} as LockfileObject["importers"][string],
+				} as unknown,
 			},
 		});
 

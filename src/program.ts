@@ -8,7 +8,7 @@
  * @module program
  */
 
-import type { LogLevelInput } from "@savvy-web/github-action-effects";
+import type { CommandRunnerError, LogLevelInput } from "@savvy-web/github-action-effects";
 import {
 	Action,
 	ActionEnvironment,
@@ -36,7 +36,7 @@ import { parseMultiValueInput } from "./utils/input.js";
  */
 export interface RunCommandsResult {
 	readonly successful: ReadonlyArray<string>;
-	readonly failed: ReadonlyArray<{ command: string; error: string; exitCode?: number }>;
+	readonly failed: ReadonlyArray<{ command: string; error: string; exitCode?: number | undefined }>;
 }
 
 /**
@@ -49,7 +49,7 @@ export const runCommands = (commands: ReadonlyArray<string>): Effect.Effect<RunC
 	Effect.gen(function* () {
 		const runner = yield* CommandRunner;
 		const successful: string[] = [];
-		const failed: Array<{ command: string; error: string; exitCode?: number }> = [];
+		const failed: Array<{ command: string; error: string; exitCode?: number | undefined }> = [];
 
 		for (const command of commands) {
 			yield* Effect.logInfo(`Running: ${command}`);
@@ -57,7 +57,7 @@ export const runCommands = (commands: ReadonlyArray<string>): Effect.Effect<RunC
 			// Split command into executable and args for CommandRunner
 			const result = yield* runner.execCapture("sh", ["-c", command]).pipe(
 				Effect.map(() => ({ success: true as const })),
-				Effect.catchAll((error: { reason?: string; exitCode?: number }) =>
+				Effect.catchAll((error: CommandRunnerError) =>
 					Effect.succeed({
 						success: false as const,
 						error: error.reason ?? "Unknown error",
@@ -92,7 +92,7 @@ export const program = Effect.gen(function* () {
 	// Step 1: Parse inputs via Config API
 	yield* Effect.logInfo("Starting pnpm config dependency action");
 
-	const appId = yield* Config.integer("app-id");
+	const appId = yield* Config.string("app-id");
 	const appPrivateKey = yield* Config.secret("app-private-key");
 	const branch = yield* Config.string("branch").pipe(Config.withDefault("pnpm/config-deps"));
 	const rawConfigDeps = yield* Config.string("config-dependencies").pipe(Config.withDefault(""));

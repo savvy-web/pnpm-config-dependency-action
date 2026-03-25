@@ -10,7 +10,6 @@
  */
 
 import { existsSync, writeFileSync } from "node:fs";
-import type { NpmRegistry as NpmRegistryService } from "@savvy-web/github-action-effects";
 import { NpmRegistry } from "@savvy-web/github-action-effects";
 import { Context, Effect, Layer } from "effect";
 import { stringify } from "yaml";
@@ -19,6 +18,8 @@ import { FileSystemError } from "../errors/errors.js";
 import type { DependencyUpdateResult } from "../schemas/domain.js";
 import { parseConfigEntry } from "../utils/deps.js";
 import { STRINGIFY_OPTIONS, readWorkspaceYaml, sortContent } from "./workspace-yaml.js";
+
+type NpmRegistryShape = Context.Tag.Service<typeof NpmRegistry>;
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Service Interface
@@ -55,7 +56,7 @@ export const ConfigDepsLive = Layer.effect(
  */
 const queryConfigVersion = (
 	packageName: string,
-	registry: NpmRegistryService,
+	registry: NpmRegistryShape,
 ): Effect.Effect<{ version: string; integrity: string } | null> =>
 	Effect.gen(function* () {
 		yield* Effect.logDebug(`queryConfigVersion: fetching package info for ${packageName}`);
@@ -95,7 +96,7 @@ const queryConfigVersion = (
  */
 const updateConfigDepsImpl = (
 	deps: ReadonlyArray<string>,
-	registry: NpmRegistryService,
+	registry: NpmRegistryShape,
 	workspaceRoot: string,
 ): Effect.Effect<ReadonlyArray<DependencyUpdateResult>> =>
 	Effect.gen(function* () {

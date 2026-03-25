@@ -1,4 +1,5 @@
 import { PullRequestTest } from "@savvy-web/github-action-effects";
+import type { Context } from "effect";
 import { Effect, Layer } from "effect";
 import { describe, expect, it } from "vitest";
 import { Report, ReportLive } from "./services/report.js";
@@ -18,7 +19,7 @@ import { cleanVersion, npmUrl } from "./utils/markdown.js";
 /**
  * Helper to run a Report service method.
  */
-const withReport = <A>(fn: (report: Report) => A): Promise<A> => {
+const withReport = <A>(fn: (report: Context.Tag.Service<typeof Report>) => A): Promise<A> => {
 	const state = PullRequestTest.empty();
 	const layer = ReportLive.pipe(Layer.provide(PullRequestTest.layer(state)));
 	return Effect.runPromise(
