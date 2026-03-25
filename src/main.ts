@@ -34,7 +34,7 @@ import {
 	GitHubAppLive,
 } from "@savvy-web/github-action-effects";
 import type { Layer } from "effect";
-import { Config, Duration, Effect, LogLevel, Logger, Secret } from "effect";
+import { Config, Duration, Effect, LogLevel, Logger, Redacted } from "effect";
 import { makeAppLayer } from "./layers/app.js";
 import type { ChangesetFile, DependencyUpdateResult, PullRequestResult } from "./schemas/domain.js";
 import { BranchManager } from "./services/branch.js";
@@ -162,7 +162,7 @@ export const program = Effect.gen(function* () {
 	const headSha = github.sha;
 
 	yield* ghApp
-		.withToken(appId, Secret.value(appPrivateKey), (token) =>
+		.withToken(appId, Redacted.value(appPrivateKey), (token) =>
 			Effect.gen(function* () {
 				const appLayer = makeAppLayer(token, dryRun);
 				yield* innerProgram(
