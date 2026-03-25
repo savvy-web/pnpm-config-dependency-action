@@ -2,7 +2,7 @@ import type { CommandRunnerError } from "@savvy-web/github-action-effects";
 import { CommandRunner, CommandRunnerTest } from "@savvy-web/github-action-effects";
 import { Effect, Layer, LogLevel, Logger } from "effect";
 import { describe, expect, it } from "vitest";
-import { runCommands } from "./main.js";
+import { runCommands } from "./program.js";
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Test Helpers
