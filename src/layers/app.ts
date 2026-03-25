@@ -25,19 +25,18 @@ import { PnpmUpgradeLive } from "../services/pnpm-upgrade.js";
 import { RegularDepsLive } from "../services/regular-deps.js";
 import { ReportLive } from "../services/report.js";
 
-export const makeAppLayer = (token: string, dryRun: boolean) => {
-	const ghClient = GitHubClientLive(token);
-	const ghGraphql = GitHubGraphQLLive.pipe(Layer.provide(ghClient));
+export const makeAppLayer = (dryRun: boolean) => {
+	const ghGraphql = GitHubGraphQLLive.pipe(Layer.provide(GitHubClientLive));
 	const npmRegistry = NpmRegistryLive.pipe(Layer.provide(CommandRunnerLive));
-	const gitBranch = GitBranchLive.pipe(Layer.provide(ghClient));
-	const gitCommit = GitCommitLive.pipe(Layer.provide(ghClient));
-	const prLayer = PullRequestLive.pipe(Layer.provide(Layer.merge(ghClient, ghGraphql)));
+	const gitBranch = GitBranchLive.pipe(Layer.provide(GitHubClientLive));
+	const gitCommit = GitCommitLive.pipe(Layer.provide(GitHubClientLive));
+	const prLayer = PullRequestLive.pipe(Layer.provide(Layer.merge(GitHubClientLive, ghGraphql)));
 
 	const libraryLayers = Layer.mergeAll(
-		ghClient,
+		GitHubClientLive,
 		gitBranch,
 		gitCommit,
-		CheckRunLive.pipe(Layer.provide(ghClient)),
+		CheckRunLive.pipe(Layer.provide(GitHubClientLive)),
 		prLayer,
 		npmRegistry,
 		CommandRunnerLive,

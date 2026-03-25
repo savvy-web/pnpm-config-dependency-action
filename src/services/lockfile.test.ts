@@ -2,15 +2,6 @@ import type { LockfileObject } from "@pnpm/lockfile.types";
 import { Effect, Either, LogLevel, Logger } from "effect";
 import { describe, expect, it, vi } from "vitest";
 
-// Mock @actions/core to suppress ::debug:: output from logging.ts
-vi.mock("@actions/core", () => ({
-	debug: vi.fn(),
-	info: vi.fn(),
-	warning: vi.fn(),
-	getInput: vi.fn(() => ""),
-	getBooleanInput: vi.fn(() => false),
-}));
-
 // Hoist mock for @pnpm/lockfile.fs
 const { mockReadWantedLockfile } = vi.hoisted(() => ({
 	mockReadWantedLockfile: vi.fn(),
