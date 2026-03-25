@@ -15,7 +15,9 @@ Services are organized in two tiers:
 
 - `ActionOutputs` - Set outputs (`set`), mask secrets (`setSecret`), write job
   summary (`summary`), fail the action (`setFailed`)
-- `ActionLoggerLayer` - Routes `Effect.logDebug` to `core.debug()`, `Effect.logInfo`
+- `ActionEnvironment` - Provides GitHub Actions environment variables (repo, sha, ref,
+  actor, etc.) without depending on `@actions/github`
+- `ActionLogger` - Routes `Effect.logDebug` to `core.debug()`, `Effect.logInfo`
   to `core.info()`, etc.
 - `NodeContext.layer` - Platform layer provided automatically
 
@@ -54,7 +56,7 @@ All layers are wired together in `src/layers/app.ts`:
 
 ```typescript
 // Action.run provides plumbing services + GitHubApp
-Action.run(program, GitHubAppLive);
+Action.run(program, { layer: GitHubAppLive });
 
 // Inside program:
 const ghApp = yield* GitHubApp;
@@ -143,16 +145,19 @@ yield* checkRunService.withCheckRun(name, headSha, (checkRunId) =>
 
 ```typescript
 import { Action, ActionOutputs, GitHubApp, GitHubAppLive } from "@savvy-web/github-action-effects";
-import { Duration, Effect } from "effect";
+import { Config, Duration, Effect, Redacted } from "effect";
 import { makeAppLayer } from "./layers/app.js";
 
 export const program = Effect.gen(function* () {
- const inputs = yield* Action.parseInputs({ ... });
+ const appId = yield* Config.string("app-id");
+ const appPrivateKey = yield* Config.secret("app-private-key");
+ const dryRun = yield* Config.boolean("dry-run").pipe(Config.withDefault(false));
+ // ... other Config.* calls
  const ghApp = yield* GitHubApp;
- yield* ghApp.withToken(inputs["app-id"], inputs["app-private-key"], (token) =>
+ yield* ghApp.withToken(appId, Redacted.value(appPrivateKey), (token) =>
   Effect.gen(function* () {
-   const appLayer = makeAppLayer(token, inputs["dry-run"]);
-   yield* Effect.provide(innerProgram(inputs, inputs["dry-run"]), appLayer);
+   const appLayer = makeAppLayer(token, dryRun);
+   yield* Effect.provide(innerProgram(inputs, dryRun), appLayer);
   }),
  );
 });
@@ -162,7 +167,7 @@ Action.run(
   Effect.timeoutFail({ duration: Duration.seconds(180), ... }),
   Effect.catchAll((error) => ...),
  ),
- GitHubAppLive,
+ { layer: GitHubAppLive },
 );
 ```
 
