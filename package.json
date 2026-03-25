@@ -41,30 +41,21 @@
 		"validate": "github-action-builder validate"
 	},
 	"dependencies": {
-		"@actions/cache": "^4.1.0",
-		"@actions/core": "^3.0.0",
-		"@actions/exec": "^3.0.0",
-		"@actions/github": "^9.0.0",
-		"@actions/io": "^3.0.2",
-		"@effect/platform": "^0.94.4",
-		"@effect/platform-node": "^0.104.1",
-		"@octokit/auth-app": "^8.2.0",
-		"@pnpm/catalogs.config": "^1000.0.5",
-		"@pnpm/catalogs.protocol-parser": "^1001.0.0",
+		"@effect/platform": "catalog:silk",
+		"@effect/platform-node": "catalog:silk",
 		"@pnpm/lockfile.fs": "^1001.1.29",
-		"@pnpm/lockfile.types": "^1002.0.9",
-		"@pnpm/workspace.read-manifest": "^1000.3.0",
-		"@savvy-web/github-action-effects": "^0.6.3",
-		"effect": "^3.19.16",
+		"@pnpm/lockfile.types": "^1002.1.0",
+		"@savvy-web/github-action-effects": "^0.11.12",
+		"effect": "catalog:silk",
 		"workspace-tools": "^0.41.0",
 		"yaml": "^2.8.2"
 	},
 	"devDependencies": {
-		"@savvy-web/changesets": "^0.5.1",
+		"@savvy-web/changesets": "^0.6.0",
 		"@savvy-web/commitlint": "^0.4.1",
-		"@savvy-web/github-action-builder": "^0.3.0",
-		"@savvy-web/lint-staged": "^0.5.2",
-		"@savvy-web/vitest": "^0.2.1"
+		"@savvy-web/github-action-builder": "^0.5.1",
+		"@savvy-web/lint-staged": "^0.6.2",
+		"@savvy-web/vitest": "^1.0.0"
 	},
 	"packageManager": "pnpm@10.32.0+sha512.9b2634bb3fed5601c33633f2d92593f506270a3963b8c51d2b2d6a828da615ce4e9deebef9614ccebbc13ac8d3c0f9c9ccceb583c69c8578436fa477dbb20d70",
 	"devEngines": {
