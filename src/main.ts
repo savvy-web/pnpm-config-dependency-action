@@ -437,5 +437,8 @@ const innerProgram = (
 	);
 
 // Run the main action — Action.run handles all error formatting via formatCause
-Action.run(program, { layer: GitHubAppLive });
+// Guard prevents execution during test imports (no GitHub Actions environment)
+if (process.env.GITHUB_ACTIONS) {
+	Action.run(program, { layer: GitHubAppLive });
+}
 /* v8 ignore stop */
