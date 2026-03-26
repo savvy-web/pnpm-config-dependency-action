@@ -292,9 +292,9 @@ const compareCatalogs = (
 					yield* Effect.logDebug(`Catalog change: ${depName}: ${from} -> ${to}`);
 					yield* Effect.logDebug(`Affected packages for ${depName}: ${JSON.stringify(affectedPackages)}`);
 
-					// Catalog changes are "regular" type - they affect the packages using them
+					// Catalog changes are "dependency" type - they affect the packages using them
 					changes.push({
-						type: "regular",
+						type: "dependency",
 						dependency: dep, // Use raw dep name, not with catalog suffix
 						from,
 						to,
@@ -319,7 +319,7 @@ const compareCatalogs = (
 					yield* Effect.logDebug(`Catalog removed: ${depName}`);
 
 					changes.push({
-						type: "regular",
+						type: "dependency",
 						dependency: dep,
 						from: beforeEntry.specifier,
 						to: "(removed)",
@@ -331,6 +331,15 @@ const compareCatalogs = (
 
 		return changes;
 	});
+
+/**
+ * Typed dependency sections to iterate when comparing importers.
+ */
+const DEP_SECTIONS = [
+	{ field: "dependencies", type: "dependency" },
+	{ field: "devDependencies", type: "devDependency" },
+	{ field: "optionalDependencies", type: "optionalDependency" },
+] as const;
 
 /**
  * Compare package importers to detect which packages have changed dependencies.
@@ -347,7 +356,6 @@ const compareImporters = (
 	Effect.sync(() => {
 		const changes: LockfileChange[] = [];
 
-		// Compare importers
 		const afterImporters = after.importers ?? {};
 		const beforeImporters = before.importers ?? {};
 
@@ -363,6 +371,15 @@ const compareImporters = (
 			const beforeSpecifiers = (beforeSnapshot.specifiers ?? {}) as SpecifiersRecord;
 			const afterSpecifiers = (afterSnapshot.specifiers ?? {}) as SpecifiersRecord;
 
+			// Build dep-to-type map from typed sections to determine which field each dep is in
+			const depTypeMap = new Map<string, LockfileChange["type"]>();
+			for (const { field, type } of DEP_SECTIONS) {
+				const deps = (afterSnapshot[field] ?? {}) as SpecifiersRecord;
+				for (const dep of Object.keys(deps)) {
+					depTypeMap.set(dep, type);
+				}
+			}
+
 			for (const [dep, afterVersion] of Object.entries(afterSpecifiers)) {
 				const beforeVersion = beforeSpecifiers[dep];
 
@@ -371,7 +388,7 @@ const compareImporters = (
 
 				if (beforeVersion !== afterVersion) {
 					changes.push({
-						type: "regular",
+						type: depTypeMap.get(dep) ?? "dependency",
 						dependency: dep,
 						from: beforeVersion ?? null,
 						to: afterVersion,
@@ -383,8 +400,17 @@ const compareImporters = (
 			// Check for removed dependencies
 			for (const dep of Object.keys(beforeSpecifiers)) {
 				if (!(dep in afterSpecifiers)) {
+					// Use before snapshot to determine type of removed dep
+					let removedType: LockfileChange["type"] = "dependency";
+					for (const { field, type } of DEP_SECTIONS) {
+						const deps = (beforeSnapshot[field] ?? {}) as SpecifiersRecord;
+						if (dep in deps) {
+							removedType = type;
+							break;
+						}
+					}
 					changes.push({
-						type: "regular",
+						type: removedType,
 						dependency: dep,
 						from: beforeSpecifiers[dep],
 						to: "(removed)",

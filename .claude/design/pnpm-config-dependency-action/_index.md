@@ -3,8 +3,8 @@ status: current
 module: pnpm-config-dependency-action
 category: architecture
 created: 2026-02-06
-updated: 2026-03-08
-last-synced: 2026-03-08
+updated: 2026-03-26
+last-synced: 2026-03-26
 completeness: 95
 related: []
 dependencies: []
@@ -15,16 +15,18 @@ implementation-plans: []
 
 ## Overview
 
-The `pnpm-config-dependency-action` is a GitHub Action that automates updates to pnpm config dependencies
-and regular dependencies. Unlike Dependabot, this action supports
+The `pnpm-config-dependency-action` is a GitHub Action that automates updates to pnpm config dependencies,
+regular dependencies, and peer dependencies. Unlike Dependabot, this action supports
 [pnpm's config dependencies](https://pnpm.io/config-dependencies) feature, which allows dependencies to be
-declared in `pnpm-workspace.yaml` for centralized version management across a monorepo.
+declared in `pnpm-workspace.yaml` for centralized version management across a monorepo. It also syncs peer
+dependency ranges across workspace packages to keep them consistent.
 
 **Key Features:**
 
 - Upgrades pnpm itself to the latest version within the `^` semver range via `corepack use`
 - Updates config dependencies via direct npm queries and YAML editing
 - Updates regular dependencies via direct npm registry queries (avoids `catalogMode: strict` issues)
+- Syncs peer dependency ranges across workspace packages (`PeerSync` service) with configurable lock/minor strategies
 - Supports glob patterns for dependency matching
 - Runs custom commands after updates (linting, testing, building)
 - Integrates with Changesets for versioning

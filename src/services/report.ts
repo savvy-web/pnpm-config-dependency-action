@@ -17,7 +17,6 @@ import { Context, Effect, Layer } from "effect";
 type PullRequestShape = Context.Tag.Service<typeof PullRequestTag>;
 
 import type { ChangesetFile, DependencyUpdateResult, PullRequestResult } from "../schemas/domain.js";
-import { cleanVersion, npmUrl } from "../utils/markdown.js";
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Service Interface
@@ -112,11 +111,15 @@ const createOrUpdatePRImpl = (
  */
 const generateCommitMessageImpl = (updates: ReadonlyArray<DependencyUpdateResult>, appSlug?: string): string => {
 	const configCount = updates.filter((u) => u.type === "config").length;
-	const regularCount = updates.filter((u) => u.type === "regular").length;
+	const depCount = updates.filter((u) => u.type === "dependency").length;
+	const devCount = updates.filter((u) => u.type === "devDependency").length;
+	const peerCount = updates.filter((u) => u.type === "peerDependency").length;
 
 	const parts: string[] = [];
 	if (configCount > 0) parts.push(`${configCount} config`);
-	if (regularCount > 0) parts.push(`${regularCount} regular`);
+	if (depCount > 0) parts.push(`${depCount} dependency`);
+	if (devCount > 0) parts.push(`${devCount} dev`);
+	if (peerCount > 0) parts.push(`${peerCount} peer`);
 
 	const botName = appSlug ? `${appSlug}[bot]` : "github-actions[bot]";
 	const botEmail = appSlug
@@ -141,39 +144,29 @@ const generatePRBodyImpl = (
 	const { heading, table, link, code, details, codeBlock, bold, rule } = GithubMarkdown;
 	const sections: string[] = [];
 
-	const configUpdates = updates.filter((u) => u.type === "config");
-	const regularUpdates = updates.filter((u) => u.type === "regular");
-
-	// Title section
 	sections.push(heading("Dependency Updates", 2));
 
-	// Summary line
-	const parts: string[] = [];
-	if (configUpdates.length > 0) parts.push(`${configUpdates.length} config`);
-	if (regularUpdates.length > 0) parts.push(`${regularUpdates.length} regular`);
-	sections.push(`Updates ${parts.join(" and ")} ${parts.length > 1 ? "dependencies" : "dependency"}.`);
-
-	// Config dependencies section
-	if (configUpdates.length > 0) {
-		sections.push(heading("Config Dependencies", 3));
-		const rows = configUpdates.map((update) => [
-			link(code(update.dependency), npmUrl(update.dependency)),
-			cleanVersion(update.from) ?? "_new_",
-			cleanVersion(update.to) ?? "",
-		]);
-		sections.push(table(["Package", "From", "To"], rows));
+	// Group updates by package
+	const byPackage = new Map<string, DependencyUpdateResult[]>();
+	for (const update of updates) {
+		const key = update.package ?? "(root)";
+		const existing = byPackage.get(key) ?? [];
+		existing.push(update);
+		byPackage.set(key, existing);
 	}
 
-	// Regular dependencies section
-	if (regularUpdates.length > 0) {
-		sections.push(heading("Regular Dependencies", 3));
-		const rows = regularUpdates.map((update) => {
-			const pkg = update.dependency.includes("*")
-				? code(update.dependency)
-				: link(code(update.dependency), npmUrl(update.dependency));
-			return [pkg, update.from ?? "_new_", update.to];
-		});
-		sections.push(table(["Package", "From", "To"], rows));
+	for (const [pkgName, pkgUpdates] of byPackage) {
+		const label = pkgName === "(root)" ? "root workspace" : pkgName;
+		sections.push(heading(label, 3));
+
+		const rows = pkgUpdates.map((u) => [
+			u.dependency,
+			u.type,
+			u.from === null ? "added" : "updated",
+			u.from ?? "\u2014",
+			u.to,
+		]);
+		sections.push(table(["Dependency", "Type", "Action", "From", "To"], rows));
 	}
 
 	// Changesets section - one expandable per affected package/workspace
@@ -182,14 +175,14 @@ const generatePRBodyImpl = (
 		sections.push(`${changesets.length} changeset(s) created for version management.`);
 		for (const cs of changesets) {
 			const isRootWorkspace = cs.packages.length === 0;
-			const label = isRootWorkspace ? "root workspace" : cs.packages.join(", ");
+			const csLabel = isRootWorkspace ? "root workspace" : cs.packages.join(", ");
 			const content = [
 				`${bold("Changeset:")} ${code(cs.id)}`,
 				`${bold("Type:")} ${cs.type}`,
 				"",
 				codeBlock(cs.summary),
 			].join("\n");
-			sections.push(details(label, content));
+			sections.push(details(csLabel, content));
 		}
 	}
 
@@ -211,7 +204,7 @@ const generateSummaryImpl = (
 	pr: PullRequestResult | null,
 	dryRun: boolean,
 ): string => {
-	const { heading, table, link, code, details, codeBlock, bold, list } = GithubMarkdown;
+	const { heading, table, code, details, codeBlock, bold, list, link } = GithubMarkdown;
 	const sections: string[] = [];
 
 	// Summary stats
@@ -225,26 +218,29 @@ const generateSummaryImpl = (
 	}
 	sections.push(list(stats));
 
-	// Updated dependencies tables
+	// Updated dependencies - grouped by package
 	sections.push(heading("Updated Dependencies", 3));
 
-	const configUpdates = updates.filter((u) => u.type === "config");
-	const regularUpdates = updates.filter((u) => u.type === "regular");
-
-	if (configUpdates.length > 0) {
-		sections.push(heading("Config Dependencies", 4));
-		const rows = configUpdates.map((update) => [
-			code(update.dependency),
-			cleanVersion(update.from) ?? "_new_",
-			cleanVersion(update.to) ?? "",
-		]);
-		sections.push(table(["Package", "From", "To"], rows));
+	const byPackage = new Map<string, DependencyUpdateResult[]>();
+	for (const update of updates) {
+		const key = update.package ?? "(root)";
+		const existing = byPackage.get(key) ?? [];
+		existing.push(update);
+		byPackage.set(key, existing);
 	}
 
-	if (regularUpdates.length > 0) {
-		sections.push(heading("Regular Dependencies", 4));
-		const rows = regularUpdates.map((update) => [code(update.dependency), update.from ?? "_new_", update.to]);
-		sections.push(table(["Package", "From", "To"], rows));
+	for (const [pkgName, pkgUpdates] of byPackage) {
+		const label = pkgName === "(root)" ? "root workspace" : pkgName;
+		sections.push(heading(label, 4));
+
+		const rows = pkgUpdates.map((u) => [
+			code(u.dependency),
+			u.type,
+			u.from === null ? "added" : "updated",
+			u.from ?? "\u2014",
+			u.to,
+		]);
+		sections.push(table(["Dependency", "Type", "Action", "From", "To"], rows));
 	}
 
 	// Show changeset details - one expandable per affected package/workspace
@@ -252,9 +248,9 @@ const generateSummaryImpl = (
 		sections.push(heading("Changesets Created", 3));
 		for (const cs of changesets) {
 			const isRootWorkspace = cs.packages.length === 0;
-			const label = isRootWorkspace ? "root workspace" : cs.packages.join(", ");
+			const csLabel = isRootWorkspace ? "root workspace" : cs.packages.join(", ");
 			const content = [`${bold("Changeset:")} ${code(cs.id)}`, "", codeBlock(cs.summary)].join("\n");
-			sections.push(details(label, content));
+			sections.push(details(csLabel, content));
 		}
 	}
 

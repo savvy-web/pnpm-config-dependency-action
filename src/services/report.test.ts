@@ -197,7 +197,7 @@ describe("createOrUpdatePR", () => {
 });
 
 describe("generatePRBody", () => {
-	it("includes pnpm upgrade in config dependencies table", async () => {
+	it("includes pnpm upgrade in root workspace table", async () => {
 		const state = PullRequestTest.empty();
 		const layer = makeReportLayer(state);
 
@@ -213,11 +213,11 @@ describe("generatePRBody", () => {
 			}).pipe(Effect.provide(layer)),
 		);
 
-		expect(body).toContain("Config Dependencies");
-		expect(body).toContain("`pnpm`");
+		expect(body).toContain("### root workspace");
+		expect(body).toContain("pnpm");
 		expect(body).toContain("10.28.2");
 		expect(body).toContain("10.29.0");
-		expect(body).toContain("`typescript`");
+		expect(body).toContain("typescript");
 	});
 
 	it("includes only pnpm upgrade when no other updates", async () => {
@@ -231,8 +231,7 @@ describe("generatePRBody", () => {
 			}).pipe(Effect.provide(layer)),
 		);
 
-		expect(body).toContain("Config Dependencies");
-		expect(body).toContain("`pnpm`");
-		expect(body).not.toContain("Regular Dependencies");
+		expect(body).toContain("### root workspace");
+		expect(body).toContain("pnpm");
 	});
 });

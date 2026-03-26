@@ -4,11 +4,12 @@ import { join } from "node:path";
 import { Effect, LogLevel, Logger } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { LockfileChange } from "../schemas/domain.js";
+import type { DependencyUpdateResult, LockfileChange } from "../schemas/domain.js";
 import {
 	Changesets,
 	ChangesetsLive,
 	analyzeAffectedPackages,
+	createChangesets,
 	formatChangesetSummary,
 	hasChangesets,
 } from "./changesets.js";
@@ -53,13 +54,13 @@ describe("Changesets.create", () => {
 
 	it("returns empty array when .changeset directory is missing", async () => {
 		const changes: LockfileChange[] = [
-			{ type: "regular", dependency: "effect", from: "3.0.0", to: "3.1.0", affectedPackages: ["@savvy-web/core"] },
+			{ type: "dependency", dependency: "effect", from: "3.0.0", to: "3.1.0", affectedPackages: ["@savvy-web/core"] },
 		];
 
 		const result = await runEffect(
 			Effect.gen(function* () {
 				const cs = yield* Changesets;
-				return yield* cs.create(changes, tempDir);
+				return yield* cs.create(changes, [], [], tempDir);
 			}).pipe(Effect.provide(ChangesetsLive)),
 		);
 		expect(result).toEqual([]);
@@ -71,7 +72,7 @@ describe("Changesets.create", () => {
 		const result = await runEffect(
 			Effect.gen(function* () {
 				const cs = yield* Changesets;
-				return yield* cs.create([], tempDir);
+				return yield* cs.create([], [], [], tempDir);
 			}).pipe(Effect.provide(ChangesetsLive)),
 		);
 		expect(result).toEqual([]);
@@ -81,13 +82,13 @@ describe("Changesets.create", () => {
 		mkdirSync(join(tempDir, ".changeset"));
 
 		const changes: LockfileChange[] = [
-			{ type: "regular", dependency: "effect", from: "3.0.0", to: "3.1.0", affectedPackages: ["@savvy-web/core"] },
+			{ type: "dependency", dependency: "effect", from: "3.0.0", to: "3.1.0", affectedPackages: ["@savvy-web/core"] },
 		];
 
 		const result = await runEffect(
 			Effect.gen(function* () {
 				const cs = yield* Changesets;
-				return yield* cs.create(changes, tempDir);
+				return yield* cs.create(changes, [], [], tempDir);
 			}).pipe(Effect.provide(ChangesetsLive)),
 		);
 
@@ -115,7 +116,7 @@ describe("Changesets.create", () => {
 		const result = await runEffect(
 			Effect.gen(function* () {
 				const cs = yield* Changesets;
-				return yield* cs.create(changes, tempDir);
+				return yield* cs.create(changes, [], [], tempDir);
 			}).pipe(Effect.provide(ChangesetsLive)),
 		);
 
@@ -136,7 +137,7 @@ describe("Changesets.create", () => {
 		const result = await runEffect(
 			Effect.gen(function* () {
 				const cs = yield* Changesets;
-				return yield* cs.create(changes, tempDir);
+				return yield* cs.create(changes, [], [], tempDir);
 			}).pipe(Effect.provide(ChangesetsLive)),
 		);
 
@@ -153,13 +154,13 @@ describe("Changesets.create", () => {
 
 		const changes: LockfileChange[] = [
 			{ type: "config", dependency: "typescript", from: "5.3.3", to: "5.4.0", affectedPackages: [] },
-			{ type: "regular", dependency: "effect", from: "3.0.0", to: "3.1.0", affectedPackages: ["@savvy-web/core"] },
+			{ type: "dependency", dependency: "effect", from: "3.0.0", to: "3.1.0", affectedPackages: ["@savvy-web/core"] },
 		];
 
 		const result = await runEffect(
 			Effect.gen(function* () {
 				const cs = yield* Changesets;
-				return yield* cs.create(changes, tempDir);
+				return yield* cs.create(changes, [], [], tempDir);
 			}).pipe(Effect.provide(ChangesetsLive)),
 		);
 
@@ -176,7 +177,7 @@ describe("Changesets.create", () => {
 
 		const changes: LockfileChange[] = [
 			{
-				type: "regular",
+				type: "dependency",
 				dependency: "effect",
 				from: "3.0.0",
 				to: "3.1.0",
@@ -187,7 +188,7 @@ describe("Changesets.create", () => {
 		const result = await runEffect(
 			Effect.gen(function* () {
 				const cs = yield* Changesets;
-				return yield* cs.create(changes, tempDir);
+				return yield* cs.create(changes, [], [], tempDir);
 			}).pipe(Effect.provide(ChangesetsLive)),
 		);
 
@@ -202,7 +203,7 @@ describe("analyzeAffectedPackages", () => {
 	it("groups changes by package, excludes (root)", () => {
 		const changes: LockfileChange[] = [
 			{ type: "config", dependency: "typescript", from: "5.3.3", to: "5.4.0", affectedPackages: [] },
-			{ type: "regular", dependency: "effect", from: "3.0.0", to: "3.1.0", affectedPackages: ["@savvy-web/core"] },
+			{ type: "dependency", dependency: "effect", from: "3.0.0", to: "3.1.0", affectedPackages: ["@savvy-web/core"] },
 		];
 
 		const result = analyzeAffectedPackages(changes);
@@ -215,7 +216,7 @@ describe("analyzeAffectedPackages", () => {
 
 	it("maps change fields correctly", () => {
 		const changes: LockfileChange[] = [
-			{ type: "regular", dependency: "effect", from: "3.0.0", to: "3.1.0", affectedPackages: ["@savvy-web/core"] },
+			{ type: "dependency", dependency: "effect", from: "3.0.0", to: "3.1.0", affectedPackages: ["@savvy-web/core"] },
 		];
 
 		const result = analyzeAffectedPackages(changes);
@@ -244,7 +245,7 @@ describe("analyzeAffectedPackages", () => {
 	it("handles changes affecting multiple packages", () => {
 		const changes: LockfileChange[] = [
 			{
-				type: "regular",
+				type: "dependency",
 				dependency: "effect",
 				from: "3.0.0",
 				to: "3.1.0",
@@ -262,7 +263,7 @@ describe("analyzeAffectedPackages", () => {
 describe("formatChangesetSummary", () => {
 	it("starts with ## Dependencies heading and table header", () => {
 		const changes: LockfileChange[] = [
-			{ type: "regular", dependency: "effect", from: "3.0.0", to: "3.1.0", affectedPackages: ["@savvy-web/core"] },
+			{ type: "dependency", dependency: "effect", from: "3.0.0", to: "3.1.0", affectedPackages: ["@savvy-web/core"] },
 		];
 
 		const result = formatChangesetSummary(changes);
@@ -284,7 +285,7 @@ describe("formatChangesetSummary", () => {
 
 	it("formats regular dependency as table row with type 'dependency'", () => {
 		const changes: LockfileChange[] = [
-			{ type: "regular", dependency: "effect", from: "3.0.0", to: "3.1.0", affectedPackages: ["@savvy-web/core"] },
+			{ type: "dependency", dependency: "effect", from: "3.0.0", to: "3.1.0", affectedPackages: ["@savvy-web/core"] },
 		];
 
 		const result = formatChangesetSummary(changes);
@@ -295,7 +296,7 @@ describe("formatChangesetSummary", () => {
 	it("uses em dash and 'added' action when from is null", () => {
 		const changes: LockfileChange[] = [
 			{
-				type: "regular",
+				type: "dependency",
 				dependency: "@effect/schema",
 				from: null,
 				to: "0.61.0",
@@ -311,7 +312,7 @@ describe("formatChangesetSummary", () => {
 	it("renders all changes in a single table without sub-headings", () => {
 		const changes: LockfileChange[] = [
 			{ type: "config", dependency: "typescript", from: "5.3.3", to: "5.4.0", affectedPackages: [] },
-			{ type: "regular", dependency: "effect", from: "3.0.0", to: "3.1.0", affectedPackages: ["@savvy-web/core"] },
+			{ type: "dependency", dependency: "effect", from: "3.0.0", to: "3.1.0", affectedPackages: ["@savvy-web/core"] },
 		];
 
 		const result = formatChangesetSummary(changes);
@@ -330,5 +331,135 @@ describe("formatChangesetSummary", () => {
 		const result = formatChangesetSummary(changes);
 
 		expect(result).toContain("| @biomejs/biome | config | added | \u2014 | 1.6.1 |");
+	});
+});
+
+describe("changeset triggering rules", () => {
+	let tempDir: string;
+
+	beforeEach(() => {
+		tempDir = mkdtempSync(join(tmpdir(), "changeset-trigger-test-"));
+		mkdirSync(join(tempDir, ".changeset"));
+	});
+
+	afterEach(() => {
+		rmSync(tempDir, { recursive: true, force: true });
+	});
+
+	it("should NOT create changeset for devDependency-only changes", async () => {
+		const devUpdates: DependencyUpdateResult[] = [
+			{
+				dependency: "vitest",
+				from: "1.0.0",
+				to: "1.1.0",
+				type: "devDependency",
+				package: "@savvy-web/core",
+			},
+		];
+
+		const result = await runEffect(createChangesets([], devUpdates, [], tempDir));
+
+		expect(result).toEqual([]);
+	});
+
+	it("should create changeset when peerDependency changed, including all rows", async () => {
+		const peerUpdates: DependencyUpdateResult[] = [
+			{
+				dependency: "react",
+				from: "^18.0.0",
+				to: "^19.0.0",
+				type: "peerDependency",
+				package: "@savvy-web/ui",
+			},
+		];
+
+		const devUpdates: DependencyUpdateResult[] = [
+			{
+				dependency: "vitest",
+				from: "1.0.0",
+				to: "1.1.0",
+				type: "devDependency",
+				package: "@savvy-web/ui",
+			},
+		];
+
+		const result = await runEffect(createChangesets([], devUpdates, peerUpdates, tempDir));
+
+		expect(result).toHaveLength(1);
+		expect(result[0].packages).toEqual(["@savvy-web/ui"]);
+
+		// Summary should contain both the peer and the dev rows
+		expect(result[0].summary).toContain("react");
+		expect(result[0].summary).toContain("peerDependency");
+		expect(result[0].summary).toContain("vitest");
+		expect(result[0].summary).toContain("devDependency");
+
+		// Verify file was written
+		const changesetFiles = readdirSync(join(tempDir, ".changeset")).filter((f) => f.endsWith(".md"));
+		expect(changesetFiles).toHaveLength(1);
+
+		const content = readFileSync(join(tempDir, ".changeset", changesetFiles[0]), "utf-8");
+		expect(content).toContain('"@savvy-web/ui": patch');
+	});
+
+	it("should create changeset when lockfile change exists, including dev rows", async () => {
+		const lockfileChanges: LockfileChange[] = [
+			{
+				type: "dependency",
+				dependency: "effect",
+				from: "3.0.0",
+				to: "3.1.0",
+				affectedPackages: ["@savvy-web/core"],
+			},
+		];
+
+		const devUpdates: DependencyUpdateResult[] = [
+			{
+				dependency: "vitest",
+				from: "1.0.0",
+				to: "1.1.0",
+				type: "devDependency",
+				package: "@savvy-web/core",
+			},
+		];
+
+		const result = await runEffect(createChangesets(lockfileChanges, devUpdates, [], tempDir));
+
+		expect(result).toHaveLength(1);
+		expect(result[0].packages).toEqual(["@savvy-web/core"]);
+
+		// Summary should contain both the lockfile change and the dev row
+		expect(result[0].summary).toContain("effect");
+		expect(result[0].summary).toContain("dependency");
+		expect(result[0].summary).toContain("vitest");
+		expect(result[0].summary).toContain("devDependency");
+	});
+
+	it("should not create changeset for package with only dev updates when another package has lockfile changes", async () => {
+		const lockfileChanges: LockfileChange[] = [
+			{
+				type: "dependency",
+				dependency: "effect",
+				from: "3.0.0",
+				to: "3.1.0",
+				affectedPackages: ["@savvy-web/core"],
+			},
+		];
+
+		const devUpdates: DependencyUpdateResult[] = [
+			{
+				dependency: "vitest",
+				from: "1.0.0",
+				to: "1.1.0",
+				type: "devDependency",
+				package: "@savvy-web/utils",
+			},
+		];
+
+		const result = await runEffect(createChangesets(lockfileChanges, devUpdates, [], tempDir));
+
+		// Only @savvy-web/core should get a changeset, not @savvy-web/utils
+		expect(result).toHaveLength(1);
+		expect(result[0].packages).toEqual(["@savvy-web/core"]);
 	});
 });

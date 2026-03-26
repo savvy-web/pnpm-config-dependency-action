@@ -61,12 +61,11 @@ const queryLatestVersion = (packageName: string, registry: NpmRegistryShape): Ef
 		return version;
 	});
 
-const DEP_FIELDS = ["dependencies", "devDependencies", "optionalDependencies"] as const;
+const DEP_FIELDS = ["devDependencies"] as const;
 
 interface PackageJsonDeps {
-	dependencies?: Record<string, string>;
 	devDependencies?: Record<string, string>;
-	optionalDependencies?: Record<string, string>;
+	peerDependencies?: Record<string, string>;
 	[key: string]: unknown;
 }
 
@@ -218,7 +217,17 @@ const updateRegularDepsImpl = (
 		const pathToPackageName = new Map<string, string>(
 			Object.entries(packageInfos).map(([name, info]) => [info.packageJsonPath, name]),
 		);
-		pathToPackageName.set(rootPkgJson, "(root)");
+		// Resolve root package name from package.json (avoid "(root)" label)
+		const rootName = yield* Effect.try({
+			try: () => {
+				const raw = readFileSync(rootPkgJson, "utf-8");
+				const pkg = JSON.parse(raw) as { name?: string };
+				return pkg.name ?? "(root)";
+			},
+			catch: () =>
+				new FileSystemError({ operation: "read", path: rootPkgJson, reason: "Failed to read root package.json" }),
+		}).pipe(Effect.catchAll(() => Effect.succeed("(root)")));
+		pathToPackageName.set(rootPkgJson, rootName);
 
 		// Step 3: Query npm for latest versions and compute updates
 		const results: DependencyUpdateResult[] = [];
@@ -255,7 +264,7 @@ const updateRegularDepsImpl = (
 					dependency: depName,
 					from: entry.currentSpecifier,
 					to: newSpecifier,
-					type: "regular",
+					type: "devDependency",
 					package: pkgName,
 				});
 			}

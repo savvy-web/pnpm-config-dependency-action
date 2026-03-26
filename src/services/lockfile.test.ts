@@ -237,20 +237,18 @@ describe("Lockfile.compare - importer specifier changes", () => {
 		const before = makeLockfile({
 			importers: {
 				"pkgs/core": {
-					specifiers: {
-						lodash: "^4.17.0",
-					},
-				} as unknown,
+					specifiers: { lodash: "^4.17.0" },
+					dependencies: { lodash: "4.17.0" },
+				},
 			},
 		});
 
 		const after = makeLockfile({
 			importers: {
 				"pkgs/core": {
-					specifiers: {
-						lodash: "^4.18.0",
-					},
-				} as unknown,
+					specifiers: { lodash: "^4.18.0" },
+					dependencies: { lodash: "4.18.0" },
+				},
 			},
 		});
 
@@ -258,29 +256,80 @@ describe("Lockfile.compare - importer specifier changes", () => {
 
 		expect(changes).toHaveLength(1);
 		expect(changes[0].dependency).toBe("lodash");
+		expect(changes[0].type).toBe("dependency");
 		expect(changes[0].from).toBe("^4.17.0");
 		expect(changes[0].to).toBe("^4.18.0");
 		expect(changes[0].affectedPackages).toContain("@savvy-web/core");
 	});
 
-	it("skips catalog specifiers in importers", async () => {
+	it("detects devDependency type from devDependencies section", async () => {
 		const before = makeLockfile({
 			importers: {
 				"pkgs/core": {
-					specifiers: {
-						effect: "catalog:silk",
-					},
-				} as unknown,
+					specifiers: { vitest: "^1.0.0" },
+					devDependencies: { vitest: "1.0.0" },
+				},
 			},
 		});
 
 		const after = makeLockfile({
 			importers: {
 				"pkgs/core": {
-					specifiers: {
-						effect: "catalog:silk",
-					},
-				} as unknown,
+					specifiers: { vitest: "^1.1.0" },
+					devDependencies: { vitest: "1.1.0" },
+				},
+			},
+		});
+
+		const changes = await runCompare(before, after);
+
+		expect(changes).toHaveLength(1);
+		expect(changes[0].dependency).toBe("vitest");
+		expect(changes[0].type).toBe("devDependency");
+	});
+
+	it("detects optionalDependency type from optionalDependencies section", async () => {
+		const before = makeLockfile({
+			importers: {
+				"pkgs/core": {
+					specifiers: { fsevents: "^2.3.0" },
+					optionalDependencies: { fsevents: "2.3.0" },
+				},
+			},
+		});
+
+		const after = makeLockfile({
+			importers: {
+				"pkgs/core": {
+					specifiers: { fsevents: "^2.4.0" },
+					optionalDependencies: { fsevents: "2.4.0" },
+				},
+			},
+		});
+
+		const changes = await runCompare(before, after);
+
+		expect(changes).toHaveLength(1);
+		expect(changes[0].dependency).toBe("fsevents");
+		expect(changes[0].type).toBe("optionalDependency");
+	});
+
+	it("skips catalog specifiers in importers", async () => {
+		const before = makeLockfile({
+			importers: {
+				"pkgs/core": {
+					specifiers: { effect: "catalog:silk" },
+					dependencies: { effect: "3.0.5" },
+				},
+			},
+		});
+
+		const after = makeLockfile({
+			importers: {
+				"pkgs/core": {
+					specifiers: { effect: "catalog:silk" },
+					dependencies: { effect: "3.0.5" },
+				},
 			},
 		});
 
@@ -289,26 +338,22 @@ describe("Lockfile.compare - importer specifier changes", () => {
 		expect(changes).toHaveLength(0);
 	});
 
-	it("detects removed specifiers in importers", async () => {
+	it("detects removed dependencies in importers", async () => {
 		const before = makeLockfile({
 			importers: {
 				"pkgs/core": {
-					specifiers: {
-						lodash: "^4.17.0",
-						underscore: "^1.13.0",
-					},
-				} as unknown,
+					specifiers: { lodash: "^4.17.0", underscore: "^1.13.0" },
+					dependencies: { lodash: "4.17.0", underscore: "1.13.0" },
+				},
 			},
 		});
 
 		const after = makeLockfile({
 			importers: {
 				"pkgs/core": {
-					specifiers: {
-						lodash: "^4.17.0",
-						// underscore removed
-					},
-				} as unknown,
+					specifiers: { lodash: "^4.17.0" },
+					dependencies: { lodash: "4.17.0" },
+				},
 			},
 		});
 
@@ -324,20 +369,18 @@ describe("Lockfile.compare - importer specifier changes", () => {
 		const before = makeLockfile({
 			importers: {
 				"pkgs/unknown": {
-					specifiers: {
-						lodash: "^4.17.0",
-					},
-				} as unknown,
+					specifiers: { lodash: "^4.17.0" },
+					dependencies: { lodash: "4.17.0" },
+				},
 			},
 		});
 
 		const after = makeLockfile({
 			importers: {
 				"pkgs/unknown": {
-					specifiers: {
-						lodash: "^4.18.0",
-					},
-				} as unknown,
+					specifiers: { lodash: "^4.18.0" },
+					dependencies: { lodash: "4.18.0" },
+				},
 			},
 		});
 
@@ -364,9 +407,9 @@ describe("groupChangesByPackage", () => {
 
 	it("groups regular changes by affected package names", () => {
 		const changes: LockfileChange[] = [
-			{ type: "regular", dependency: "effect", from: "3.0.0", to: "3.1.0", affectedPackages: ["@savvy-web/core"] },
+			{ type: "dependency", dependency: "effect", from: "3.0.0", to: "3.1.0", affectedPackages: ["@savvy-web/core"] },
 			{
-				type: "regular",
+				type: "dependency",
 				dependency: "zod",
 				from: "3.22.0",
 				to: "3.23.0",
@@ -386,7 +429,7 @@ describe("groupChangesByPackage", () => {
 	it("handles changes affecting multiple packages", () => {
 		const changes: LockfileChange[] = [
 			{
-				type: "regular",
+				type: "dependency",
 				dependency: "effect",
 				from: "3.0.0",
 				to: "3.1.0",
@@ -409,7 +452,7 @@ describe("groupChangesByPackage", () => {
 	it("handles mix of config and regular changes", () => {
 		const changes: LockfileChange[] = [
 			{ type: "config", dependency: "typescript", from: "5.3.3", to: "5.4.0", affectedPackages: [] },
-			{ type: "regular", dependency: "effect", from: "3.0.0", to: "3.1.0", affectedPackages: ["@savvy-web/core"] },
+			{ type: "dependency", dependency: "effect", from: "3.0.0", to: "3.1.0", affectedPackages: ["@savvy-web/core"] },
 		];
 
 		const result = groupChangesByPackage(changes);
@@ -421,9 +464,9 @@ describe("groupChangesByPackage", () => {
 
 	it("accumulates multiple changes for the same package", () => {
 		const changes: LockfileChange[] = [
-			{ type: "regular", dependency: "effect", from: "3.0.0", to: "3.1.0", affectedPackages: ["@savvy-web/core"] },
+			{ type: "dependency", dependency: "effect", from: "3.0.0", to: "3.1.0", affectedPackages: ["@savvy-web/core"] },
 			{
-				type: "regular",
+				type: "dependency",
 				dependency: "@effect/schema",
 				from: "0.60.0",
 				to: "0.61.0",

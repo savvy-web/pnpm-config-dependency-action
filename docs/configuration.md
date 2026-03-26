@@ -42,18 +42,55 @@ config-dependencies: |
 
 #### `dependencies`
 
-Regular dependencies to update, one per line. Supports glob patterns for
-matching multiple packages.
+Dev dependencies to update, one per line. Matches against `devDependencies` in
+all workspace `package.json` files. Supports glob patterns.
 
 ```yaml
 dependencies: |
-  effect
-  @effect/*
+  vitest
   @savvy-web/*
 ```
 
 At least one of `config-dependencies`, `dependencies`, or `update-pnpm: true`
 must be active.
+
+#### `peer-lock`
+
+Package names whose `peerDependencies` range syncs on every version bump (patch
+and minor). Must be explicit package names (no globs). Each package must also
+match a `dependencies` pattern.
+
+```yaml
+peer-lock: |
+  vitest-agent-reporter
+```
+
+When `vitest-agent-reporter` updates from `1.0.0` to `1.0.3`, the peer range
+updates from `^1.0.0` to `^1.0.3`. The existing prefix (`^`, `~`, `>=`, etc.)
+is preserved.
+
+#### `peer-minor`
+
+Package names whose `peerDependencies` range syncs only on minor or major
+version bumps. Patch-only bumps leave the peer range unchanged. Must be explicit
+package names (no globs). Each package must also match a `dependencies` pattern.
+
+```yaml
+peer-minor: |
+  vitest
+  @vitest/coverage-v8
+```
+
+When `vitest` updates from `3.1.0` to `3.2.5`, the peer range updates to
+`^3.2.0` (patch floored to `.0`). When `vitest` updates from `3.1.0` to
+`3.1.2`, the peer range stays at `^3.1.0`.
+
+**Validation:**
+
+- A package cannot appear in both `peer-lock` and `peer-minor` (the action
+  fails with an error)
+- If a `peer-lock` or `peer-minor` entry does not match any `dependencies`
+  pattern, a warning is logged
 
 #### `branch`
 
@@ -114,12 +151,6 @@ Controls logging verbosity. Default: `info`.
 - `debug` -- Verbose logging with detailed state dumps (lockfile structure, git
   status, parsed inputs)
 
-#### `skip-token-revoke`
-
-When set to `true`, the GitHub App installation token is not revoked during
-cleanup. The token expires automatically after 1 hour regardless. Default:
-`false`.
-
 #### `auto-merge`
 
 Enables GitHub's auto-merge on the dependency update PR after it is created.
@@ -140,11 +171,6 @@ auto-merge: squash # Enable auto-merge with squash strategy
 ```
 
 ## Outputs
-
-### `token`
-
-The generated GitHub App installation token. Can be used in subsequent workflow
-steps for authenticated API calls.
 
 ### `pr-number`
 
@@ -188,7 +214,7 @@ The action uses GitHub App authentication for secure, short-lived tokens:
 1. **Pre-phase**: Generates a JWT from the app credentials, exchanges it for an
    installation token
 2. **Main phase**: Uses the installation token for all GitHub API calls
-3. **Post-phase**: Revokes the token (unless `skip-token-revoke` is set)
+3. **Post-phase**: Revokes the token automatically
 
 Tokens are automatically masked in workflow logs using the `ActionOutputs`
 service's `setSecret()` method.
@@ -208,16 +234,42 @@ configDependencies:
   "@biomejs/biome": 1.6.1
 ```
 
-### Regular Dependencies
+### Dev Dependencies
 
-Regular dependencies in workspace packages are updated with
-`pnpm up <pattern> --latest`. Glob patterns follow pnpm's matching rules:
+Dev dependencies in workspace packages are matched against the `devDependencies`
+field in all `package.json` files. The action queries the npm registry directly
+for latest versions (avoids `pnpm up --latest` which promotes deps to catalogs
+when `catalogMode: strict` is enabled). Glob patterns follow Node's
+`path.matchesGlob`:
 
 | Pattern | Matches |
 | --- | --- |
-| `effect` | Exact package `effect` |
+| `vitest` | Exact package `vitest` |
 | `@effect/*` | All packages in the `@effect` scope |
 | `@savvy-web/*` | All packages in the `@savvy-web` scope |
+
+### Peer Dependency Syncing
+
+Peer dependency ranges can be automatically synced when the corresponding dev
+dependency updates. This is controlled by the `peer-lock` and `peer-minor`
+inputs.
+
+**Why sync peers?** Published packages list peer dependencies to declare
+compatibility. When you update a dev dependency like `vitest`, the peer range
+should reflect the tested version. Dev dependency changes alone do not trigger a
+release (they are stripped from published packages), but peer range changes are
+consumer-facing and produce a patch changeset.
+
+**Strategies:**
+
+| Strategy | Behavior | Example |
+| --- | --- | --- |
+| `peer-lock` | Sync on every bump | `1.0.0` to `1.0.3` updates peer to `^1.0.3` |
+| `peer-minor` | Sync on minor+ only | `3.1.0` to `3.1.2` leaves peer at `^3.1.0`; `3.1.0` to `3.2.0` updates to `^3.2.0` |
+
+Version resolution follows semver naturally. If the dev dependency specifier is
+`^3.1.0`, the action resolves the latest version satisfying that range. There is
+no special major-version skip rule.
 
 ## Post-Update Commands
 
@@ -247,16 +299,21 @@ the dependency changes.
 ## Changeset Integration
 
 If your repository has a `.changeset/` directory and the `changesets` input is
-`true` (the default), the action automatically creates changesets for affected
-packages:
+`true` (the default), the action creates changesets based on consumer-facing
+changes:
 
-- **Regular dependency changes**: A `patch` changeset is created for each
-  workspace package whose dependencies changed
-- **Config dependency changes**: An empty changeset (no packages) is created to
-  record the update
+- **Peer dependency range changes**: A `patch` changeset is created for the
+  package whose peer range was updated
+- **Runtime dependency changes**: A `patch` changeset is created for packages
+  with `dependency` or `optionalDependency` changes detected in the lockfile
+- **Config dependency changes**: An empty changeset (no packages) records the
+  update
+- **Dev dependency-only changes**: No changeset is created (dev dependencies are
+  stripped from published packages)
 
-Changeset summaries include the dependency name and version change for each
-affected package.
+Changeset tables include all changes for a package, even if only one triggered
+the changeset. The table uses specific type values: `devDependency`,
+`peerDependency`, `dependency`, `config`.
 
 ## Advanced Patterns
 

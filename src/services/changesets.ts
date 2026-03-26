@@ -11,7 +11,7 @@ import { existsSync, writeFileSync } from "node:fs";
 import { Context, Effect, Layer } from "effect";
 import type { ChangesetError } from "../errors/errors.js";
 import { FileSystemError } from "../errors/errors.js";
-import type { ChangedPackage, ChangesetFile, LockfileChange } from "../schemas/domain.js";
+import type { ChangedPackage, ChangesetFile, DependencyUpdateResult, LockfileChange } from "../schemas/domain.js";
 import { groupChangesByPackage } from "./lockfile.js";
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -22,14 +22,17 @@ export class Changesets extends Context.Tag("Changesets")<
 	Changesets,
 	{
 		readonly create: (
-			changes: ReadonlyArray<LockfileChange>,
+			lockfileChanges: ReadonlyArray<LockfileChange>,
+			devUpdates?: ReadonlyArray<DependencyUpdateResult>,
+			peerUpdates?: ReadonlyArray<DependencyUpdateResult>,
 			workspaceRoot?: string,
 		) => Effect.Effect<ReadonlyArray<ChangesetFile>, ChangesetError | FileSystemError>;
 	}
 >() {}
 
 export const ChangesetsLive = Layer.succeed(Changesets, {
-	create: (changes, workspaceRoot = process.cwd()) => createChangesetsImpl(changes, workspaceRoot),
+	create: (lockfileChanges, devUpdates = [], peerUpdates = [], workspaceRoot = process.cwd()) =>
+		createChangesetsImpl(lockfileChanges, devUpdates, peerUpdates, workspaceRoot),
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -43,10 +46,12 @@ export const ChangesetsLive = Layer.succeed(Changesets, {
  * haven't yet migrated to the Changesets service.
  */
 export const createChangesets = (
-	changes: ReadonlyArray<LockfileChange>,
+	lockfileChanges: ReadonlyArray<LockfileChange>,
+	devUpdates: ReadonlyArray<DependencyUpdateResult> = [],
+	peerUpdates: ReadonlyArray<DependencyUpdateResult> = [],
 	workspaceRoot: string = process.cwd(),
 ): Effect.Effect<ReadonlyArray<ChangesetFile>, ChangesetError | FileSystemError> =>
-	createChangesetsImpl(changes, workspaceRoot);
+	createChangesetsImpl(lockfileChanges, devUpdates, peerUpdates, workspaceRoot);
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Module-Level Exports
@@ -136,19 +141,38 @@ const generateChangesetId = (): string => {
 const EM_DASH = "\u2014";
 
 /**
- * Map LockfileChange type to the dependency table Type column.
- */
-const mapDependencyType = (type: LockfileChange["type"]): string => (type === "config" ? "config" : "dependency");
-
-/**
  * Format a single dependency change as a GFM table row.
  */
 const formatDependencyRow = (change: LockfileChange): string => {
-	const type = mapDependencyType(change.type);
 	const action = change.from === null ? "added" : "updated";
 	const from = change.from ?? EM_DASH;
 	const to = change.to;
-	return `| ${change.dependency} | ${type} | ${action} | ${from} | ${to} |`;
+	return `| ${change.dependency} | ${change.type} | ${action} | ${from} | ${to} |`;
+};
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Changeset Table Row Types
+// ══════════════════════════════════════════════════════════════════════════════
+
+interface ChangesetTableRow {
+	dependency: string;
+	type: string;
+	action: string;
+	from: string | null;
+	to: string;
+}
+
+const formatRowsAsTable = (rows: ReadonlyArray<ChangesetTableRow>): string => {
+	const lines: string[] = [
+		"## Dependencies",
+		"",
+		"| Dependency | Type | Action | From | To |",
+		"| :--- | :--- | :--- | :--- | :--- |",
+	];
+	for (const row of rows) {
+		lines.push(`| ${row.dependency} | ${row.type} | ${row.action} | ${row.from ?? EM_DASH} | ${row.to} |`);
+	}
+	return lines.join("\n");
 };
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -161,11 +185,15 @@ const formatDependencyRow = (change: LockfileChange): string => {
  * Config dependency changes (type="config") always create empty changesets
  * because they are workspace-level tooling, not package dependencies.
  *
- * Regular dependency changes detected in the lockfile create package
- * changesets for the affected packages.
+ * Lockfile changes (dependency/optionalDependency) and peer dependency updates
+ * are consumer-facing and trigger changesets. DevDependency-only changes do NOT
+ * trigger changesets but are included in the table when a changeset is created
+ * for other reasons.
  */
 const createChangesetsImpl = (
-	changes: ReadonlyArray<LockfileChange>,
+	lockfileChanges: ReadonlyArray<LockfileChange>,
+	devUpdates: ReadonlyArray<DependencyUpdateResult>,
+	peerUpdates: ReadonlyArray<DependencyUpdateResult>,
 	workspaceRoot: string,
 ): Effect.Effect<ReadonlyArray<ChangesetFile>, ChangesetError | FileSystemError> =>
 	Effect.gen(function* () {
@@ -176,27 +204,89 @@ const createChangesetsImpl = (
 		}
 
 		const changesetDir = `${workspaceRoot}/.changeset`;
-
-		// Group changes by package
-		const grouped = groupChangesByPackage(changes);
-
-		if (grouped.size === 0) {
-			yield* Effect.logInfo("No changes to create changesets for");
-			return [];
-		}
-
 		const changesets: ChangesetFile[] = [];
 
-		// Create changesets for each affected package (regular dependency changes)
-		for (const [packageName, pkgChanges] of grouped) {
-			if (packageName === "(root)") continue; // Config deps handled separately
+		// Group lockfile changes by package
+		const grouped = groupChangesByPackage(lockfileChanges);
 
-			const changeset = yield* createPackageChangeset(packageName, pkgChanges, changesetDir);
-			changesets.push(changeset);
+		// Build per-package change lists combining all sources
+		const packageChanges = new Map<string, { triggersChangeset: boolean; rows: ChangesetTableRow[] }>();
+
+		// Lockfile changes (dependency/optionalDependency - consumer-facing)
+		for (const [pkgName, changes] of grouped) {
+			if (pkgName === "(root)") continue;
+			const entry = packageChanges.get(pkgName) ?? { triggersChangeset: false, rows: [] };
+			for (const change of changes) {
+				entry.triggersChangeset = true;
+				entry.rows.push({
+					dependency: change.dependency,
+					type: change.type,
+					action: change.from === null ? "added" : "updated",
+					from: change.from,
+					to: change.to,
+				});
+			}
+			packageChanges.set(pkgName, entry);
 		}
 
-		// Config dependency changes always get an empty changeset (root workspace)
-		// They are workspace-level tooling, not package dependencies
+		// Peer updates (consumer-facing)
+		for (const update of peerUpdates) {
+			if (!update.package) continue;
+			const entry = packageChanges.get(update.package) ?? { triggersChangeset: false, rows: [] };
+			entry.triggersChangeset = true;
+			entry.rows.push({
+				dependency: update.dependency,
+				type: "peerDependency",
+				action: "updated",
+				from: update.from,
+				to: update.to,
+			});
+			packageChanges.set(update.package, entry);
+		}
+
+		// DevDep updates (NOT consumer-facing, included in table only)
+		for (const update of devUpdates) {
+			if (!update.package) continue;
+			const entry = packageChanges.get(update.package) ?? { triggersChangeset: false, rows: [] };
+			entry.rows.push({
+				dependency: update.dependency,
+				type: "devDependency",
+				action: "updated",
+				from: update.from,
+				to: update.to,
+			});
+			packageChanges.set(update.package, entry);
+		}
+
+		// Deduplicate rows per package (lockfile detection may overlap with direct updates)
+		for (const [, data] of packageChanges) {
+			const seen = new Set<string>();
+			data.rows = data.rows.filter((row) => {
+				const key = `${row.dependency}|${row.type}`;
+				if (seen.has(key)) return false;
+				seen.add(key);
+				return true;
+			});
+		}
+
+		// Create changesets for packages with consumer-facing changes
+		for (const [pkgName, data] of packageChanges) {
+			if (!data.triggersChangeset) continue;
+			const id = generateChangesetId();
+			const summary = formatRowsAsTable(data.rows);
+			const content = `---\n"${pkgName}": patch\n---\n\n${summary}\n`;
+			const filepath = `${changesetDir}/${id}.md`;
+
+			yield* Effect.try({
+				try: () => writeFileSync(filepath, content, "utf-8"),
+				catch: (e) => new FileSystemError({ operation: "write", path: filepath, reason: String(e) }),
+			});
+
+			yield* Effect.logDebug(`Created changeset ${id} for ${pkgName}`);
+			changesets.push({ id, packages: [pkgName], type: "patch", summary });
+		}
+
+		// Root/config changesets (empty changeset for config-only changes)
 		if (grouped.has("(root)")) {
 			const rootChanges = grouped.get("(root)") ?? [];
 			const changeset = yield* createEmptyChangeset(rootChanges, changesetDir);
@@ -204,49 +294,7 @@ const createChangesetsImpl = (
 		}
 
 		yield* Effect.logInfo(`Created ${changesets.length} changeset(s)`);
-
 		return changesets;
-	});
-
-/**
- * Create a changeset for a specific package.
- */
-const createPackageChangeset = (
-	packageName: string,
-	changes: ReadonlyArray<LockfileChange>,
-	changesetDir: string,
-): Effect.Effect<ChangesetFile, FileSystemError> =>
-	Effect.gen(function* () {
-		const id = generateChangesetId();
-		const summary = formatChangesetSummary(changes);
-
-		const content = `---
-"${packageName}": patch
----
-
-${summary}
-`;
-
-		const filepath = `${changesetDir}/${id}.md`;
-
-		yield* Effect.try({
-			try: () => writeFileSync(filepath, content, "utf-8"),
-			catch: (e) =>
-				new FileSystemError({
-					operation: "write",
-					path: filepath,
-					reason: String(e),
-				}),
-		});
-
-		yield* Effect.logDebug(`Created changeset ${id} for ${packageName}`);
-
-		return {
-			id,
-			packages: [packageName],
-			type: "patch",
-			summary,
-		};
 	});
 
 /**

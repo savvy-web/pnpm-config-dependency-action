@@ -25,10 +25,13 @@ import { BranchManager } from "./services/branch.js";
 import { createChangesets } from "./services/changesets.js";
 import { ConfigDeps } from "./services/config-deps.js";
 import { captureLockfileState, compareLockfiles } from "./services/lockfile.js";
+import type { PeerSyncConfig } from "./services/peer-sync.js";
+import { syncPeers } from "./services/peer-sync.js";
 import { PnpmUpgrade } from "./services/pnpm-upgrade.js";
 import { RegularDeps } from "./services/regular-deps.js";
 import { Report } from "./services/report.js";
 import { formatWorkspaceYaml, readWorkspaceYaml } from "./services/workspace-yaml.js";
+import { matchesPattern } from "./utils/deps.js";
 import { parseMultiValueInput } from "./utils/input.js";
 
 /**
@@ -99,6 +102,10 @@ export const program = Effect.gen(function* () {
 	const configDependencies = parseMultiValueInput(rawConfigDeps);
 	const rawDeps = yield* Config.string("dependencies").pipe(Config.withDefault(""));
 	const dependencies = parseMultiValueInput(rawDeps);
+	const rawPeerLock = yield* Config.string("peer-lock").pipe(Config.withDefault(""));
+	const peerLock = parseMultiValueInput(rawPeerLock);
+	const rawPeerMinor = yield* Config.string("peer-minor").pipe(Config.withDefault(""));
+	const peerMinor = parseMultiValueInput(rawPeerMinor);
 	const rawRun = yield* Config.string("run").pipe(Config.withDefault(""));
 	const run = parseMultiValueInput(rawRun);
 	const updatePnpm = yield* Config.boolean("update-pnpm").pipe(Config.withDefault(true));
@@ -119,6 +126,26 @@ export const program = Effect.gen(function* () {
 		);
 	}
 
+	// Validate peer-lock and peer-minor don't overlap
+	const peerOverlap = peerLock.filter((p) => peerMinor.includes(p));
+	if (peerOverlap.length > 0) {
+		yield* Effect.fail(
+			new ActionInputError({
+				inputName: "peer-lock",
+				reason: `Packages appear in both peer-lock and peer-minor: ${peerOverlap.join(", ")}`,
+				rawValue: undefined,
+			}),
+		);
+	}
+
+	// Warn if peer entries don't match any dependencies pattern
+	for (const pkg of [...peerLock, ...peerMinor]) {
+		const hasMatch = dependencies.some((p) => matchesPattern(pkg, p));
+		if (!hasMatch) {
+			yield* Effect.logWarning(`peer-lock/peer-minor entry "${pkg}" does not match any dependencies pattern`);
+		}
+	}
+
 	// Resolve log level
 	const resolvedLogLevel = Action.resolveLogLevel(logLevel as LogLevelInput);
 	// Map ActionLogLevel ("info" | "verbose" | "debug") to Effect LogLevel
@@ -134,6 +161,8 @@ export const program = Effect.gen(function* () {
 			branch,
 			configDependencies,
 			dependencies,
+			peerLock,
+			peerMinor,
 			updatePnpm,
 			dryRun,
 		})}`,
@@ -160,6 +189,8 @@ export const program = Effect.gen(function* () {
 						branch,
 						"config-dependencies": configDependencies,
 						dependencies,
+						"peer-lock": peerLock,
+						"peer-minor": peerMinor,
 						"update-pnpm": updatePnpm,
 						changesets,
 						"auto-merge": autoMerge as "" | "merge" | "squash" | "rebase",
@@ -187,6 +218,8 @@ const innerProgram = (
 		branch: string;
 		"config-dependencies": ReadonlyArray<string>;
 		dependencies: ReadonlyArray<string>;
+		"peer-lock": ReadonlyArray<string>;
+		"peer-minor": ReadonlyArray<string>;
 		"update-pnpm": boolean;
 		changesets: boolean;
 		"auto-merge": "" | "merge" | "squash" | "rebase";
@@ -268,8 +301,24 @@ const innerProgram = (
 						const regularDepsService = yield* RegularDeps;
 						const regularUpdates = yield* regularDepsService.updateRegularDeps(inputs.dependencies);
 
+						// Step 5b: Sync peer dependencies
+						const peerSyncConfig: PeerSyncConfig = {
+							lock: inputs["peer-lock"],
+							minor: inputs["peer-minor"],
+						};
+						yield* Effect.logInfo("Step 5b: Syncing peer dependencies");
+						const peerUpdates = yield* syncPeers(peerSyncConfig, regularUpdates);
+						if (peerUpdates.length > 0) {
+							yield* Effect.logInfo(`Synced ${peerUpdates.length} peer dependency range(s)`);
+						}
+
 						// Step 8: Clean install
-						if (configUpdates.length > 0 || regularUpdates.length > 0 || configUpdatesFromPnpm.length > 0) {
+						if (
+							configUpdates.length > 0 ||
+							regularUpdates.length > 0 ||
+							configUpdatesFromPnpm.length > 0 ||
+							peerUpdates.length > 0
+						) {
 							yield* Effect.logInfo("Step 6: Running clean install");
 							const runner = yield* CommandRunner;
 							yield* runner.execCapture("sh", ["-c", "rm -rf node_modules pnpm-lock.yaml"]);
@@ -321,9 +370,9 @@ const innerProgram = (
 						const changes = yield* compareLockfiles(lockfileBefore, lockfileAfter);
 						yield* Effect.logDebug(`Detected changes: ${JSON.stringify(changes)}`);
 
-						const allUpdates = [...configUpdatesFromPnpm, ...configUpdates, ...regularUpdates];
+						const allUpdates = [...configUpdatesFromPnpm, ...configUpdates, ...regularUpdates, ...peerUpdates];
 						yield* Effect.logDebug(
-							`Total updates: ${allUpdates.length} (config: ${configUpdates.length + configUpdatesFromPnpm.length}, regular: ${regularUpdates.length})`,
+							`Total updates: ${allUpdates.length} (config: ${configUpdates.length + configUpdatesFromPnpm.length}, dev: ${regularUpdates.length}, peer: ${peerUpdates.length})`,
 						);
 
 						// Check if there are any changes via git status
@@ -360,7 +409,7 @@ const innerProgram = (
 							}));
 
 							const allChangesForChangeset = [...configChangesForChangeset, ...changes];
-							changesets = yield* createChangesets(allChangesForChangeset);
+							changesets = yield* createChangesets(allChangesForChangeset, regularUpdates, peerUpdates);
 						} else {
 							yield* Effect.logInfo("Step 11: Skipping changesets (disabled)");
 						}

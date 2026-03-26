@@ -9,7 +9,8 @@ Detailed breakdown of the 14-step workflow executed in the main phase.
 - [Step 3: Capture Lockfile (Before)](#step-3-capture-lockfile-before)
 - [Step 4: Upgrade pnpm](#step-4-upgrade-pnpm)
 - [Step 5: Update Config Dependencies](#step-5-update-config-dependencies)
-- [Step 6: Update Regular Dependencies](#step-6-update-regular-dependencies)
+- [Step 6: Update Dev Dependencies](#step-6-update-dev-dependencies)
+- [Step 6b: Sync Peer Dependencies](#step-6b-sync-peer-dependencies)
 - [Step 7: Clean Install](#step-7-clean-install)
 - [Step 8: Format pnpm-workspace.yaml](#step-8-format-pnpm-workspaceyaml)
 - [Step 9: Run Custom Commands](#step-9-run-custom-commands)
@@ -25,6 +26,8 @@ Detailed breakdown of the 14-step workflow executed in the main phase.
 - Generates a GitHub App installation token via `GitHubApp.withToken()`
 - Validates that at least one of `config-dependencies`, `dependencies`, or
   `update-pnpm` is active
+- Validates that `peer-lock` and `peer-minor` do not overlap
+- Warns if `peer-lock` or `peer-minor` entries do not match any `dependencies` pattern
 - Creates a GitHub check run for status visibility in the UI
 
 ## Step 2: Branch Management
@@ -64,13 +67,25 @@ Detailed breakdown of the 14-step workflow executed in the main phase.
   proceed
 - Failed updates are logged as warnings but do not stop the workflow
 
-## Step 6: Update Regular Dependencies
+## Step 6: Update Dev Dependencies
 
-- Iterates over each dependency pattern listed in the input
+- Iterates over each dependency pattern listed in the `dependencies` input
+- Matches against `devDependencies` in all workspace `package.json` files
 - Queries npm registry directly for latest versions (avoids `pnpm up --latest`
   which promotes deps to catalogs when `catalogMode: strict` is enabled)
-- Supports glob patterns (e.g., `@effect/*`)
-- Uses the same error accumulation pattern as config dependency updates
+- Supports glob patterns (e.g., `@savvy-web/*`)
+- Uses error accumulation: individual failures do not block other updates
+
+## Step 6b: Sync Peer Dependencies
+
+- For each dev dependency update matching a `peer-lock` or `peer-minor` entry:
+  - Finds the corresponding `peerDependencies` entry in the same `package.json`
+  - Computes the new peer range based on the strategy
+  - Writes the updated `package.json`
+- `peer-lock`: Syncs peer range on every version bump
+- `peer-minor`: Syncs peer range only on minor+ bumps (floors patch to `.0`)
+- Preserves the existing prefix (`^`, `~`, `>=`, etc.)
+- Skips with a warning if no peer entry exists for the package
 
 ## Step 7: Clean Install
 
@@ -131,11 +146,11 @@ action exits early with a "neutral" check run conclusion.
 
 - Skips entirely if the `changesets` input is `false`
 - Checks whether a `.changeset/` directory exists
-- Groups lockfile changes by affected package
-- Creates a `patch` changeset for each workspace package with dependency changes
+- Creates a `patch` changeset for each workspace package with consumer-facing
+  changes (peer range updates or runtime dependency changes)
+- Dev dependency-only changes do not trigger a changeset
 - Creates an empty changeset (no packages) for config-only changes
-- Changeset files are written to `.changeset/<random-id>.md` with a formatted
-  summary of the dependency changes
+- Changeset tables include all changes for a package, using specific type values
 
 ## Step 13: Commit and Push
 
@@ -157,9 +172,8 @@ In dry-run mode, this step is skipped entirely.
 - If a PR exists: updates its title and body with the latest dependency changes
 - If no PR exists: creates a new PR
 - The PR body includes:
-  - A summary of config and regular dependency changes in table format
+  - Per-package tables with Dependency/Type/Action/From/To columns
   - Changeset details in expandable sections
-  - Links to npm for each updated package
 - If the `auto-merge` input is set, enables auto-merge on the PR via the GitHub
   GraphQL API. Failures are logged as warnings without failing the action.
 - Sets action outputs (`pr-number`, `pr-url`, `updates-count`, `has-changes`)

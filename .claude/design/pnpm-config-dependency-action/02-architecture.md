@@ -73,7 +73,8 @@ graph TD
     J2 -->|No| K
     J3 --> K[ConfigDeps.updateConfigDeps]
     K --> L[RegularDeps.updateRegularDeps]
-    L --> M[Clean Install]
+    L --> L2[PeerSync.syncPeers]
+    L2 --> M[Clean Install]
     M --> N[WorkspaceYaml.format]
     N --> O{Custom Commands?}
     O -->|Yes| P[Run Commands]
@@ -158,6 +159,14 @@ The action executes as a **single phase** with **16 steps** (implemented in `src
 - `RegularDeps.updateRegularDeps()` queries npm via `NpmRegistry` service
 - Finds workspace `package.json` files, matches patterns, updates specifiers
 - Skips `catalog:` and `workspace:` specifiers
+
+### Step 9b: Sync Peer Dependencies
+
+- `syncPeers()` from `src/services/peer-sync.ts`
+- For each devDep update matching `peer-lock` or `peer-minor` input:
+  - `peer-lock`: Sync peer range on every version bump
+  - `peer-minor`: Sync peer range only on minor+ bumps (floor patch to .0)
+- Uses `semver-effect` for version parsing
 
 ### Step 10: Clean Install
 
