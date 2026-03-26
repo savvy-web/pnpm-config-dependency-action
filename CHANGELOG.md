@@ -1,5 +1,14 @@
 # pnpm-config-dependency-action
 
+## 0.11.1
+
+### Dependencies
+
+* | [`1ece353`](https://github.com/savvy-web/pnpm-config-dependency-action/commit/1ece3531032449542e86fc8cb074c3919a9e768b) | Dependency    | Type    | Action | From   | To |
+  | :---------------------------------------------------------------------------------------------------------------------- | :------------ | :------ | :----- | :----- | -- |
+  | @savvy-web/commitlint                                                                                                   | devDependency | updated | ^0.4.1 | ^0.4.3 |    |
+  | @savvy-web/lint-staged                                                                                                  | devDependency | updated | ^0.6.2 | ^0.6.4 |    |
+
 ## 0.11.0
 
 ### Features
