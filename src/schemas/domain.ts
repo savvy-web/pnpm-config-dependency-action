@@ -19,9 +19,21 @@ import { Schema } from "effect";
 export const NonEmptyString = Schema.String.pipe(Schema.minLength(1, { message: () => "Value must not be empty" }));
 
 /**
- * Dependency type (config or regular).
+ * Dependency type discriminator.
+ *
+ * - "config" for config dependencies in pnpm-workspace.yaml
+ * - "dependency" for runtime dependencies detected in lockfile
+ * - "devDependency" for dev dependencies updated by RegularDeps
+ * - "peerDependency" for peer dependencies synced by PeerSync
+ * - "optionalDependency" for optional dependencies
  */
-export const DependencyType = Schema.Literal("config", "regular");
+export const DependencyType = Schema.Literal(
+	"config",
+	"dependency",
+	"devDependency",
+	"peerDependency",
+	"optionalDependency",
+);
 
 /**
  * Git operation type.

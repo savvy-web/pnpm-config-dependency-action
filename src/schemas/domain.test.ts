@@ -56,16 +56,38 @@ describe("DependencyUpdateResult", () => {
 		expect(result.package).toBeNull();
 	});
 
-	it("decodes regular dependency update", () => {
+	it("decodes devDependency update", () => {
 		const result = decode({
 			dependency: "effect",
 			from: null,
 			to: "3.1.0",
-			type: "regular",
+			type: "devDependency",
 			package: "@savvy-web/core",
 		});
 		expect(result.from).toBeNull();
 		expect(result.package).toBe("@savvy-web/core");
+	});
+
+	it("decodes peerDependency update", () => {
+		const result = decode({
+			dependency: "react",
+			from: "^18.0.0",
+			to: "^19.0.0",
+			type: "peerDependency",
+			package: "@savvy-web/ui",
+		});
+		expect(result.type).toBe("peerDependency");
+	});
+
+	it("decodes optionalDependency update", () => {
+		const result = decode({
+			dependency: "fsevents",
+			from: "2.3.0",
+			to: "2.4.0",
+			type: "optionalDependency",
+			package: null,
+		});
+		expect(result.type).toBe("optionalDependency");
 	});
 });
 
@@ -124,9 +146,9 @@ describe("LockfileChange", () => {
 		expect(result.type).toBe("config");
 	});
 
-	it("decodes regular lockfile change with affected packages", () => {
+	it("decodes dependency lockfile change with affected packages", () => {
 		const result = decode({
-			type: "regular",
+			type: "dependency",
 			dependency: "effect",
 			from: null,
 			to: "3.1.0",

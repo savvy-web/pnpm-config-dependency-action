@@ -147,6 +147,22 @@ describe("parseSpecifier", () => {
 	it("returns null for star specifier", () => {
 		expect(parseSpecifier("*")).toBeNull();
 	});
+
+	it("should parse >= prefix", () => {
+		expect(parseSpecifier(">=3.6.0")).toEqual({ prefix: ">=", version: "3.6.0" });
+	});
+
+	it("should parse > prefix", () => {
+		expect(parseSpecifier(">3.6.0")).toEqual({ prefix: ">", version: "3.6.0" });
+	});
+
+	it("should parse <= prefix", () => {
+		expect(parseSpecifier("<=3.6.0")).toEqual({ prefix: "<=", version: "3.6.0" });
+	});
+
+	it("should parse < prefix", () => {
+		expect(parseSpecifier("<3.6.0")).toEqual({ prefix: "<", version: "3.6.0" });
+	});
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -163,7 +179,7 @@ describe("RegularDeps.updateRegularDeps", () => {
 		const dir = makeTempDir();
 		writePackageJson(dir, {
 			name: "root",
-			dependencies: { effect: "^3.0.0" },
+			devDependencies: { effect: "^3.0.0" },
 		});
 
 		mockGetPackageInfosAsync.mockResolvedValue({});
@@ -177,19 +193,19 @@ describe("RegularDeps.updateRegularDeps", () => {
 			dependency: "effect",
 			from: "^3.0.0",
 			to: "^3.1.0",
-			type: "regular",
+			type: "devDependency",
 		});
 
 		// Verify package.json was updated
 		const pkg = readPackageJson(dir);
-		expect(pkg.dependencies.effect).toBe("^3.1.0");
+		expect(pkg.devDependencies.effect).toBe("^3.1.0");
 	});
 
 	it("skips dependency when already on latest", async () => {
 		const dir = makeTempDir();
 		writePackageJson(dir, {
 			name: "root",
-			dependencies: { effect: "^3.1.0" },
+			devDependencies: { effect: "^3.1.0" },
 		});
 
 		mockGetPackageInfosAsync.mockResolvedValue({});
@@ -205,7 +221,7 @@ describe("RegularDeps.updateRegularDeps", () => {
 		const dir = makeTempDir();
 		writePackageJson(dir, {
 			name: "root",
-			dependencies: {
+			devDependencies: {
 				"@savvy-web/core": "^1.0.0",
 				"@savvy-web/utils": "^1.0.0",
 			},
@@ -227,7 +243,7 @@ describe("RegularDeps.updateRegularDeps", () => {
 		const dir = makeTempDir();
 		writePackageJson(dir, {
 			name: "root",
-			dependencies: {
+			devDependencies: {
 				effect: "catalog:",
 				"@effect/schema": "^0.60.0",
 			},
@@ -258,7 +274,7 @@ describe("RegularDeps.updateRegularDeps", () => {
 		// Workspace package package.json
 		writePackageJson(pkgDir, {
 			name: "@savvy-web/core",
-			dependencies: { effect: "^3.0.0" },
+			devDependencies: { effect: "^3.0.0" },
 		});
 
 		mockGetPackageInfosAsync.mockResolvedValue({
@@ -279,14 +295,14 @@ describe("RegularDeps.updateRegularDeps", () => {
 		expect(rootPkg.devDependencies.effect).toBe("^3.1.0");
 
 		const corePkg = readPackageJson(pkgDir);
-		expect(corePkg.dependencies.effect).toBe("^3.1.0");
+		expect(corePkg.devDependencies.effect).toBe("^3.1.0");
 	});
 
 	it("continues when npm query fails for one dep", async () => {
 		const dir = makeTempDir();
 		writePackageJson(dir, {
 			name: "root",
-			dependencies: {
+			devDependencies: {
 				"bad-pkg": "^1.0.0",
 				"good-pkg": "^1.0.0",
 			},
@@ -308,7 +324,7 @@ describe("RegularDeps.updateRegularDeps", () => {
 		const dir = makeTempDir();
 		writePackageJson(dir, {
 			name: "root",
-			dependencies: { effect: "~3.0.0" },
+			devDependencies: { effect: "~3.0.0" },
 		});
 
 		mockGetPackageInfosAsync.mockResolvedValue({});
@@ -321,14 +337,13 @@ describe("RegularDeps.updateRegularDeps", () => {
 		expect(result[0].to).toBe("~3.1.0");
 
 		const pkg = readPackageJson(dir);
-		expect(pkg.dependencies.effect).toBe("~3.1.0");
+		expect(pkg.devDependencies.effect).toBe("~3.1.0");
 	});
 
-	it("deduplicates when dep appears in both dependencies and devDependencies", async () => {
+	it("finds dep in devDependencies field", async () => {
 		const dir = makeTempDir();
 		writePackageJson(dir, {
 			name: "root",
-			dependencies: { effect: "^3.0.0" },
 			devDependencies: { effect: "^3.0.0" },
 		});
 
@@ -338,7 +353,6 @@ describe("RegularDeps.updateRegularDeps", () => {
 			effect: "3.1.0",
 		});
 
-		// Should only have 1 result, not 2
 		expect(result).toHaveLength(1);
 		expect(result[0]).toMatchObject({
 			dependency: "effect",
@@ -351,7 +365,7 @@ describe("RegularDeps.updateRegularDeps", () => {
 		const dir = makeTempDir();
 		writePackageJson(dir, {
 			name: "root",
-			dependencies: { lodash: "^4.0.0" },
+			devDependencies: { lodash: "^4.0.0" },
 		});
 
 		mockGetPackageInfosAsync.mockResolvedValue({});
@@ -366,7 +380,7 @@ describe("RegularDeps.updateRegularDeps", () => {
 		const dir = makeTempDir();
 		writePackageJson(dir, {
 			name: "root",
-			dependencies: { effect: "^3.0.0" },
+			devDependencies: { effect: "^3.0.0" },
 		});
 
 		mockGetPackageInfosAsync.mockRejectedValue(new Error("workspace detection failed"));
@@ -381,7 +395,7 @@ describe("RegularDeps.updateRegularDeps", () => {
 			dependency: "effect",
 			from: "^3.0.0",
 			to: "^3.1.0",
-			type: "regular",
+			type: "devDependency",
 		});
 	});
 
@@ -389,7 +403,7 @@ describe("RegularDeps.updateRegularDeps", () => {
 		const dir = makeTempDir();
 		writePackageJson(dir, {
 			name: "root",
-			dependencies: { effect: "^3.0.0" },
+			devDependencies: { effect: "^3.0.0" },
 		});
 
 		mockGetPackageInfosAsync.mockResolvedValue({});
@@ -401,7 +415,7 @@ describe("RegularDeps.updateRegularDeps", () => {
 		expect(result).toHaveLength(0);
 	});
 
-	it("updates deps in optionalDependencies", async () => {
+	it("skips deps in optionalDependencies", async () => {
 		const dir = makeTempDir();
 		writePackageJson(dir, {
 			name: "root",
@@ -414,18 +428,18 @@ describe("RegularDeps.updateRegularDeps", () => {
 			effect: "3.1.0",
 		});
 
-		expect(result).toHaveLength(1);
-		expect(result[0].to).toBe("^3.1.0");
+		expect(result).toHaveLength(0);
 
+		// Verify optionalDependencies was NOT changed
 		const pkg = readPackageJson(dir);
-		expect(pkg.optionalDependencies.effect).toBe("^3.1.0");
+		expect(pkg.optionalDependencies.effect).toBe("^3.0.0");
 	});
 
 	it("preserves exact version (no prefix)", async () => {
 		const dir = makeTempDir();
 		writePackageJson(dir, {
 			name: "root",
-			dependencies: { effect: "3.0.0" },
+			devDependencies: { effect: "3.0.0" },
 		});
 
 		mockGetPackageInfosAsync.mockResolvedValue({});
@@ -438,6 +452,6 @@ describe("RegularDeps.updateRegularDeps", () => {
 		expect(result[0].to).toBe("3.1.0");
 
 		const pkg = readPackageJson(dir);
-		expect(pkg.dependencies.effect).toBe("3.1.0");
+		expect(pkg.devDependencies.effect).toBe("3.1.0");
 	});
 });

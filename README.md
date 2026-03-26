@@ -4,19 +4,20 @@
 [![GitHub Action](https://img.shields.io/badge/GitHub-Action-blue?logo=github)](https://github.com/savvy-web/pnpm-config-dependency-action)
 [![Node.js 24+](https://img.shields.io/badge/Node.js-24%2B-green?logo=node.js)](https://nodejs.org)
 
-Automates updates to pnpm config dependencies and regular dependencies with
-automated PR creation. Unlike Dependabot, this action supports
-[pnpm config dependencies](https://pnpm.io/config-dependencies), enabling
-centralized version management across monorepos.
+Automates updates to pnpm config dependencies, dev dependencies, and peer
+dependency ranges with automated PR creation. Unlike Dependabot, this action
+supports [pnpm config dependencies](https://pnpm.io/config-dependencies),
+enabling centralized version management across monorepos.
 
 ## Features
 
-- Updates config dependencies via `pnpm add --config` and regular dependencies
-  via `pnpm up --latest` with glob pattern support
+- Updates config dependencies via direct npm queries and YAML editing
+- Updates dev dependencies via direct npm registry queries with glob pattern support
+- Syncs peer dependency ranges with configurable lock/minor strategies
 - Creates verified, signed commits through GitHub App authentication
 - Integrates with Changesets for automated versioning of affected packages
 - Runs custom post-update commands (linting, testing, building)
-- Produces detailed PR summaries with dependency change tables
+- Produces detailed per-package PR summaries with dependency change tables
 
 ## Quick Start
 
@@ -41,8 +42,12 @@ jobs:
             typescript
             @biomejs/biome
           dependencies: |
-            effect
-            @effect/*
+            vitest
+            @savvy-web/*
+          peer-lock: |
+            vitest-agent-reporter
+          peer-minor: |
+            vitest
           run: |
             pnpm lint:fix
             pnpm test
@@ -56,21 +61,21 @@ jobs:
 | `app-private-key` | Yes | -- | GitHub App private key (PEM format) |
 | `branch` | No | `pnpm/config-deps` | Branch name for the update PR |
 | `config-dependencies` | No | `""` | Config dependencies to update (one per line) |
-| `dependencies` | No | `""` | Regular dependencies to update (one per line, supports globs) |
-| `update-pnpm` | No | `true` | Update pnpm version in `packageManager` and `devEngines` fields |
+| `dependencies` | No | `""` | Dev dependencies to update (one per line, supports globs) |
+| `peer-lock` | No | `""` | Peer ranges that sync on every version bump (one per line) |
+| `peer-minor` | No | `""` | Peer ranges that sync on minor+ bumps only (one per line) |
+| `update-pnpm` | No | `true` | Update pnpm version |
 | `run` | No | `""` | Commands to run after updates (one per line) |
-| `changesets` | No | `true` | Create changesets for version management when `.changeset/` exists |
+| `changesets` | No | `true` | Create changesets when `.changeset/` exists |
 | `dry-run` | No | `false` | Detect changes without committing |
-| `log-level` | No | `info` | Logging verbosity (`info` or `debug`) |
+| `log-level` | No | `auto` | Logging verbosity |
 | `timeout` | No | `180` | Maximum time in seconds before cancelling |
-| `auto-merge` | No | `""` | Enable auto-merge on the PR (`merge`, `squash`, or `rebase`) |
-| `skip-token-revoke` | No | `false` | Skip revoking the GitHub App token on cleanup |
+| `auto-merge` | No | `""` | Enable auto-merge (`merge`, `squash`, or `rebase`) |
 
 ## Outputs
 
 | Output | Description |
 | -------- | ------------- |
-| `token` | Generated GitHub App installation token |
 | `pr-number` | Pull request number (if created or updated) |
 | `pr-url` | Pull request URL (if created or updated) |
 | `updates-count` | Number of dependencies updated |

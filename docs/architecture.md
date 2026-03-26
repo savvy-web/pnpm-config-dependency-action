@@ -41,7 +41,8 @@ The core orchestration logic. Executes 14 steps sequentially:
 3. Capture lockfile state (before)
 4. Upgrade pnpm (if `update-pnpm` is enabled)
 5. Update config dependencies
-6. Update regular dependencies
+6. Update dev dependencies
+6b. Sync peer dependency ranges
 7. Clean install (remove `node_modules` and `pnpm-lock.yaml`, then
    `pnpm install`)
 8. Format `pnpm-workspace.yaml`
@@ -60,22 +61,30 @@ step.
 ```text
 src/
 ├── main.ts                    # Single entry point (Action.run)
-├── lib/
-│   ├── schemas/
-│   │   ├── index.ts           # Effect Schema definitions for all types
-│   │   └── errors.ts          # TaggedError definitions
-│   ├── github/
-│   │   └── branch.ts          # Branch management + API commits
-│   ├── pnpm/
-│   │   ├── config.ts          # Config dependency updates
-│   │   ├── regular.ts         # Regular dependency updates
-│   │   ├── format.ts          # pnpm-workspace.yaml formatting
-│   │   └── upgrade.ts         # pnpm version upgrade logic
-│   ├── changeset/
-│   │   └── create.ts          # Changeset file generation
-│   └── lockfile/
-│       └── compare.ts         # Lockfile snapshot comparison
-└── types/index.ts             # Re-exports from schemas
+├── program.ts                 # Main program and orchestration logic
+├── errors/
+│   └── errors.ts              # Schema.TaggedError definitions
+├── schemas/
+│   └── domain.ts              # Effect Schema definitions
+├── layers/
+│   └── app.ts                 # makeAppLayer() layer composition
+├── services/
+│   ├── branch.ts              # BranchManager service
+│   ├── changesets.ts          # Changesets service
+│   ├── config-deps.ts         # ConfigDeps service
+│   ├── lockfile.ts            # Lockfile service + helpers
+│   ├── peer-sync.ts           # PeerSync (computePeerRange, syncPeers)
+│   ├── pnpm-upgrade.ts        # PnpmUpgrade service
+│   ├── regular-deps.ts        # RegularDeps service
+│   ├── report.ts              # Report service (PR, summary, commit msg)
+│   └── workspace-yaml.ts      # WorkspaceYaml service
+└── utils/
+    ├── deps.ts                # parseConfigEntry, matchesPattern, parseSpecifier
+    ├── fixtures.test.ts       # Shared test fixtures
+    ├── input.ts               # parseMultiValueInput
+    ├── markdown.ts            # npmUrl, cleanVersion
+    ├── pnpm.ts                # parsePnpmVersion, formatPnpmVersion, detectIndent
+    └── semver.ts              # resolveLatestInRange
 ```
 
 ## Technology Stack
@@ -111,6 +120,7 @@ Inputs (action.yml)
   ├─ update-pnpm ───────────> upgradePnpm() ──────> version change
   ├─ config-dependencies ──> pnpm add --config ──> version changes
   ├─ dependencies ──────────> npm registry query ─> version changes
+  ├─ peer-lock/peer-minor ──> syncPeers() ────────> peer range changes
   │
   ├─ Lockfile (before) ───┐
   ├─ Lockfile (after) ────┤──> compareLockfiles() ──> LockfileChange[]

@@ -11,7 +11,7 @@ services with `Context.Tag` + `Layer`. Layer composition centralized in
 **Architecture (current):**
 
 - **Effect-first services:** All domain functions are Effect services in `src/services/`:
-  `BranchManager`, `PnpmUpgrade`, `ConfigDeps`, `RegularDeps`, `Report`,
+  `BranchManager`, `PnpmUpgrade`, `ConfigDeps`, `RegularDeps`, `PeerSync`, `Report`,
   `Lockfile`, `Changesets`, `WorkspaceYaml`
 - **Layer composition:** `makeAppLayer(token, dryRun)` in `src/layers/app.ts` wires
   all library and domain layers together
@@ -29,6 +29,7 @@ services with `Context.Tag` + `Layer`. Layer composition centralized in
 - Branch management with delete-and-recreate strategy via `BranchManager` service
 - Config dependency updates via `ConfigDeps` service (uses `NpmRegistry`)
 - Regular dependency updates via `RegularDeps` service (uses `NpmRegistry`)
+- Peer dependency range syncing via `PeerSync` service (`peer-lock` and `peer-minor` strategies)
 - pnpm self-upgrade via `PnpmUpgrade` service
 - Clean install after updates
 - Workspace YAML formatting via `WorkspaceYaml` service

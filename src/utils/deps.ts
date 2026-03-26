@@ -60,8 +60,8 @@ export const parseSpecifier = (specifier: string): { prefix: string; version: st
 	if (specifier.startsWith("catalog:")) return null;
 	if (specifier.startsWith("workspace:")) return null;
 
-	// Match optional prefix (^ or ~) followed by a semver-like version
-	const match = specifier.match(/^(\^|~)?(\d+\.\d+\.\d+.*)$/);
+	// Match optional prefix (>=, <=, >, <, ^, ~) followed by a semver-like version
+	const match = specifier.match(/^(>=|<=|>|<|\^|~)?(\d+\.\d+\.\d+.*)$/);
 	if (!match) return null;
 
 	return {

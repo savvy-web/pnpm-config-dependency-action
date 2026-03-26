@@ -28,7 +28,7 @@ export const DependencyUpdateResult = Schema.Struct({
  dependency: NonEmptyString,
  from: Schema.NullOr(Schema.String),
  to: NonEmptyString,
- type: Schema.Literal("config", "regular"),
+ type: Schema.Literal("config", "dependency", "devDependency", "peerDependency", "optionalDependency"),
  package: Schema.NullOr(Schema.String),
 });
 
@@ -65,7 +65,7 @@ export const PullRequestResult = Schema.Struct({
 
 /** Lockfile change detected during comparison. */
 export const LockfileChange = Schema.Struct({
- type: Schema.Literal("config", "regular"),
+ type: Schema.Literal("config", "dependency", "devDependency", "peerDependency", "optionalDependency"),
  dependency: NonEmptyString,
  from: Schema.NullOr(Schema.String),
  to: NonEmptyString,

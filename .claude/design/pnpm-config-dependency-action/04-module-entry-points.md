@@ -22,6 +22,10 @@ const dependencies = parseMultiValueInput(rawDeps);
 const rawRun = yield* Config.string("run").pipe(Config.withDefault(""));
 const run = parseMultiValueInput(rawRun);
 const updatePnpm = yield* Config.boolean("update-pnpm").pipe(Config.withDefault(true));
+const rawPeerLock = yield* Config.string("peer-lock").pipe(Config.withDefault(""));
+const peerLock = parseMultiValueInput(rawPeerLock);
+const rawPeerMinor = yield* Config.string("peer-minor").pipe(Config.withDefault(""));
+const peerMinor = parseMultiValueInput(rawPeerMinor);
 const changesets = yield* Config.boolean("changesets").pipe(Config.withDefault(true));
 const autoMerge = yield* Config.string("auto-merge").pipe(Config.withDefault("" as const));
 const dryRun = yield* Config.boolean("dry-run").pipe(Config.withDefault(false));
@@ -29,7 +33,8 @@ const dryRun = yield* Config.boolean("dry-run").pipe(Config.withDefault(false));
 // Cross-validate: at least one update type must be active
 const hasConfig = configDependencies.length > 0;
 const hasDeps = dependencies.length > 0;
-if (!hasConfig && !hasDeps && !updatePnpm) {
+const hasPeers = peerLock.length > 0 || peerMinor.length > 0;
+if (!hasConfig && !hasDeps && !updatePnpm && !hasPeers) {
  return yield* Effect.fail(/* ActionInputError */);
 }
 ```
@@ -58,7 +63,7 @@ The module exports a `program` Effect and an `innerProgram` function:
 - `program` handles input parsing, token lifecycle, and error handling
 - `innerProgram(inputs, dryRun)` contains the 16-step orchestration logic
   and requires all domain services (`BranchManager`, `PnpmUpgrade`, `ConfigDeps`,
-  `RegularDeps`, `Report`, `Lockfile`, `Changesets`) plus library services
+  `RegularDeps`, `PeerSync`, `Report`, `Lockfile`, `Changesets`) plus library services
   (`ActionOutputs`, `CheckRun`, `CommandRunner`) in its context
 
 The module-level execution uses `Action.run` which handles all error

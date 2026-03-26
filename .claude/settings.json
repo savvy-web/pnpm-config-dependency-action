@@ -1,5 +1,4 @@
 {
-	"plansDirectory": ".claude/plans",
 	"permissions": {
 		"allow": ["Write(./**)", "Edit(./**)", "mcp__playwright", "mcp__github"]
 	},
@@ -8,5 +7,6 @@
 		"workflow@savvy-web-claude-tools": true,
 		"changesets@savvy-web-systems": true,
 		"vitest-agent-reporter@spencerbeggs": true
-	}
+	},
+	"plansDirectory": ".claude/plans"
 }

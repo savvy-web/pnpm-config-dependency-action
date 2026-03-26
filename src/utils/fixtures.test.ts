@@ -10,7 +10,7 @@ import type { ChangesetFile, DependencyUpdateResult, LockfileChange, PullRequest
 describe("fixtures", () => {
 	it("exports valid fixture types", () => {
 		expect(configUpdate.type).toBe("config");
-		expect(regularUpdate.type).toBe("regular");
+		expect(regularUpdate.type).toBe("devDependency");
 	});
 });
 
@@ -54,7 +54,7 @@ export const regularUpdate: DependencyUpdateResult = {
 	dependency: "effect",
 	from: "3.0.0",
 	to: "3.1.0",
-	type: "regular",
+	type: "devDependency",
 	package: "@savvy-web/core",
 };
 
@@ -62,7 +62,7 @@ export const regularUpdateGlob: DependencyUpdateResult = {
 	dependency: "@effect/*",
 	from: null,
 	to: "latest",
-	type: "regular",
+	type: "devDependency",
 	package: null,
 };
 
@@ -90,7 +90,7 @@ export const configLockfileChange: LockfileChange = {
 };
 
 export const regularLockfileChange: LockfileChange = {
-	type: "regular",
+	type: "dependency",
 	dependency: "effect",
 	from: "3.0.0",
 	to: "3.1.0",
@@ -98,7 +98,7 @@ export const regularLockfileChange: LockfileChange = {
 };
 
 export const multiPackageLockfileChange: LockfileChange = {
-	type: "regular",
+	type: "dependency",
 	dependency: "@effect/schema",
 	from: "0.60.0",
 	to: "0.61.0",

@@ -195,7 +195,7 @@ describe("DependencyUpdateFailures", () => {
 					error: { command: "add --config", exitCode: 1, stderr: "not found" },
 				},
 			],
-			successful: [{ dependency: "effect", from: "3.0.0", to: "3.1.0", type: "regular", package: null }],
+			successful: [{ dependency: "effect", from: "3.0.0", to: "3.1.0", type: "devDependency", package: null }],
 		});
 
 		expect(error._tag).toBe("DependencyUpdateFailures");
@@ -215,7 +215,7 @@ describe("DependencyUpdateFailures", () => {
 					error: { command: "add --config", exitCode: 1, stderr: "err" },
 				},
 			],
-			successful: [{ dependency: "effect", from: null, to: "3.1.0", type: "regular", package: null }],
+			successful: [{ dependency: "effect", from: null, to: "3.1.0", type: "devDependency", package: null }],
 		});
 
 		expect(error.message).toBe("Failed to update 2 dependencies: typescript, biome. 1 succeeded.");
@@ -224,7 +224,7 @@ describe("DependencyUpdateFailures", () => {
 	it("partialSuccess returns true when some succeeded", () => {
 		const error = new DependencyUpdateFailures({
 			failures: [{ dependency: "ts", error: { command: "add", exitCode: 1, stderr: "" } }],
-			successful: [{ dependency: "effect", from: null, to: "3.1.0", type: "regular", package: null }],
+			successful: [{ dependency: "effect", from: null, to: "3.1.0", type: "devDependency", package: null }],
 		});
 
 		expect(error.partialSuccess).toBe(true);

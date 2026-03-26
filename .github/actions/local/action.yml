@@ -1,5 +1,5 @@
 name: PNPM Config Dependency Action
-description: Updates pnpm config dependencies and regular dependencies, creating PRs with changesets
+description: Updates pnpm config dependencies, dev dependencies, and peer dependency ranges, creating PRs with changesets
 branding:
   icon: package
   color: yellow
@@ -24,11 +24,28 @@ inputs:
     default: ""
   dependencies:
     description: |
-      Regular dependencies to update (one per line, supports globs).
+      Dev dependencies to update (one per line, supports globs).
+      Matches against devDependencies in all workspace package.json files.
       Example:
-        effect
-        @effect/*
+        vitest
         @savvy-web/*
+    required: false
+    default: ""
+  peer-lock:
+    description: |
+      Dependencies whose peerDependency range syncs on every version bump.
+      Explicit package names only (no globs). Must also match a dependencies pattern.
+      Example:
+        vitest-agent-reporter
+    required: false
+    default: ""
+  peer-minor:
+    description: |
+      Dependencies whose peerDependency range syncs only on minor+ version bumps.
+      Explicit package names only (no globs). Must also match a dependencies pattern.
+      Example:
+        vitest
+        @vitest/coverage-v8
     required: false
     default: ""
   update-pnpm:

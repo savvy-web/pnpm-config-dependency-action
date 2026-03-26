@@ -80,6 +80,8 @@ jobs:
           dependencies: |
             effect
             @effect/*
+          peer-minor: |
+            vitest
           run: |
             pnpm lint:fix
             pnpm test
@@ -98,14 +100,25 @@ config-dependencies: |
   @savvy-web/pnpm-plugin-silk
 ```
 
-**Regular dependencies** (`dependencies` input) are packages in your workspace
-`package.json` files. Glob patterns are supported:
+**Dev dependencies** (`dependencies` input) are packages in your workspace
+`package.json` `devDependencies` fields. Glob patterns are supported:
 
 ```yaml
 dependencies: |
   effect
   @effect/*
   @savvy-web/*
+```
+
+**Peer dependency syncing** (`peer-lock` and `peer-minor` inputs) keeps peer
+ranges in sync with dev dependencies:
+
+```yaml
+peer-lock: |
+  vitest-agent-reporter
+peer-minor: |
+  vitest
+  @vitest/coverage-v8
 ```
 
 ## Step 4: Verify

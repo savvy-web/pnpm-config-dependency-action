@@ -10,6 +10,7 @@ import {
 	mixedUpdates,
 	packageChangeset,
 	pullRequest,
+	regularUpdate,
 	regularUpdateGlob,
 	regularUpdates,
 	rootChangeset,
@@ -67,17 +68,17 @@ describe("generateCommitMessage", () => {
 		expect(message).toContain("- @biomejs/biome: new -> 1.6.1");
 	});
 
-	it("generates message for regular-only updates", async () => {
+	it("generates message for dev-only updates", async () => {
 		const message = await withReport((r) => r.generateCommitMessage(regularUpdates, "my-app"));
 
-		expect(message).toContain("chore(deps): update 2 regular dependencies");
+		expect(message).toContain("chore(deps): update 2 dev dependencies");
 		expect(message).toContain("- effect: 3.0.0 -> 3.1.0");
 	});
 
 	it("generates message for mixed updates", async () => {
 		const message = await withReport((r) => r.generateCommitMessage(mixedUpdates, "my-app"));
 
-		expect(message).toContain("chore(deps): update 2 config and 2 regular dependencies");
+		expect(message).toContain("chore(deps): update 2 config and 2 dev dependencies");
 	});
 
 	it("includes sign-off with app slug", async () => {
@@ -94,28 +95,29 @@ describe("generateCommitMessage", () => {
 });
 
 describe("generatePRBody", () => {
-	it("generates body with config dependencies table", async () => {
+	it("generates body with per-package tables", async () => {
 		const body = await withReport((r) => r.generatePRBody(configUpdates, []));
 
-		expect(body).toContain("### Config Dependencies");
-		expect(body).toContain("| Package | From | To |");
-		expect(body).toContain(`[\`typescript\`](https://www.npmjs.com/package/typescript)`);
+		expect(body).toContain("### root workspace");
+		expect(body).toContain("| Dependency | Type | Action | From | To |");
+		expect(body).toContain("typescript");
 		expect(body).toContain("5.3.3");
 		expect(body).toContain("5.4.0");
 	});
 
-	it("generates body with regular dependencies table", async () => {
-		const body = await withReport((r) => r.generatePRBody(regularUpdates, []));
+	it("groups regular dependencies by package", async () => {
+		const body = await withReport((r) => r.generatePRBody([regularUpdate], []));
 
-		expect(body).toContain("### Regular Dependencies");
-		expect(body).toContain(`[\`effect\`](https://www.npmjs.com/package/effect)`);
+		expect(body).toContain("### @savvy-web/core");
+		expect(body).toContain("effect");
+		expect(body).toContain("devDependency");
 	});
 
-	it("generates body with both tables", async () => {
+	it("generates body with multiple package sections for mixed updates", async () => {
 		const body = await withReport((r) => r.generatePRBody(mixedUpdates, []));
 
-		expect(body).toContain("### Config Dependencies");
-		expect(body).toContain("### Regular Dependencies");
+		expect(body).toContain("### root workspace");
+		expect(body).toContain("### @savvy-web/core");
 	});
 
 	it("includes changeset details sections", async () => {
@@ -127,11 +129,10 @@ describe("generatePRBody", () => {
 		expect(body).toContain("<summary>root workspace</summary>");
 	});
 
-	it("handles glob patterns in dependency names (no link)", async () => {
+	it("shows glob patterns in dependency column", async () => {
 		const body = await withReport((r) => r.generatePRBody([regularUpdateGlob], []));
 
-		expect(body).toContain("`@effect/*`");
-		expect(body).not.toContain("[`@effect/*`]");
+		expect(body).toContain("@effect/*");
 	});
 
 	it("includes footer", async () => {
@@ -141,10 +142,11 @@ describe("generatePRBody", () => {
 		expect(body).toContain("pnpm-config-dependency-action");
 	});
 
-	it("shows _new_ for new config dependencies", async () => {
+	it("shows added action for new dependencies", async () => {
 		const body = await withReport((r) => r.generatePRBody([configUpdateNew], []));
 
-		expect(body).toContain("_new_");
+		expect(body).toContain("added");
+		expect(body).toContain("\u2014");
 	});
 });
 
@@ -185,11 +187,12 @@ describe("generateSummary", () => {
 		expect(result).toContain("**Changesets created:** 2");
 	});
 
-	it("shows config dependency table with clean versions", async () => {
-		const updates = [{ ...configUpdate, to: "5.4.0+sha512-abc123" }];
+	it("shows per-package tables in summary", async () => {
+		const updates = [configUpdate, regularUpdate];
 		const result = await withReport((r) => r.generateSummary(updates, [], null, false));
 
-		expect(result).toContain("5.4.0");
-		expect(result).not.toContain("sha512");
+		expect(result).toContain("root workspace");
+		expect(result).toContain("@savvy-web/core");
+		expect(result).toContain("| Dependency | Type | Action | From | To |");
 	});
 });

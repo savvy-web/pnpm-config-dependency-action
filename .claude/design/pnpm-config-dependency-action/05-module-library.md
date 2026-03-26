@@ -115,6 +115,36 @@ export class RegularDeps extends Context.Tag("RegularDeps")<RegularDeps, {
 - Deduplicates per path+dep to avoid duplicate PR table rows
 - Gracefully handles npm query failures per-dependency
 
+### src/services/peer-sync.ts - PeerSync
+
+Sync peerDependency ranges after devDependency updates based on `peer-lock` and
+`peer-minor` input configuration. Uses semver-effect for version parsing.
+
+**Exported functions:**
+
+- `computePeerRange(params)` - Compute new peer range based on strategy (returns Effect)
+- `syncPeers(config, devUpdates, workspaceRoot?)` - Sync all peer ranges
+
+**Types:**
+
+- `PeerStrategy` - `"lock" | "minor"`
+- `PeerSyncConfig` - `{ lock: ReadonlyArray<string>; minor: ReadonlyArray<string> }`
+
+**Strategies:**
+
+- `lock`: Sync peer range on every version bump (patch and minor)
+- `minor`: Sync peer range only on minor+ bumps, floor patch to `.0`
+
+**Algorithm:**
+
+1. Build strategy lookup map from config
+2. Get workspace package info for path resolution
+3. For each devDep update matching a strategy:
+   - Read the package.json
+   - Find the peerDependencies entry
+   - Compute new range using `computePeerRange`
+   - Write updated package.json
+
 ### src/services/lockfile.ts - Lockfile
 
 Compare lockfile snapshots before and after updates to detect changes.
