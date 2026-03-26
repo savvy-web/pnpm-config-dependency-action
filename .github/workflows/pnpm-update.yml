@@ -17,11 +17,9 @@ on:
         description: Logging verbosity
         type: choice
         options:
-          - auto
           - info
-          - verbose
           - debug
-        default: auto
+        default: debug
 concurrency:
   group: pnpm-update-${{ github.ref }}
   cancel-in-progress: true
@@ -51,6 +49,7 @@ jobs:
           branch: ${{ inputs.branch || 'pnpm/config-deps' }}
           dry-run: ${{ inputs.dry-run || false }}
           log-level: ${{ inputs.log-level || 'info' }}
+          auto-merge: "squash"
           config-dependencies: |
             @savvy-web/pnpm-plugin-silk
           dependencies: |
@@ -59,4 +58,4 @@ jobs:
             pnpm savvy-commit init
             pnpm savvy-lint init
             pnpm savvy-changesets init
-            pnpm lint:fix
+            pnpm biome format --write --max-diagnostics=none
