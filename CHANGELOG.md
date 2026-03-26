@@ -1,5 +1,18 @@
 # pnpm-config-dependency-action
 
+## 0.11.0
+
+### Features
+
+* [`4798d16`](https://github.com/savvy-web/pnpm-config-dependency-action/commit/4798d163ba9f2b99550a3412b78b8a0e67f5e92d) Add granular peer dependency sync with `peer-lock` and `peer-minor` inputs.
+
+- `peer-lock`: Sync peerDependency range on every devDependency version bump
+- `peer-minor`: Sync peerDependency range only on minor+ bumps (floor patch to .0)
+- Narrow `dependencies` input to match `devDependencies` only
+- Fix changeset table `Type` column to use specific values (`devDependency`, `peerDependency`, `dependency`, `config`)
+- Changesets only trigger on consumer-facing changes (peer range or runtime dependency changes), not devDependency-only updates
+- PR body uses per-package tables with Dependency/Type/Action/From/To columns
+
 ## 0.10.0
 
 ### Features
