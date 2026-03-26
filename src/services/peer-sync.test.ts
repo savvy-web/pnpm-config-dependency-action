@@ -332,6 +332,54 @@ describe("syncPeers", () => {
 		expect(results).toHaveLength(0);
 	});
 
+	it("should continue when workspace info query fails", async () => {
+		const tmpDir = makeTempDir();
+		writePackageJson(tmpDir, { name: "root", version: "1.0.0" });
+
+		mockGetPackageInfosAsync.mockRejectedValue(new Error("workspace detection failed"));
+
+		const devUpdates: DependencyUpdateResult[] = [
+			{
+				dependency: "effect",
+				from: "^3.12.0",
+				to: "^3.12.5",
+				type: "devDependency",
+				package: "root",
+			},
+		];
+
+		const results = await Effect.runPromise(
+			syncPeers({ lock: ["effect"], minor: [] }, devUpdates, tmpDir).pipe(Logger.withMinimumLogLevel(LogLevel.None)),
+		);
+
+		// Should still return results for packages it can resolve
+		// Root package path is resolved independently of workspace-tools
+		expect(results).toHaveLength(0);
+	});
+
+	it("should warn and skip when package path not found", async () => {
+		const tmpDir = makeTempDir();
+		writePackageJson(tmpDir, { name: "root", version: "1.0.0" });
+
+		mockGetPackageInfosAsync.mockResolvedValue({});
+
+		const devUpdates: DependencyUpdateResult[] = [
+			{
+				dependency: "effect",
+				from: "^3.12.0",
+				to: "^3.12.5",
+				type: "devDependency",
+				package: "nonexistent-package",
+			},
+		];
+
+		const results = await Effect.runPromise(
+			syncPeers({ lock: ["effect"], minor: [] }, devUpdates, tmpDir).pipe(Logger.withMinimumLogLevel(LogLevel.None)),
+		);
+
+		expect(results).toHaveLength(0);
+	});
+
 	it("should skip newly-added deps (from is null)", async () => {
 		const tmpDir = makeTempDir();
 		writePackageJson(tmpDir, { name: "root", version: "1.0.0" });

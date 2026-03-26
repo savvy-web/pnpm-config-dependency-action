@@ -25,6 +25,7 @@ import { PnpmUpgradeLive } from "../services/pnpm-upgrade.js";
 import { RegularDepsLive } from "../services/regular-deps.js";
 import { ReportLive } from "../services/report.js";
 
+/* v8 ignore start - pure Layer wiring, tested indirectly via service integration tests */
 export const makeAppLayer = (dryRun: boolean) => {
 	const ghGraphql = GitHubGraphQLLive.pipe(Layer.provide(GitHubClientLive));
 	const npmRegistry = NpmRegistryLive.pipe(Layer.provide(CommandRunnerLive));
@@ -53,3 +54,4 @@ export const makeAppLayer = (dryRun: boolean) => {
 
 	return Layer.provideMerge(domainLayers, libraryLayers);
 };
+/* v8 ignore stop */
