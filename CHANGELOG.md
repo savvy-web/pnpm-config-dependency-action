@@ -1,5 +1,11 @@
 # pnpm-config-dependency-action
 
+## 0.11.2
+
+### Other
+
+* [`f7c001d`](https://github.com/savvy-web/pnpm-config-dependency-action/commit/f7c001dd755f341d0210f3bf79623bdad1eec9e5) Upgrades internals for distribution
+
 ## 0.11.1
 
 ### Bug Fixes
