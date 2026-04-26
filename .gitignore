@@ -33,3 +33,4 @@ pnpm-release.json
 .claude/plans/
 .claude/plugins-debug.log
 .playwright-mcp
+docs/superpowers/
