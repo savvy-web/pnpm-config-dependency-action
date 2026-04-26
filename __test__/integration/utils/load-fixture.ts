@@ -1,11 +1,9 @@
 /**
  * Fixture loader for integration tests.
  *
- * Copies a committed fixture from __test__/integration/fixtures/<name>
+ * Copies a committed fixture from `__test__/integration/fixtures/<name>`
  * into a fresh temp directory and returns the temp path. Tests can then
  * mutate the temp copy without polluting the committed fixture.
- *
- * Excluded from test discovery via the __test__/&#42;&#42;/utils glob.
  */
 
 import { cpSync, mkdtempSync } from "node:fs";
