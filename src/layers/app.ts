@@ -6,6 +6,7 @@
  * @module layers/app
  */
 
+import { NodeContext } from "@effect/platform-node";
 import {
 	CheckRunLive,
 	CommandRunnerLive,
@@ -18,12 +19,14 @@ import {
 	PullRequestLive,
 } from "@savvy-web/github-action-effects";
 import { Layer } from "effect";
+import { WorkspacesLive as WorkspacesEffectLive } from "workspaces-effect";
 
 import { BranchManagerLive } from "../services/branch.js";
 import { ConfigDepsLive } from "../services/config-deps.js";
 import { PnpmUpgradeLive } from "../services/pnpm-upgrade.js";
 import { RegularDepsLive } from "../services/regular-deps.js";
 import { ReportLive } from "../services/report.js";
+import { WorkspacesLive } from "../services/workspaces.js";
 
 /* v8 ignore start - pure Layer wiring, tested indirectly via service integration tests */
 export const makeAppLayer = (dryRun: boolean) => {
@@ -32,6 +35,9 @@ export const makeAppLayer = (dryRun: boolean) => {
 	const gitBranch = GitBranchLive.pipe(Layer.provide(GitHubClientLive));
 	const gitCommit = GitCommitLive.pipe(Layer.provide(GitHubClientLive));
 	const prLayer = PullRequestLive.pipe(Layer.provide(Layer.merge(GitHubClientLive, ghGraphql)));
+
+	const workspacesEffect = WorkspacesEffectLive.pipe(Layer.provide(NodeContext.layer));
+	const workspaces = WorkspacesLive.pipe(Layer.provide(workspacesEffect));
 
 	const libraryLayers = Layer.mergeAll(
 		GitHubClientLive,
@@ -45,6 +51,7 @@ export const makeAppLayer = (dryRun: boolean) => {
 	);
 
 	const domainLayers = Layer.mergeAll(
+		workspaces,
 		BranchManagerLive.pipe(Layer.provide(Layer.mergeAll(gitBranch, gitCommit, CommandRunnerLive))),
 		PnpmUpgradeLive.pipe(Layer.provide(CommandRunnerLive)),
 		ConfigDepsLive.pipe(Layer.provide(npmRegistry)),
