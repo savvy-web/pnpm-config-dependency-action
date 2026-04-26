@@ -6,7 +6,6 @@
  * @module layers/app
  */
 
-import { NodeContext } from "@effect/platform-node";
 import {
 	CheckRunLive,
 	CommandRunnerLive,
@@ -19,7 +18,6 @@ import {
 	PullRequestLive,
 } from "@savvy-web/github-action-effects";
 import { Layer } from "effect";
-import { WorkspacesLive as WorkspacesEffectLive } from "workspaces-effect";
 
 import { BranchManagerLive } from "../services/branch.js";
 import { ConfigDepsLive } from "../services/config-deps.js";
@@ -36,8 +34,7 @@ export const makeAppLayer = (dryRun: boolean) => {
 	const gitCommit = GitCommitLive.pipe(Layer.provide(GitHubClientLive));
 	const prLayer = PullRequestLive.pipe(Layer.provide(Layer.merge(GitHubClientLive, ghGraphql)));
 
-	const workspacesEffect = WorkspacesEffectLive.pipe(Layer.provide(NodeContext.layer));
-	const workspaces = WorkspacesLive.pipe(Layer.provide(workspacesEffect));
+	const workspaces = WorkspacesLive;
 
 	const libraryLayers = Layer.mergeAll(
 		GitHubClientLive,

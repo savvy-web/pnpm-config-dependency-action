@@ -1,5 +1,5 @@
 import type { LockfileObject } from "@pnpm/lockfile.types";
-import { Effect, Either, LogLevel, Logger } from "effect";
+import { Effect, Either, Layer, LogLevel, Logger } from "effect";
 import { describe, expect, it, vi } from "vitest";
 
 // Hoist mock for @pnpm/lockfile.fs
@@ -13,20 +13,29 @@ vi.mock("@pnpm/lockfile.fs", () => ({
 
 import type { LockfileChange } from "../schemas/domain.js";
 import { Lockfile, LockfileLive, groupChangesByPackage } from "./lockfile.js";
+import type { WorkspacePackageInfo } from "./workspaces.js";
+import { Workspaces } from "./workspaces.js";
 
-// Mock workspace-tools so buildImporterToPackageMap doesn't hit the filesystem
-vi.mock("workspace-tools", () => ({
-	getPackageInfosAsync: vi.fn(() =>
-		Promise.resolve({
-			"@savvy-web/core": {
-				packageJsonPath: "/workspace/pkgs/core/package.json",
-			},
-			"@savvy-web/utils": {
-				packageJsonPath: "/workspace/pkgs/utils/package.json",
-			},
-		}),
-	),
-}));
+/**
+ * Mock Workspaces layer that returns a fixed package map for /workspace root.
+ *
+ * Maps importer paths to package names matching what the old workspace-tools
+ * mock returned, so all existing test assertions stay valid.
+ */
+const MockWorkspacesLive = Layer.succeed(Workspaces, {
+	listPackages: (_workspaceRoot) =>
+		Effect.succeed([
+			{ name: "@savvy-web/core", path: "/workspace/pkgs/core" },
+			{ name: "@savvy-web/utils", path: "/workspace/pkgs/utils" },
+		] as ReadonlyArray<WorkspacePackageInfo>),
+	importerMap: (_workspaceRoot) =>
+		Effect.succeed(
+			new Map<string, WorkspacePackageInfo>([
+				["pkgs/core", { name: "@savvy-web/core", path: "/workspace/pkgs/core" }],
+				["pkgs/utils", { name: "@savvy-web/utils", path: "/workspace/pkgs/utils" }],
+			]),
+		),
+});
 
 /**
  * Create a minimal LockfileObject for testing.
@@ -46,7 +55,11 @@ const runCompare = (before: LockfileObject, after: LockfileObject) =>
 		Effect.gen(function* () {
 			const lockfile = yield* Lockfile;
 			return yield* lockfile.compare(before, after, "/workspace");
-		}).pipe(Effect.provide(LockfileLive), Logger.withMinimumLogLevel(LogLevel.None)),
+		}).pipe(
+			Effect.provide(LockfileLive),
+			Effect.provide(MockWorkspacesLive),
+			Logger.withMinimumLogLevel(LogLevel.None),
+		),
 	);
 
 const runEffect = <A, E>(effect: Effect.Effect<A, E>) =>
@@ -110,7 +123,11 @@ describe("Lockfile.compare - null handling", () => {
 			Effect.gen(function* () {
 				const lockfile = yield* Lockfile;
 				return yield* lockfile.compare(null, after, "/workspace");
-			}).pipe(Effect.provide(LockfileLive), Logger.withMinimumLogLevel(LogLevel.None)),
+			}).pipe(
+				Effect.provide(LockfileLive),
+				Effect.provide(MockWorkspacesLive),
+				Logger.withMinimumLogLevel(LogLevel.None),
+			),
 		);
 		expect(changes).toEqual([]);
 	});
@@ -121,7 +138,11 @@ describe("Lockfile.compare - null handling", () => {
 			Effect.gen(function* () {
 				const lockfile = yield* Lockfile;
 				return yield* lockfile.compare(before, null, "/workspace");
-			}).pipe(Effect.provide(LockfileLive), Logger.withMinimumLogLevel(LogLevel.None)),
+			}).pipe(
+				Effect.provide(LockfileLive),
+				Effect.provide(MockWorkspacesLive),
+				Logger.withMinimumLogLevel(LogLevel.None),
+			),
 		);
 		expect(changes).toEqual([]);
 	});
@@ -131,7 +152,11 @@ describe("Lockfile.compare - null handling", () => {
 			Effect.gen(function* () {
 				const lockfile = yield* Lockfile;
 				return yield* lockfile.compare(null, null, "/workspace");
-			}).pipe(Effect.provide(LockfileLive), Logger.withMinimumLogLevel(LogLevel.None)),
+			}).pipe(
+				Effect.provide(LockfileLive),
+				Effect.provide(MockWorkspacesLive),
+				Logger.withMinimumLogLevel(LogLevel.None),
+			),
 		);
 		expect(changes).toEqual([]);
 	});
