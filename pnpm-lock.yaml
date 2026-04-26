@@ -54,6 +54,9 @@ importers:
       workspace-tools:
         specifier: 0.41.0
         version: 0.41.0
+      workspaces-effect:
+        specifier: ^0.4.1
+        version: 0.4.1(@effect/platform@0.96.1(effect@3.21.2))(effect@3.21.2)
       yaml:
         specifier: ^2.8.3
         version: 2.8.3
@@ -1094,7 +1097,6 @@ packages:
 
   '@types/parse-path@7.1.0':
     resolution: {integrity: sha512-EULJ8LApcVEPbrfND0cRQqutIOdiIgJ1Mgrhpy755r14xMohPTEpkV/k28SJvuOs9bHRFW8x+KeDAEPiGQPB9Q==}
-    deprecated: This is a stub types definition. parse-path provides its own type definitions, so you do not need this installed.
 
   '@types/unist@2.0.11':
     resolution: {integrity: sha512-CmBKiL6NNo/OqgmMn95Fk9Whlp2mtvIv+KNpQKN2F4SjvrEesubTRWGYSg+BnWZOnlCaSTU1sMpsBOzgbYhnsA==}
