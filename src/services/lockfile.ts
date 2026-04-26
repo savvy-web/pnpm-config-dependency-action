@@ -10,7 +10,7 @@ import { normalize } from "node:path";
 import { readWantedLockfile } from "@pnpm/lockfile.fs";
 import type { CatalogSnapshots, LockfileObject, ResolvedCatalogEntry } from "@pnpm/lockfile.types";
 import { Context, Effect, Layer } from "effect";
-import { getPackageInfosAsync } from "workspace-tools";
+import { getWorkspacePackagesSync } from "workspaces-effect";
 import { LockfileError } from "../errors/errors.js";
 import type { LockfileChange } from "../schemas/domain.js";
 
@@ -111,33 +111,35 @@ interface DependencySnapshot {
 }
 
 /**
- * Build a map from importer path to package name.
+ * Build a map from importer path (relative to workspace root, "." for root)
+ * to package name, sourced from workspaces-effect's synchronous scan.
+ *
+ * Unlike the previous workspace-tools-based implementation, this includes
+ * the root workspace package via getWorkspacePackagesSync, so importer "."
+ * resolves to the root's actual name rather than falling through to the bare
+ * importer id.
  */
 const buildImporterToPackageMap = (workspaceRoot: string): Effect.Effect<Map<string, string>, LockfileError> =>
 	Effect.gen(function* () {
-		const packageInfos = yield* Effect.tryPromise({
-			try: () => getPackageInfosAsync(workspaceRoot),
-			catch: (e) =>
-				new LockfileError({
-					operation: "read",
-					reason: `Failed to get package info: ${e}`,
-				}),
-		}).pipe(Effect.catchAll(() => Effect.succeed(undefined)));
+		let packageList: ReturnType<typeof getWorkspacePackagesSync> | undefined;
+		try {
+			packageList = getWorkspacePackagesSync(workspaceRoot);
+		} catch (e) {
+			yield* Effect.logWarning(`Failed to read workspace packages: ${String(e)}`);
+		}
 
-		const importerToPackage = new Map<string, string>();
+		const out = new Map<string, string>();
 		const normalizedRoot = normalize(workspaceRoot);
 
-		if (packageInfos) {
-			for (const [name, info] of Object.entries(packageInfos)) {
-				// Derive package directory from packageJsonPath
-				const pkgDir = normalize(info.packageJsonPath.replace(/\/package\.json$/, ""));
-				// Get relative path from workspace root
+		if (packageList) {
+			for (const pkg of packageList) {
+				const pkgDir = normalize(pkg.path);
 				const relativePath = pkgDir === normalizedRoot ? "." : pkgDir.replace(`${normalizedRoot}/`, "");
-				importerToPackage.set(relativePath, name);
+				out.set(relativePath, pkg.name);
 			}
 		}
 
-		return importerToPackage;
+		return out;
 	});
 
 /**
