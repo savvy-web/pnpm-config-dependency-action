@@ -4,19 +4,12 @@ import { join } from "node:path";
 import { NpmRegistryTest } from "@savvy-web/github-action-effects";
 import type { Context } from "effect";
 import { Effect, Layer, LogLevel, Logger } from "effect";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { FileSystemError } from "../errors/errors.js";
 import { matchesPattern, parseSpecifier } from "../utils/deps.js";
 import { RegularDeps, RegularDepsLive } from "./regular-deps.js";
+import type { WorkspacePackageInfo } from "./workspaces.js";
 import { Workspaces } from "./workspaces.js";
-
-// Mock workspace-tools to return our test workspace info
-const { mockGetPackageInfosAsync } = vi.hoisted(() => ({
-	mockGetPackageInfosAsync: vi.fn(),
-}));
-
-vi.mock("workspace-tools", () => ({
-	getPackageInfosAsync: (...args: unknown[]) => mockGetPackageInfosAsync(...args),
-}));
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Test Helpers
@@ -60,35 +53,43 @@ const makeRegistryState = (
 	return map;
 };
 
-// Stub Workspaces layer backed by mockGetPackageInfosAsync so existing tests
-// keep their behaviour until T10 rewrites them with a real Workspaces mock.
-const makeWorkspacesLayer = (workspaceRoot: string) =>
+/**
+ * Create a Workspaces layer that returns a fixed list of packages.
+ * Use this to control which package.json files the RegularDeps service sees.
+ */
+const mockWorkspaces = (packages: ReadonlyArray<WorkspacePackageInfo>): Layer.Layer<Workspaces> =>
 	Layer.succeed(Workspaces, {
-		listPackages: (_root) =>
-			Effect.gen(function* () {
-				const infos = yield* Effect.promise(() =>
-					(mockGetPackageInfosAsync(workspaceRoot) as Promise<Record<string, { packageJsonPath: string }>>).catch(
-						() => ({}) as Record<string, { packageJsonPath: string }>,
-					),
-				);
-				return Object.entries(infos).map(([name, info]) => ({
-					name,
-					path: info.packageJsonPath.replace(/\/package\.json$/, ""),
-				}));
-			}),
-		importerMap: (_root) => Effect.succeed(new Map()),
+		listPackages: () => Effect.succeed(packages),
+		importerMap: () => Effect.die("importerMap not used in regular-deps tests"),
+	});
+
+/**
+ * Create a Workspaces layer that fails with a FileSystemError.
+ * Used to test graceful degradation when workspace discovery fails.
+ */
+const failingWorkspaces = (): Layer.Layer<Workspaces> =>
+	Layer.succeed(Workspaces, {
+		listPackages: (root) =>
+			Effect.fail(
+				new FileSystemError({
+					operation: "read",
+					path: root,
+					reason: "workspace detection failed",
+				}),
+			),
+		importerMap: () => Effect.die("importerMap not used in regular-deps tests"),
 	});
 
 const runWithService = <A, E>(
 	fn: (service: Context.Tag.Service<typeof RegularDeps>) => Effect.Effect<A, E>,
 	packages?: Record<string, string>,
-	workspaceRoot?: string,
+	workspacesLayer?: Layer.Layer<Workspaces>,
 ) => {
 	const registryLayer = packages
 		? NpmRegistryTest.layer({ packages: makeRegistryState(packages) })
 		: NpmRegistryTest.empty();
-	const workspacesLayer = makeWorkspacesLayer(workspaceRoot ?? "");
-	const layer = RegularDepsLive.pipe(Layer.provide(Layer.merge(registryLayer, workspacesLayer)));
+	const wsLayer = workspacesLayer ?? mockWorkspaces([]);
+	const layer = RegularDepsLive.pipe(Layer.provide(Layer.merge(registryLayer, wsLayer)));
 	return Effect.runPromise(
 		Effect.gen(function* () {
 			const service = yield* RegularDeps;
@@ -204,11 +205,11 @@ describe("RegularDeps.updateRegularDeps", () => {
 			devDependencies: { effect: "^3.0.0" },
 		});
 
-		mockGetPackageInfosAsync.mockResolvedValue({});
-
-		const result = await runWithService((s) => s.updateRegularDeps(["effect"], dir), {
-			effect: "3.1.0",
-		});
+		const result = await runWithService(
+			(s) => s.updateRegularDeps(["effect"], dir),
+			{ effect: "3.1.0" },
+			mockWorkspaces([{ name: "root", path: dir }]),
+		);
 
 		expect(result).toHaveLength(1);
 		expect(result[0]).toMatchObject({
@@ -230,11 +231,11 @@ describe("RegularDeps.updateRegularDeps", () => {
 			devDependencies: { effect: "^3.1.0" },
 		});
 
-		mockGetPackageInfosAsync.mockResolvedValue({});
-
-		const result = await runWithService((s) => s.updateRegularDeps(["effect"], dir), {
-			effect: "3.1.0",
-		});
+		const result = await runWithService(
+			(s) => s.updateRegularDeps(["effect"], dir),
+			{ effect: "3.1.0" },
+			mockWorkspaces([{ name: "root", path: dir }]),
+		);
 
 		expect(result).toHaveLength(0);
 	});
@@ -249,12 +250,11 @@ describe("RegularDeps.updateRegularDeps", () => {
 			},
 		});
 
-		mockGetPackageInfosAsync.mockResolvedValue({});
-
-		const result = await runWithService((s) => s.updateRegularDeps(["@savvy-web/*"], dir), {
-			"@savvy-web/core": "1.1.0",
-			"@savvy-web/utils": "1.2.0",
-		});
+		const result = await runWithService(
+			(s) => s.updateRegularDeps(["@savvy-web/*"], dir),
+			{ "@savvy-web/core": "1.1.0", "@savvy-web/utils": "1.2.0" },
+			mockWorkspaces([{ name: "root", path: dir }]),
+		);
 
 		expect(result).toHaveLength(2);
 		expect(result.find((r) => r.dependency === "@savvy-web/core")?.to).toBe("^1.1.0");
@@ -271,11 +271,11 @@ describe("RegularDeps.updateRegularDeps", () => {
 			},
 		});
 
-		mockGetPackageInfosAsync.mockResolvedValue({});
-
-		const result = await runWithService((s) => s.updateRegularDeps(["effect", "@effect/*"], dir), {
-			"@effect/schema": "0.61.0",
-		});
+		const result = await runWithService(
+			(s) => s.updateRegularDeps(["effect", "@effect/*"], dir),
+			{ "@effect/schema": "0.61.0" },
+			mockWorkspaces([{ name: "root", path: dir }]),
+		);
 
 		// Only @effect/schema should be updated, effect with catalog: should be skipped
 		expect(result).toHaveLength(1);
@@ -299,15 +299,14 @@ describe("RegularDeps.updateRegularDeps", () => {
 			devDependencies: { effect: "^3.0.0" },
 		});
 
-		mockGetPackageInfosAsync.mockResolvedValue({
-			"@savvy-web/core": {
-				packageJsonPath: join(pkgDir, "package.json"),
-			},
-		});
-
-		const result = await runWithService((s) => s.updateRegularDeps(["effect"], dir), {
-			effect: "3.1.0",
-		});
+		const result = await runWithService(
+			(s) => s.updateRegularDeps(["effect"], dir),
+			{ effect: "3.1.0" },
+			mockWorkspaces([
+				{ name: "root", path: dir },
+				{ name: "@savvy-web/core", path: pkgDir },
+			]),
+		);
 
 		// Should have updates for both root and workspace package
 		expect(result).toHaveLength(2);
@@ -330,12 +329,12 @@ describe("RegularDeps.updateRegularDeps", () => {
 			},
 		});
 
-		mockGetPackageInfosAsync.mockResolvedValue({});
-
 		// Only provide "good-pkg" in registry; "bad-pkg" will fail automatically
-		const result = await runWithService((s) => s.updateRegularDeps(["bad-pkg", "good-pkg"], dir), {
-			"good-pkg": "2.0.0",
-		});
+		const result = await runWithService(
+			(s) => s.updateRegularDeps(["bad-pkg", "good-pkg"], dir),
+			{ "good-pkg": "2.0.0" },
+			mockWorkspaces([{ name: "root", path: dir }]),
+		);
 
 		// Should still update good-pkg even though bad-pkg query failed
 		expect(result).toHaveLength(1);
@@ -349,11 +348,11 @@ describe("RegularDeps.updateRegularDeps", () => {
 			devDependencies: { effect: "~3.0.0" },
 		});
 
-		mockGetPackageInfosAsync.mockResolvedValue({});
-
-		const result = await runWithService((s) => s.updateRegularDeps(["effect"], dir), {
-			effect: "3.1.0",
-		});
+		const result = await runWithService(
+			(s) => s.updateRegularDeps(["effect"], dir),
+			{ effect: "3.1.0" },
+			mockWorkspaces([{ name: "root", path: dir }]),
+		);
 
 		expect(result).toHaveLength(1);
 		expect(result[0].to).toBe("~3.1.0");
@@ -369,11 +368,11 @@ describe("RegularDeps.updateRegularDeps", () => {
 			devDependencies: { effect: "^3.0.0" },
 		});
 
-		mockGetPackageInfosAsync.mockResolvedValue({});
-
-		const result = await runWithService((s) => s.updateRegularDeps(["effect"], dir), {
-			effect: "3.1.0",
-		});
+		const result = await runWithService(
+			(s) => s.updateRegularDeps(["effect"], dir),
+			{ effect: "3.1.0" },
+			mockWorkspaces([{ name: "root", path: dir }]),
+		);
 
 		expect(result).toHaveLength(1);
 		expect(result[0]).toMatchObject({
@@ -390,9 +389,11 @@ describe("RegularDeps.updateRegularDeps", () => {
 			devDependencies: { lodash: "^4.0.0" },
 		});
 
-		mockGetPackageInfosAsync.mockResolvedValue({});
-
-		const result = await runWithService((s) => s.updateRegularDeps(["effect"], dir));
+		const result = await runWithService(
+			(s) => s.updateRegularDeps(["effect"], dir),
+			undefined,
+			mockWorkspaces([{ name: "root", path: dir }]),
+		);
 
 		// No deps match the pattern, so empty result
 		expect(result).toHaveLength(0);
@@ -405,20 +406,15 @@ describe("RegularDeps.updateRegularDeps", () => {
 			devDependencies: { effect: "^3.0.0" },
 		});
 
-		mockGetPackageInfosAsync.mockRejectedValue(new Error("workspace detection failed"));
+		// Workspaces service fails — impl should gracefully degrade to empty package list
+		const result = await runWithService(
+			(s) => s.updateRegularDeps(["effect"], dir),
+			{ effect: "3.1.0" },
+			failingWorkspaces(),
+		);
 
-		const result = await runWithService((s) => s.updateRegularDeps(["effect"], dir), {
-			effect: "3.1.0",
-		});
-
-		// Should still update root package.json even when workspace info fails
-		expect(result).toHaveLength(1);
-		expect(result[0]).toMatchObject({
-			dependency: "effect",
-			from: "^3.0.0",
-			to: "^3.1.0",
-			type: "devDependency",
-		});
+		// Graceful degradation: no packages found, so no updates
+		expect(result).toHaveLength(0);
 	});
 
 	it("returns empty when package not found in registry", async () => {
@@ -428,10 +424,12 @@ describe("RegularDeps.updateRegularDeps", () => {
 			devDependencies: { effect: "^3.0.0" },
 		});
 
-		mockGetPackageInfosAsync.mockResolvedValue({});
-
 		// Empty registry — no packages registered, so query will fail
-		const result = await runWithService((s) => s.updateRegularDeps(["effect"], dir));
+		const result = await runWithService(
+			(s) => s.updateRegularDeps(["effect"], dir),
+			undefined,
+			mockWorkspaces([{ name: "root", path: dir }]),
+		);
 
 		// queryLatestVersion returns null when registry query fails
 		expect(result).toHaveLength(0);
@@ -444,11 +442,11 @@ describe("RegularDeps.updateRegularDeps", () => {
 			optionalDependencies: { effect: "^3.0.0" },
 		});
 
-		mockGetPackageInfosAsync.mockResolvedValue({});
-
-		const result = await runWithService((s) => s.updateRegularDeps(["effect"], dir), {
-			effect: "3.1.0",
-		});
+		const result = await runWithService(
+			(s) => s.updateRegularDeps(["effect"], dir),
+			{ effect: "3.1.0" },
+			mockWorkspaces([{ name: "root", path: dir }]),
+		);
 
 		expect(result).toHaveLength(0);
 
@@ -464,11 +462,11 @@ describe("RegularDeps.updateRegularDeps", () => {
 			devDependencies: { effect: "3.0.0" },
 		});
 
-		mockGetPackageInfosAsync.mockResolvedValue({});
-
-		const result = await runWithService((s) => s.updateRegularDeps(["effect"], dir), {
-			effect: "3.1.0",
-		});
+		const result = await runWithService(
+			(s) => s.updateRegularDeps(["effect"], dir),
+			{ effect: "3.1.0" },
+			mockWorkspaces([{ name: "root", path: dir }]),
+		);
 
 		expect(result).toHaveLength(1);
 		expect(result[0].to).toBe("3.1.0");
