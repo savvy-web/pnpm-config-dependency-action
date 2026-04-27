@@ -5,58 +5,94 @@
 ## Current State
 
 **Status:** Effect-first restructure complete. All domain logic wrapped as Effect
-services with `Context.Tag` + `Layer`. Layer composition centralized in
-`src/layers/app.ts`.
+services with `Context.Tag` + `Layer`, plus a few standalone helper modules
+(`PeerSync`, `WorkspaceYaml`). Layer composition centralized in
+`src/layers/app.ts`. The action now uses `workspaces-effect` for workspace and
+publishability concerns; `workspace-tools` is no longer a dependency.
 
 **Architecture (current):**
 
-- **Effect-first services:** All domain functions are Effect services in `src/services/`:
-  `BranchManager`, `PnpmUpgrade`, `ConfigDeps`, `RegularDeps`, `PeerSync`, `Report`,
-  `Lockfile`, `Changesets`, `WorkspaceYaml`
-- **Layer composition:** `makeAppLayer(token, dryRun)` in `src/layers/app.ts` wires
-  all library and domain layers together
-- **Pure helpers:** `src/utils/` contains stateless functions (`deps.ts`, `markdown.ts`,
-  `pnpm.ts`, `semver.ts`)
-- **No barrel re-exports:** Direct imports everywhere, no `index.ts` files
-- **Co-located tests:** Each `.ts` file has a `.test.ts` sibling
-- **New library services:** `NpmRegistry` (npm queries), `PullRequest` (PR management
-  with auto-merge), `GithubMarkdown` (markdown utilities)
+- **Entry split:** `src/main.ts` is a thin module-level wrapper that calls
+  `Action.run`; the testable `program` Effect lives in `src/program.ts` along
+  with `runCommands` and `runInstall` helpers.
+- **Effect-first services:** Domain services in `src/services/` —
+  `BranchManager`, `PnpmUpgrade`, `ConfigDeps`, `RegularDeps`,
+  `Report`, `Lockfile`, `Changesets`, `Workspaces`, `ChangesetConfig`, plus
+  the `Publishability` Layer overrides for the `PublishabilityDetector` Tag
+  from `workspaces-effect`. Stateless helpers (`PeerSync`, `WorkspaceYaml`)
+  export functions without their own Tag.
+- **Layer composition:** `makeAppLayer(dryRun)` in `src/layers/app.ts` wires
+  all library and domain layers together. The GitHub App token reaches
+  `GitHubClientLive` via `process.env.GITHUB_TOKEN` set inside
+  `GitHubApp.withToken()` — the layer factory itself does not take a token.
+- **Pure helpers:** `src/utils/` contains stateless functions (`deps.ts`,
+  `input.ts`, `markdown.ts`, `pnpm.ts`, `semver.ts`).
+- **No barrel re-exports:** Direct imports everywhere, no `index.ts` files.
+- **Co-located tests:** Each `.ts` file has a `.test.ts` sibling.
+- **Library services:** `NpmRegistry` (npm queries), `PullRequest` (PR
+  management with auto-merge), `GithubMarkdown` (markdown utilities),
+  `OctokitAuthAppLive` (provides `GitHubAppLive`'s auth dependency).
 
 **Implemented Features:**
 
-- Single-phase execution model with 16 steps
-- GitHub App token lifecycle via `GitHubApp.withToken()`
-- Branch management with delete-and-recreate strategy via `BranchManager` service
-- Config dependency updates via `ConfigDeps` service (uses `NpmRegistry`)
-- Regular dependency updates via `RegularDeps` service (uses `NpmRegistry`)
-- Peer dependency range syncing via `PeerSync` service (`peer-lock` and `peer-minor` strategies)
-- pnpm self-upgrade via `PnpmUpgrade` service
-- Clean install after updates
-- Workspace YAML formatting via `WorkspaceYaml` service
-- Custom command execution via `CommandRunner` with error collection
-- Lockfile comparison via `Lockfile` service
-- Changeset creation via `Changesets` service
-- Verified commits via `BranchManager.commitChanges()` (GitHub API)
-- PR creation/update via `Report` service (uses `PullRequest` library service)
-- Auto-merge support via `PullRequest` service (GraphQL API)
-- Check run lifecycle via `CheckRun.withCheckRun()`
-- PR sentinel fix: failures propagate as `PullRequestError` instead of `{ number: 0 }`
-- Dry-run mode for testing
+- Single-phase execution model orchestrated in `program.ts`.
+- GitHub App token lifecycle via `GitHubApp.withToken()`; token bridged to
+  `GitHubClientLive` through `process.env.GITHUB_TOKEN`.
+- Branch management with delete-and-recreate strategy via `BranchManager`
+  service.
+- Config dependency updates via `ConfigDeps` service (uses `NpmRegistry`).
+- Regular dependency updates via `RegularDeps` service (uses `NpmRegistry`
+  and `Workspaces`).
+- Peer dependency range syncing via `syncPeers` (`peer-lock` and
+  `peer-minor` strategies, powered by `semver-effect`).
+- pnpm self-upgrade via `PnpmUpgrade` service.
+- Lockfile reconciliation via `runInstall`:
+  `pnpm install --frozen-lockfile=false --fix-lockfile` (replaces the older
+  `rm -rf node_modules pnpm-lock.yaml && pnpm install` clean-install).
+- Workspace YAML formatting via `WorkspaceYaml` helpers.
+- Custom command execution via `runCommands` (`sh -c`) with error collection.
+- Lockfile comparison via `Lockfile` service. Catalog comparison emits one
+  `LockfileChange` per (catalog change, consuming importer, dep section)
+  triple, carrying the precise `type` field so downstream consumers can
+  trigger off `type` alone.
+- Changeset creation via `Changesets` service. The new gating rules
+  (versionable cascade + trigger/informational classification) replace the
+  previous always-on patch fallback. Empty changesets are no longer written.
+- `ChangesetConfig` service: silk vs vanilla mode detection plus
+  `versionPrivate` flag for `.changeset/config.json`.
+- `PublishabilityDetector` overrides (`SilkPublishabilityDetectorLive`,
+  `PublishabilityDetectorAdaptiveLive`) over `workspaces-effect`.
+- Verified commits via `BranchManager.commitChanges()` (GitHub API,
+  `GitCommit.commitFiles`).
+- PR creation/update via `Report` service (uses `PullRequest` library service).
+- Auto-merge support via `PullRequest` service (GraphQL API).
+- Check run lifecycle via `CheckRun.withCheckRun()`.
+- PR sentinel fix: failures propagate as `PullRequestError` instead of
+  `{ number: 0 }`.
+- Dry-run mode for testing.
 
-**Deleted Modules (restructure):**
+**Deleted Modules / Dependencies:**
 
-- `src/lib/` (entire directory) - Logic moved to `src/services/` and `src/utils/`
-- `src/types/index.ts` - No barrel re-exports, import from `src/schemas/domain.ts`
-- `src/lib/errors/types.ts` - Replaced by `src/errors/errors.ts`
-- `src/lib/schemas/index.ts` - Replaced by `src/schemas/domain.ts`
-- `src/lib/schemas/errors.ts` - Replaced by `src/errors/errors.ts`
-- `src/lib/__test__/fixtures.ts` - Replaced by `src/utils/fixtures.test.ts`
+- `src/lib/` (entire directory) — Logic moved to `src/services/` and
+  `src/utils/`.
+- `src/types/index.ts` — No barrel re-exports; import from
+  `src/schemas/domain.ts`.
+- `src/lib/errors/types.ts` — Replaced by `src/errors/errors.ts`.
+- `src/lib/schemas/index.ts` — Replaced by `src/schemas/domain.ts`.
+- `src/lib/schemas/errors.ts` — Replaced by `src/errors/errors.ts`.
+- `src/lib/__test__/fixtures.ts` — Replaced by `src/utils/fixtures.test.ts`.
+- `workspace-tools` — Replaced by `workspaces-effect` via the `Workspaces`
+  service.
+- The empty-changeset fallback path inside `Changesets.create` (a generic
+  patch was previously written when nothing else triggered).
 
 **Next Steps:**
 
-1. Integration testing with real GitHub App in CI
-2. Documentation: user guide and troubleshooting
-3. Support for additional changeset strategies beyond patch
+1. Integration testing with real GitHub App in CI.
+2. Documentation: user guide and troubleshooting.
+3. Lift `SilkPublishabilityDetectorLive` (and any silk-specific changeset
+   logic) into `@savvy-web/silk-effects` once that package exists.
+4. Support for additional changeset strategies beyond `patch`.
 
 ## Rationale
 

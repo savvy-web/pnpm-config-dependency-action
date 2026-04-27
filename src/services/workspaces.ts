@@ -7,10 +7,16 @@
  * codebase. Includes the root workspace package, unlike workspace-tools'
  * package-pattern-only discovery.
  *
+ * With workspaces-effect v0.5.0, getWorkspacePackagesSync returns the
+ * library's full WorkspacePackage Schema.Class (including relativePath,
+ * packageJsonPath, version, etc.) so no local WorkspacePackageInfo shim
+ * is needed.
+ *
  * @module services/workspaces
  */
 
 import { Context, Effect, Layer } from "effect";
+import type { WorkspacePackage } from "workspaces-effect";
 import { getWorkspacePackagesSync } from "workspaces-effect";
 
 import { FileSystemError } from "../errors/errors.js";
@@ -19,20 +25,13 @@ import { FileSystemError } from "../errors/errors.js";
 // Service Interface
 // ══════════════════════════════════════════════════════════════════════════════
 
-export interface WorkspacePackageInfo {
-	readonly name: string;
-	readonly path: string;
-}
-
 export class Workspaces extends Context.Tag("Workspaces")<
 	Workspaces,
 	{
-		readonly listPackages: (
-			workspaceRoot: string,
-		) => Effect.Effect<ReadonlyArray<WorkspacePackageInfo>, FileSystemError>;
+		readonly listPackages: (workspaceRoot: string) => Effect.Effect<ReadonlyArray<WorkspacePackage>, FileSystemError>;
 		readonly importerMap: (
 			workspaceRoot: string,
-		) => Effect.Effect<ReadonlyMap<string, WorkspacePackageInfo>, FileSystemError>;
+		) => Effect.Effect<ReadonlyMap<string, WorkspacePackage>, FileSystemError>;
 	}
 >() {}
 
@@ -40,7 +39,7 @@ export class Workspaces extends Context.Tag("Workspaces")<
 // Live Layer
 // ══════════════════════════════════════════════════════════════════════════════
 
-const scanPackages = (workspaceRoot: string): Effect.Effect<ReadonlyArray<WorkspacePackageInfo>, FileSystemError> =>
+const scanPackages = (workspaceRoot: string): Effect.Effect<ReadonlyArray<WorkspacePackage>, FileSystemError> =>
 	Effect.try({
 		try: () => getWorkspacePackagesSync(workspaceRoot),
 		catch: (e) =>
@@ -56,13 +55,9 @@ export const WorkspacesLive = Layer.succeed(Workspaces, {
 	importerMap: (workspaceRoot) =>
 		Effect.gen(function* () {
 			const packages = yield* scanPackages(workspaceRoot);
-			const map = new Map<string, WorkspacePackageInfo>();
-			const normalizedRoot = workspaceRoot.replace(/\/$/, "");
+			const map = new Map<string, WorkspacePackage>();
 			for (const pkg of packages) {
-				const normalizedPkgPath = pkg.path.replace(/\/$/, "");
-				const relativePath =
-					normalizedPkgPath === normalizedRoot ? "." : normalizedPkgPath.replace(`${normalizedRoot}/`, "");
-				map.set(relativePath, pkg);
+				map.set(pkg.relativePath, pkg);
 			}
 			return map;
 		}),

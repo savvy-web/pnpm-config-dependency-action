@@ -6,10 +6,13 @@ code in this repository.
 ## Project Status
 
 This is a **GitHub Action** for updating pnpm config dependencies and regular
-dependencies. It runs as a single-phase entry point (`main.ts`) using Effect-TS
-for typed error handling, service injection, and retry logic. Domain logic is
+dependencies. The module-level entry is `src/main.ts` (a thin
+`Action.run(program, …)` wrapper); the actual Effect program and helpers
+(`runCommands`, `runInstall`) live in `src/program.ts`. It uses Effect-TS for
+typed error handling, service injection, and retry logic. Domain logic is
 wrapped as Effect services (`Context.Tag` + `Layer`) in `src/services/`, with
-layer composition in `src/layers/app.ts`.
+layer composition in `src/layers/app.ts` (`makeAppLayer(dryRun)` — token
+plumbing happens upstream via `GitHubApp.withToken`).
 
 For architecture and implementation details, load sections as needed:
 -> @./.claude/design/pnpm-config-dependency-action/_index.md
@@ -63,26 +66,38 @@ pnpm vitest run --testNamePattern="parsePnpmVersion"
 ### Repository Structure
 
 - **Type**: Single-package GitHub Action (not a multi-package monorepo)
-- **Entry point**: `src/main.ts` (single-phase, no pre/post)
+- **Entry point**: `src/main.ts` (thin `Action.run` wrapper) +
+  `src/program.ts` (the testable Effect program plus `runCommands` and
+  `runInstall` helpers)
 - **Services**: `src/services/` (domain services with `Context.Tag` + `Layer`)
 - **Schemas**: `src/schemas/domain.ts` (Effect Schema definitions)
 - **Errors**: `src/errors/errors.ts` (Schema.TaggedError definitions)
-- **Layers**: `src/layers/app.ts` (`makeAppLayer` wires all layers)
-- **Utils**: `src/utils/` (pure helpers: deps, markdown, pnpm, semver)
+- **Layers**: `src/layers/app.ts` (`makeAppLayer(dryRun)` wires all layers;
+  GitHub App token reaches `GitHubClientLive` via `process.env.GITHUB_TOKEN`)
+- **Utils**: `src/utils/` (pure helpers: deps, input, markdown, pnpm, semver)
 - **Shared Configs**: `lib/configs/`
 - **Build**: Turbo for caching; `typecheck` depends on `build`
 
 ### Effect-TS Patterns
 
 - **Library services**: From `@savvy-web/github-action-effects`: `CommandRunner`,
-  `GitBranch`, `GitCommit`, `CheckRun`, `GitHubClient`, `NpmRegistry`, `PullRequest`
-- **Domain services**: `BranchManager`, `PnpmUpgrade`, `ConfigDeps`, `RegularDeps`,
-  `Report`, `Lockfile`, `Changesets`, `WorkspaceYaml`
+  `GitBranch`, `GitCommit`, `CheckRun`, `GitHubClient`, `NpmRegistry`,
+  `PullRequest`, `GithubMarkdown`. `GitHubAppLive` requires
+  `OctokitAuthAppLive`; `main.ts` wires that pair before calling `Action.run`.
+- **Domain services**: `BranchManager`, `PnpmUpgrade`, `ConfigDeps`,
+  `RegularDeps`, `Report`, `Lockfile`, `Changesets`, `Workspaces`,
+  `ChangesetConfig`. `Publishability` provides Layer overrides for
+  `workspaces-effect`'s `PublishabilityDetector` Tag. Stateless helpers:
+  `WorkspaceYaml`, `PeerSync`.
 - **Errors**: `Schema.TaggedError` (`PnpmError`, `GitHubApiError`, `FileSystemError`)
-- **Entry**: `Action.run(program, GitHubAppLive)` with `Action.parseInputs()`
-- **Token**: `GitHubApp.withToken()` for automatic token lifecycle
-- **Tests**: Mock services via Effect `Layer.succeed`; `vi.mock()` for
-  `@actions/core` and `@actions/github`
+- **Entry**: `Action.run(program, { layer: AppLayer })` from `main.ts`;
+  inputs parsed via Effect `Config.*` API inside `program.ts`.
+- **Token**: `GitHubApp.withToken()` for automatic token lifecycle, with
+  `process.env.GITHUB_TOKEN` bridge to `GitHubClientLive`.
+- **Tests**: Mock services via Effect `Layer.succeed`; tests import the
+  `program` Effect directly from `program.ts` to avoid the module-level
+  `Action.run` call in `main.ts`. The library implements the GitHub Actions
+  protocol natively, so `vi.mock("@actions/core")` is no longer needed.
 
 ### Code Quality
 

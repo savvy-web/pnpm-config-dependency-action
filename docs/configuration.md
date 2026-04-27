@@ -300,20 +300,31 @@ the dependency changes.
 
 If your repository has a `.changeset/` directory and the `changesets` input is
 `true` (the default), the action creates changesets based on consumer-facing
-changes:
+changes. A workspace package gets a `patch` changeset only when **both** gates
+pass:
 
-- **Peer dependency range changes**: A `patch` changeset is created for the
-  package whose peer range was updated
-- **Runtime dependency changes**: A `patch` changeset is created for packages
-  with `dependency` or `optionalDependency` changes detected in the lockfile
-- **Config dependency changes**: An empty changeset (no packages) records the
-  update
-- **Dev dependency-only changes**: No changeset is created (dev dependencies are
-  stripped from published packages)
+1. **Trigger gate** -- at least one consumer-facing change must apply to the
+   package:
+   - `peerDependency` range update (from `peer-lock` or `peer-minor` syncing)
+   - `dependency` or `optionalDependency` change detected in the lockfile
 
-Changeset tables include all changes for a package, even if only one triggered
-the changeset. The table uses specific type values: `devDependency`,
-`peerDependency`, `dependency`, `config`.
+   `devDependency`-only changes are informational rows in the changeset table
+   when a sibling trigger exists, but never trigger a changeset on their own
+   (dev dependencies are stripped from published packages).
+
+2. **Versionable gate** -- the package must be versionable:
+   - **Publishable** packages (detected by `workspaces-effect`'s
+     `PublishabilityDetector` -- non-private, or with a `publishConfig`
+     targeting a registry), or
+   - Private packages opted in via the `versionPrivate` changeset config
+
+   Private packages that are not versionable are skipped silently.
+
+Changeset tables include all changes for a package -- both triggers and
+informational dev rows -- using specific type values: `dependency`,
+`optionalDependency`, `peerDependency`, `devDependency`. Empty changesets are
+not written; config-only updates (`pnpm-workspace.yaml` `configDependencies`)
+do not produce a changeset.
 
 ## Advanced Patterns
 

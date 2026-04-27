@@ -6,96 +6,124 @@
 
 **Test Framework:** Vitest with v8 coverage, forks pool for Effect-TS compatibility
 
-**Key Test Suites (13 test files, 235 tests total):**
+**Key Test Suites (18 test files, ~283 `it`/`test` blocks):**
 
-1. **Main action** (`src/main.test.ts`) - 24 tests
+1. **Main action** (`src/main.test.ts`) — 24 tests
 
    - Full orchestration with mock services
    - Input parsing and validation
    - Dry-run mode behavior
    - Error handling
 
-2. **Report service** (`src/main.effect.test.ts`) - 12 tests
+2. **Effect program** (`src/main.effect.test.ts`) — 6 tests
 
-   - PR body generation with config/regular dependency tables
-   - Commit message generation
-   - Summary text generation
-   - pnpm upgrade appearing in Config Dependencies table
-   - Uses `CommandRunnerTest` for mock shell execution
+   - End-to-end coverage of report-related concerns through the program
 
-3. **Domain schemas** (`src/schemas/domain.test.ts`) - 11 tests
+3. **Domain schemas** (`src/schemas/domain.test.ts`) — 13 tests
 
    - Schema validation for all domain types
-   - BranchResult, DependencyUpdateResult, PullRequestResult, etc.
+   - `BranchResult`, `DependencyUpdateResult`, `PullRequestResult`, etc.
 
-4. **Error types** (`src/errors/errors.test.ts`) - 33 tests
+4. **Error types** (`src/errors/errors.test.ts`) — 33 tests
 
    - Error construction and message formatting
    - Error matching via `_tag`
-   - Error utility functions (isRetryable, getErrorMessage)
+   - Error utility functions (`isRetryable`, `getErrorMessage`)
 
-5. **BranchManager service** (`src/services/branch.test.ts`) - 8 tests
+5. **Input parser** (`src/utils/input.test.ts`) — 11 tests
 
-   - Create new branch via GitBranch service
+   - JSON-array, newline + bullet, `#`-comment, comma-separated forms
+
+6. **BranchManager service** (`src/services/branch.test.ts`) — 8 tests
+
+   - Create new branch via `GitBranch` service
    - Delete and recreate existing branch
-   - Commit changes via GitCommit service
+   - Commit changes via `GitCommit.commitFiles`
    - No-changes detection
 
-6. **ConfigDeps service** (`src/services/config-deps.test.ts`) - 16 tests
+7. **ConfigDeps service** (`src/services/config-deps.test.ts`) — 18 tests
 
    - Config entry parsing (version + integrity hash)
    - npm query and YAML editing
    - Version comparison and skip logic
    - Missing dependency handling
 
-7. **RegularDeps service** (`src/services/regular-deps.test.ts`) - 22 tests
+8. **RegularDeps service** (`src/services/regular-deps.test.ts`) — 33 tests
 
-   - `matchesPattern` (6 tests): exact match, scoped wildcard, bare wildcard, dot metacharacter safety
-   - `parseSpecifier` (6 tests): caret, tilde, exact, catalog:, catalog:named, workspace:
-   - `updateRegularDeps` Effect integration (10 tests): empty patterns, single dep,
-     already latest, wildcard matching, catalog: skip, multi-file updates,
+   - `matchesPattern`: exact match, scoped wildcard, bare wildcard, dot
+     metacharacter safety
+   - `parseSpecifier`: caret, tilde, exact, `catalog:`, `catalog:named`,
+     `workspace:`
+   - `updateRegularDeps` Effect integration: empty patterns, single dep,
+     already latest, wildcard matching, `catalog:` skip, multi-file updates,
      npm query failure resilience, prefix preservation, deduplication
 
-8. **PnpmUpgrade service** (`src/services/pnpm-upgrade.test.ts`) - 34 tests
+9. **PeerSync helpers** (`src/services/peer-sync.test.ts`) — 17 tests
 
-   - `parsePnpmVersion`: exact version, sha suffix, caret prefix, caret+sha, non-pnpm, empty, invalid
-   - `formatPnpmVersion`: with and without caret
-   - `resolveLatestInRange`: highest in range, already latest, pre-release filtering, no match
-   - `upgradePnpm` Effect integration: no pnpm fields, non-pnpm, newer available, already latest,
-     devEngines update, caret preservation, indentation preservation
+   - `computePeerRange` lock vs minor strategies, including patch-only
+     suppression and floor-to-`.0` semantics for minor bumps
+   - `syncPeers` workspace integration via the `Workspaces` Tag
 
-9. **WorkspaceYaml service** (`src/services/workspace-yaml.test.ts`) - 18 tests
+10. **PnpmUpgrade service** (`src/services/pnpm-upgrade.test.ts`) — 34 tests
 
-   - Array sorting, key sorting, configDependencies sorting
-   - YAML stringify options
-   - Round-trip formatting
+    - `parsePnpmVersion`, `formatPnpmVersion`, `resolveLatestInRange`
+    - `upgradePnpm` Effect integration: no pnpm fields, non-pnpm, newer
+      available, already latest, `devEngines` update, caret preservation,
+      indentation preservation
 
-10. **Lockfile service** (`src/services/lockfile.test.ts`) - 23 tests
+11. **WorkspaceYaml service** (`src/services/workspace-yaml.test.ts`) — 14 tests
 
-    - Catalog snapshot comparison
+    - Array sorting, key sorting, `configDependencies` sorting
+    - YAML stringify options
+    - Round-trip formatting
+
+12. **Lockfile service** (`src/services/lockfile.test.ts`) — 27 tests
+
+    - Catalog snapshot comparison (per-importer, per-section triple emission)
     - Package importer comparison
     - No-change detection
     - Missing lockfile handling
 
-11. **Changesets service** (`src/services/changesets.test.ts`) - 21 tests
+13. **Workspaces service** (`src/services/workspaces.test.ts`) — 1 test
 
-    - Changeset file generation
-    - Root workspace changesets
-    - Multiple affected packages
+    - `getWorkspacePackagesSync` wrapper smoke test
 
-12. **Report service** (`src/services/report.test.ts`) - tests for PR/summary
+14. **ChangesetConfig service** (`src/services/changeset-config.test.ts`) — 9 tests
 
-    - PR creation/update via PullRequest service
+    - Mode detection (silk / vanilla / none) for string and array
+      `changelog` config shapes
+    - `versionPrivate` flag plumbing
+    - Per-`workspaceRoot` caching
+
+15. **Publishability layers** (`src/services/publishability.test.ts`) — 14 tests
+
+    - Silk rules (private + targets, shorthand string targets, access
+      inheritance)
+    - Adaptive dispatch via `ChangesetConfig.mode`
+
+16. **Changesets service** (`src/services/changesets.test.ts`) — 11 tests
+
+    - Trigger vs informational classification (devDeps suppressed)
+    - Versionable cascade (publishable OR `versionPrivate`)
+    - Empty-changeset suppression (no fallback path)
+    - Multi-package emission
+
+17. **Report service** (`src/services/report.test.ts`) — 9 tests
+
+    - PR creation/update via `PullRequest` service
     - Commit message formatting
     - Summary generation
 
-13. **Test fixtures** (`src/utils/fixtures.test.ts`) - shared test utilities
+18. **Test fixtures** (`src/utils/fixtures.test.ts`) — shared test utilities
 
 ## Test Patterns
 
-**Mocking `Action.run`:** Main test files mock `@savvy-web/github-action-effects`
-via `vi.mock()` to prevent module-level `Action.run` execution, then test the
-exported `program` Effect directly.
+**Importing the program directly:** The `program` Effect lives in
+`src/program.ts`, separated from the module-level `Action.run` call in
+`src/main.ts`. Tests import `program` and `runCommands` from
+`./program.js` without ever evaluating `main.ts`, so no `vi.mock()` of the
+library is needed just to suppress module-level execution. (Tests still mock
+specific library services via `Layer.succeed` to inject fakes.)
 
 **Mock service layers:** Domain service tests create mock library services via
 `Layer.succeed()`:

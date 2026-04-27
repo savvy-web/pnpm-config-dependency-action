@@ -17,7 +17,7 @@ import { Workspaces } from "./workspaces.js";
 
 const mockWorkspaces = (packages: ReadonlyArray<{ name: string; path: string }>) =>
 	Layer.succeed(Workspaces, {
-		listPackages: () => Effect.succeed(packages),
+		listPackages: () => Effect.succeed(packages as unknown as ReadonlyArray<WorkspacePackage>),
 		importerMap: () => Effect.die("not used"),
 	});
 
