@@ -24,6 +24,7 @@ import { ConfigDepsLive } from "../services/config-deps.js";
 import { PnpmUpgradeLive } from "../services/pnpm-upgrade.js";
 import { RegularDepsLive } from "../services/regular-deps.js";
 import { ReportLive } from "../services/report.js";
+import { WorkspacesLive } from "../services/workspaces.js";
 
 /* v8 ignore start - pure Layer wiring, tested indirectly via service integration tests */
 export const makeAppLayer = (dryRun: boolean) => {
@@ -32,6 +33,8 @@ export const makeAppLayer = (dryRun: boolean) => {
 	const gitBranch = GitBranchLive.pipe(Layer.provide(GitHubClientLive));
 	const gitCommit = GitCommitLive.pipe(Layer.provide(GitHubClientLive));
 	const prLayer = PullRequestLive.pipe(Layer.provide(Layer.merge(GitHubClientLive, ghGraphql)));
+
+	const workspaces = WorkspacesLive;
 
 	const libraryLayers = Layer.mergeAll(
 		GitHubClientLive,
@@ -45,10 +48,11 @@ export const makeAppLayer = (dryRun: boolean) => {
 	);
 
 	const domainLayers = Layer.mergeAll(
+		workspaces,
 		BranchManagerLive.pipe(Layer.provide(Layer.mergeAll(gitBranch, gitCommit, CommandRunnerLive))),
 		PnpmUpgradeLive.pipe(Layer.provide(CommandRunnerLive)),
 		ConfigDepsLive.pipe(Layer.provide(npmRegistry)),
-		RegularDepsLive.pipe(Layer.provide(npmRegistry)),
+		RegularDepsLive.pipe(Layer.provide(Layer.merge(npmRegistry, workspaces))),
 		ReportLive.pipe(Layer.provide(prLayer)),
 	);
 

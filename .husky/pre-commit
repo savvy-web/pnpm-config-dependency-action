@@ -44,3 +44,4 @@ esac
 
 fi
 # --- END SAVVY-LINT MANAGED SECTION ---
+pnpm build

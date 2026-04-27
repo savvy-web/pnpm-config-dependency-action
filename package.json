@@ -48,7 +48,7 @@
 		"@savvy-web/github-action-effects": "^0.11.12",
 		"effect": "catalog:silk",
 		"semver-effect": "^0.2.1",
-		"workspace-tools": "0.41.0",
+		"workspaces-effect": "^0.4.1",
 		"yaml": "^2.8.3"
 	},
 	"devDependencies": {

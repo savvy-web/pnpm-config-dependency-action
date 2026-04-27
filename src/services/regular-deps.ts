@@ -12,14 +12,15 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { NpmRegistry } from "@savvy-web/github-action-effects";
 import { Context, Effect, Layer } from "effect";
-import { getPackageInfosAsync } from "workspace-tools";
 
 import { FileSystemError } from "../errors/errors.js";
 import type { DependencyUpdateResult } from "../schemas/domain.js";
 import { matchesPattern, parseSpecifier } from "../utils/deps.js";
 import { detectIndent } from "../utils/pnpm.js";
+import { Workspaces } from "./workspaces.js";
 
 type NpmRegistryShape = Context.Tag.Service<typeof NpmRegistry>;
+type WorkspacesShape = Context.Tag.Service<typeof Workspaces>;
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Service Interface
@@ -39,9 +40,10 @@ export const RegularDepsLive = Layer.effect(
 	RegularDeps,
 	Effect.gen(function* () {
 		const registry = yield* NpmRegistry;
+		const workspaces = yield* Workspaces;
 		return {
 			updateRegularDeps: (patterns, workspaceRoot = process.cwd()) =>
-				updateRegularDepsImpl(patterns, registry, workspaceRoot),
+				updateRegularDepsImpl(patterns, registry, workspaces, workspaceRoot),
 		};
 	}),
 );
@@ -169,32 +171,27 @@ const updatePackageJson = (pkgPath: string, updates: Map<string, string>): Effec
 const updateRegularDepsImpl = (
 	patterns: ReadonlyArray<string>,
 	registry: NpmRegistryShape,
+	workspaces: WorkspacesShape,
 	workspaceRoot: string,
 ): Effect.Effect<ReadonlyArray<DependencyUpdateResult>> =>
 	Effect.gen(function* () {
 		if (patterns.length === 0) return [];
 
-		// Step 1: Find all workspace package.json paths
-		const packageInfos = yield* Effect.tryPromise({
-			try: () => getPackageInfosAsync(workspaceRoot),
-			catch: (e) =>
-				new FileSystemError({
-					operation: "read",
-					path: workspaceRoot,
-					reason: `Failed to get workspace info: ${e}`,
-				}),
-		}).pipe(
+		// Step 1: Find all workspace package.json paths via Workspaces service
+		const packages = yield* workspaces.listPackages(workspaceRoot).pipe(
 			Effect.catchAll((error) =>
 				Effect.gen(function* () {
-					yield* Effect.logWarning(`Failed to get workspace info: ${error.reason}`);
-					return {};
+					yield* Effect.logWarning(`Failed to list workspace packages: ${String(error)}`);
+					return [] as ReadonlyArray<{ readonly name: string; readonly path: string }>;
 				}),
 			),
 		);
 
-		// Collect all package.json paths (workspace packages + root)
-		const rootPkgJson = join(workspaceRoot, "package.json");
-		const packageJsonPaths = [rootPkgJson, ...Object.values(packageInfos).map((info) => info.packageJsonPath)];
+		const packageJsonPaths = packages.map((pkg) => join(pkg.path, "package.json"));
+
+		const pathToPackageName = new Map<string, string>(
+			packages.map((pkg) => [join(pkg.path, "package.json"), pkg.name]),
+		);
 
 		// Step 2: Find all deps matching patterns across all package.json files
 		const depMap = yield* collectMatchingDeps(packageJsonPaths, patterns).pipe(
@@ -212,22 +209,6 @@ const updateRegularDepsImpl = (
 		}
 
 		yield* Effect.logInfo(`Found ${depMap.size} unique dependencies matching patterns`);
-
-		// Build inverse map for O(1) path-to-name lookup
-		const pathToPackageName = new Map<string, string>(
-			Object.entries(packageInfos).map(([name, info]) => [info.packageJsonPath, name]),
-		);
-		// Resolve root package name from package.json (avoid "(root)" label)
-		const rootName = yield* Effect.try({
-			try: () => {
-				const raw = readFileSync(rootPkgJson, "utf-8");
-				const pkg = JSON.parse(raw) as { name?: string };
-				return pkg.name ?? "(root)";
-			},
-			catch: () =>
-				new FileSystemError({ operation: "read", path: rootPkgJson, reason: "Failed to read root package.json" }),
-		}).pipe(Effect.catchAll(() => Effect.succeed("(root)")));
-		pathToPackageName.set(rootPkgJson, rootName);
 
 		// Step 3: Query npm for latest versions and compute updates
 		const results: DependencyUpdateResult[] = [];

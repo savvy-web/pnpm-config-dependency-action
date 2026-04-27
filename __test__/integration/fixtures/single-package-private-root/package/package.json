@@ -1,0 +1,8 @@
+{
+	"name": "@scope/test-leaf",
+	"version": "0.0.0",
+	"private": false,
+	"dependencies": {
+		"lodash": "^4.17.20"
+	}
+}
