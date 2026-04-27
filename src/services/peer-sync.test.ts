@@ -1,19 +1,11 @@
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Effect, LogLevel, Logger } from "effect";
+import { Effect, Layer, LogLevel, Logger } from "effect";
 import { describe, expect, it, vi } from "vitest";
 import type { DependencyUpdateResult } from "../schemas/domain.js";
 import { computePeerRange, syncPeers } from "./peer-sync.js";
-
-// Mock workspace-tools to return our test workspace info
-const { mockGetPackageInfosAsync } = vi.hoisted(() => ({
-	mockGetPackageInfosAsync: vi.fn(),
-}));
-
-vi.mock("workspace-tools", () => ({
-	getPackageInfosAsync: (...args: unknown[]) => mockGetPackageInfosAsync(...args),
-}));
+import { Workspaces } from "./workspaces.js";
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Test Helpers
@@ -28,6 +20,49 @@ const writePackageJson = (dir: string, content: Record<string, unknown>) => {
 const readPackageJson = (dir: string) => {
 	return JSON.parse(readFileSync(join(dir, "package.json"), "utf-8"));
 };
+
+/**
+ * Build a Workspaces mock layer that returns the given packages list.
+ */
+const makeWorkspacesLayer = (packages: ReadonlyArray<{ name: string; path: string }>) =>
+	Layer.succeed(Workspaces, {
+		listPackages: vi.fn(() => Effect.succeed(packages)),
+		importerMap: vi.fn(() => Effect.succeed(new Map())),
+	});
+
+/**
+ * Build a Workspaces mock layer that fails with a FileSystemError.
+ */
+const makeFailingWorkspacesLayer = () =>
+	Layer.succeed(Workspaces, {
+		listPackages: vi.fn(
+			() =>
+				Effect.fail(
+					// Use a plain object cast since FileSystemError is a tagged error; its shape is what matters for the test
+					Object.assign(new Error("workspace detection failed"), {
+						_tag: "FileSystemError",
+						reason: "workspace detection failed",
+					}),
+				) as never,
+		),
+		importerMap: vi.fn(() => Effect.succeed(new Map())),
+	});
+
+/**
+ * Run a syncPeers Effect with the given Workspaces layer, suppressing logs.
+ */
+const runSyncPeers = (
+	config: { lock: string[]; minor: string[] },
+	devUpdates: DependencyUpdateResult[],
+	workspacesLayer: Layer.Layer<Workspaces>,
+	workspaceRoot: string,
+) =>
+	Effect.runPromise(
+		syncPeers(config, devUpdates, workspaceRoot).pipe(
+			Logger.withMinimumLogLevel(LogLevel.None),
+			Effect.provide(workspacesLayer),
+		),
+	);
 
 // ══════════════════════════════════════════════════════════════════════════════
 // computePeerRange
@@ -177,14 +212,10 @@ describe("syncPeers", () => {
 			peerDependencies: { effect: "^3.12.0" },
 		});
 
-		mockGetPackageInfosAsync.mockResolvedValue({
-			"my-lib": {
-				name: "my-lib",
-				packageJsonPath: join(pkgDir, "package.json"),
-				path: pkgDir,
-				version: "1.0.0",
-			},
-		});
+		const workspacesLayer = makeWorkspacesLayer([
+			{ name: "root", path: tmpDir },
+			{ name: "my-lib", path: pkgDir },
+		]);
 
 		const devUpdates: DependencyUpdateResult[] = [
 			{
@@ -196,9 +227,7 @@ describe("syncPeers", () => {
 			},
 		];
 
-		const results = await Effect.runPromise(
-			syncPeers({ lock: ["effect"], minor: [] }, devUpdates, tmpDir).pipe(Logger.withMinimumLogLevel(LogLevel.None)),
-		);
+		const results = await runSyncPeers({ lock: ["effect"], minor: [] }, devUpdates, workspacesLayer, tmpDir);
 
 		expect(results).toHaveLength(1);
 		expect(results[0].to).toBe("^3.12.5");
@@ -220,14 +249,10 @@ describe("syncPeers", () => {
 			peerDependencies: { effect: "^3.12.0" },
 		});
 
-		mockGetPackageInfosAsync.mockResolvedValue({
-			"my-lib": {
-				name: "my-lib",
-				packageJsonPath: join(pkgDir, "package.json"),
-				path: pkgDir,
-				version: "1.0.0",
-			},
-		});
+		const workspacesLayer = makeWorkspacesLayer([
+			{ name: "root", path: tmpDir },
+			{ name: "my-lib", path: pkgDir },
+		]);
 
 		const devUpdates: DependencyUpdateResult[] = [
 			{
@@ -239,9 +264,7 @@ describe("syncPeers", () => {
 			},
 		];
 
-		const results = await Effect.runPromise(
-			syncPeers({ lock: [], minor: ["effect"] }, devUpdates, tmpDir).pipe(Logger.withMinimumLogLevel(LogLevel.None)),
-		);
+		const results = await runSyncPeers({ lock: [], minor: ["effect"] }, devUpdates, workspacesLayer, tmpDir);
 
 		expect(results).toHaveLength(0);
 
@@ -263,14 +286,10 @@ describe("syncPeers", () => {
 			peerDependencies: { effect: "^3.12.0" },
 		});
 
-		mockGetPackageInfosAsync.mockResolvedValue({
-			"my-lib": {
-				name: "my-lib",
-				packageJsonPath: join(pkgDir, "package.json"),
-				path: pkgDir,
-				version: "1.0.0",
-			},
-		});
+		const workspacesLayer = makeWorkspacesLayer([
+			{ name: "root", path: tmpDir },
+			{ name: "my-lib", path: pkgDir },
+		]);
 
 		const devUpdates: DependencyUpdateResult[] = [
 			{
@@ -282,9 +301,7 @@ describe("syncPeers", () => {
 			},
 		];
 
-		const results = await Effect.runPromise(
-			syncPeers({ lock: [], minor: ["effect"] }, devUpdates, tmpDir).pipe(Logger.withMinimumLogLevel(LogLevel.None)),
-		);
+		const results = await runSyncPeers({ lock: [], minor: ["effect"] }, devUpdates, workspacesLayer, tmpDir);
 
 		expect(results).toHaveLength(1);
 		expect(results[0].to).toBe("^3.13.0");
@@ -306,14 +323,10 @@ describe("syncPeers", () => {
 			// No peerDependencies at all
 		});
 
-		mockGetPackageInfosAsync.mockResolvedValue({
-			"my-lib": {
-				name: "my-lib",
-				packageJsonPath: join(pkgDir, "package.json"),
-				path: pkgDir,
-				version: "1.0.0",
-			},
-		});
+		const workspacesLayer = makeWorkspacesLayer([
+			{ name: "root", path: tmpDir },
+			{ name: "my-lib", path: pkgDir },
+		]);
 
 		const devUpdates: DependencyUpdateResult[] = [
 			{
@@ -325,9 +338,7 @@ describe("syncPeers", () => {
 			},
 		];
 
-		const results = await Effect.runPromise(
-			syncPeers({ lock: ["effect"], minor: [] }, devUpdates, tmpDir).pipe(Logger.withMinimumLogLevel(LogLevel.None)),
-		);
+		const results = await runSyncPeers({ lock: ["effect"], minor: [] }, devUpdates, workspacesLayer, tmpDir);
 
 		expect(results).toHaveLength(0);
 	});
@@ -336,7 +347,7 @@ describe("syncPeers", () => {
 		const tmpDir = makeTempDir();
 		writePackageJson(tmpDir, { name: "root", version: "1.0.0" });
 
-		mockGetPackageInfosAsync.mockRejectedValue(new Error("workspace detection failed"));
+		const workspacesLayer = makeFailingWorkspacesLayer();
 
 		const devUpdates: DependencyUpdateResult[] = [
 			{
@@ -348,9 +359,7 @@ describe("syncPeers", () => {
 			},
 		];
 
-		const results = await Effect.runPromise(
-			syncPeers({ lock: ["effect"], minor: [] }, devUpdates, tmpDir).pipe(Logger.withMinimumLogLevel(LogLevel.None)),
-		);
+		const results = await runSyncPeers({ lock: ["effect"], minor: [] }, devUpdates, workspacesLayer, tmpDir);
 
 		// Should still return results for packages it can resolve
 		// Root package path is resolved independently of workspace-tools
@@ -361,7 +370,7 @@ describe("syncPeers", () => {
 		const tmpDir = makeTempDir();
 		writePackageJson(tmpDir, { name: "root", version: "1.0.0" });
 
-		mockGetPackageInfosAsync.mockResolvedValue({});
+		const workspacesLayer = makeWorkspacesLayer([{ name: "root", path: tmpDir }]);
 
 		const devUpdates: DependencyUpdateResult[] = [
 			{
@@ -373,9 +382,7 @@ describe("syncPeers", () => {
 			},
 		];
 
-		const results = await Effect.runPromise(
-			syncPeers({ lock: ["effect"], minor: [] }, devUpdates, tmpDir).pipe(Logger.withMinimumLogLevel(LogLevel.None)),
-		);
+		const results = await runSyncPeers({ lock: ["effect"], minor: [] }, devUpdates, workspacesLayer, tmpDir);
 
 		expect(results).toHaveLength(0);
 	});
@@ -390,9 +397,10 @@ describe("syncPeers", () => {
 			peerDependencies: { effect: "^3.0.0" },
 		});
 
-		mockGetPackageInfosAsync.mockResolvedValue({
-			"my-lib": { packageJsonPath: join(pkgDir, "package.json") },
-		});
+		const workspacesLayer = makeWorkspacesLayer([
+			{ name: "root", path: tmpDir },
+			{ name: "my-lib", path: pkgDir },
+		]);
 
 		const devUpdates: DependencyUpdateResult[] = [
 			{
@@ -404,9 +412,7 @@ describe("syncPeers", () => {
 			},
 		];
 
-		const results = await Effect.runPromise(
-			syncPeers({ lock: ["effect"], minor: [] }, devUpdates, tmpDir).pipe(Logger.withMinimumLogLevel(LogLevel.None)),
-		);
+		const results = await runSyncPeers({ lock: ["effect"], minor: [] }, devUpdates, workspacesLayer, tmpDir);
 
 		expect(results).toHaveLength(0);
 

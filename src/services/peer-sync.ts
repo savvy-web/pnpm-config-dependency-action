@@ -10,12 +10,12 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Effect } from "effect";
 import { SemVer } from "semver-effect";
-import { getPackageInfosAsync } from "workspace-tools";
 
 import { FileSystemError } from "../errors/errors.js";
 import type { DependencyUpdateResult } from "../schemas/domain.js";
 import { parseSpecifier } from "../utils/deps.js";
 import { detectIndent } from "../utils/pnpm.js";
+import { Workspaces } from "./workspaces.js";
 
 export type PeerStrategy = "lock" | "minor";
 
@@ -68,7 +68,7 @@ export const syncPeers = (
 	config: PeerSyncConfig,
 	devUpdates: ReadonlyArray<DependencyUpdateResult>,
 	workspaceRoot: string = process.cwd(),
-): Effect.Effect<ReadonlyArray<DependencyUpdateResult>> =>
+): Effect.Effect<ReadonlyArray<DependencyUpdateResult>, FileSystemError, Workspaces> =>
 	Effect.gen(function* () {
 		if (config.lock.length === 0 && config.minor.length === 0) return [];
 
@@ -79,39 +79,19 @@ export const syncPeers = (
 		for (const pkg of config.lock) strategyMap.set(pkg, "lock");
 		for (const pkg of config.minor) strategyMap.set(pkg, "minor");
 
-		const packageInfos = yield* Effect.tryPromise({
-			try: () => getPackageInfosAsync(workspaceRoot),
-			catch: (e) =>
-				new FileSystemError({
-					operation: "read",
-					path: workspaceRoot,
-					reason: `Failed to get workspace info: ${e}`,
-				}),
-		}).pipe(
+		const workspacesService = yield* Workspaces;
+		const packages = yield* workspacesService.listPackages(workspaceRoot).pipe(
 			Effect.catchAll((error) =>
 				Effect.gen(function* () {
 					yield* Effect.logWarning(`Failed to get workspace info: ${error.reason}`);
-					return {};
+					return [] as ReadonlyArray<{ name: string; path: string }>;
 				}),
 			),
 		);
 
 		const nameToPath = new Map<string, string>();
-		const rootPkgJson = join(workspaceRoot, "package.json");
-		// Resolve root package name from package.json
-		const rootName = yield* Effect.try({
-			try: () => {
-				const raw = readFileSync(rootPkgJson, "utf-8");
-				const pkg = JSON.parse(raw) as { name?: string };
-				return pkg.name ?? "(root)";
-			},
-			catch: () =>
-				new FileSystemError({ operation: "read", path: rootPkgJson, reason: "Failed to read root package.json" }),
-		}).pipe(Effect.catchAll(() => Effect.succeed("(root)")));
-		nameToPath.set(rootName, rootPkgJson);
-		if (rootName !== "(root)") nameToPath.set("(root)", rootPkgJson);
-		for (const [name, info] of Object.entries(packageInfos)) {
-			nameToPath.set(name, info.packageJsonPath);
+		for (const pkg of packages) {
+			nameToPath.set(pkg.name, join(pkg.path, "package.json"));
 		}
 
 		for (const update of devUpdates) {

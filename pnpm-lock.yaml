@@ -51,9 +51,6 @@ importers:
       semver-effect:
         specifier: ^0.2.1
         version: 0.2.1(effect@3.21.2)
-      workspace-tools:
-        specifier: 0.41.0
-        version: 0.41.0
       workspaces-effect:
         specifier: ^0.4.1
         version: 0.4.1(@effect/platform@0.96.1(effect@3.21.2))(effect@3.21.2)
@@ -3337,9 +3334,6 @@ packages:
   word-wrap@1.2.5:
     resolution: {integrity: sha512-BN22B5eaMMI9UMtjrGd5g5eCYPpCPDUy0FJXbYsaT5zYxjFOckS53SQDE3pWkVoWpHXVb3BrYcEN4Twa55B5cA==}
     engines: {node: '>=0.10.0'}
-
-  workspace-tools@0.41.0:
-    resolution: {integrity: sha512-iBB6LNqtJpfjTWnyjlgOwdJmf1wBTUsIr1V5phOBCJMywubpYAijDUqhgz7RfrTYdscA4vEFyhjiy4OSAGULcA==}
 
   workspace-tools@0.41.4:
     resolution: {integrity: sha512-FuSHMNmM1AXJaaWIUMFsWH/+dR0KEzkHhTv96KZ5iKxCvi4TXnATRr/U23d8d8DMUx7oL/oVfr9SvEaDvDYN2A==}
@@ -7066,16 +7060,6 @@ snapshots:
       stackback: 0.0.2
 
   word-wrap@1.2.5: {}
-
-  workspace-tools@0.41.0:
-    dependencies:
-      '@yarnpkg/lockfile': 1.1.0
-      fast-glob: 3.3.3
-      git-url-parse: 16.1.0
-      globby: 11.1.0
-      jju: 1.4.0
-      js-yaml: 4.1.1
-      micromatch: 4.0.8
 
   workspace-tools@0.41.4:
     dependencies:
