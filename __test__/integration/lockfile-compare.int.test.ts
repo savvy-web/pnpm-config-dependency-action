@@ -7,10 +7,8 @@
 
 import { copyFileSync } from "node:fs";
 import { join } from "node:path";
-import { NodeContext } from "@effect/platform-node";
-import { Effect, Layer } from "effect";
+import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
-import { WorkspacesLive as WorkspacesEffectLive } from "workspaces-effect";
 import { captureLockfileState, compareLockfiles } from "../../src/services/lockfile.js";
 import { WorkspacesLive } from "../../src/services/workspaces.js";
 import { loadFixture } from "./utils/load-fixture.js";
@@ -22,29 +20,16 @@ describe("Lockfile.compare integration", () => {
 		// Stage 1: capture the "before" lockfile
 		copyFileSync(join(fixture.path, "pnpm-lock.before.yaml"), join(fixture.path, "pnpm-lock.yaml"));
 
-		const before = await Effect.runPromise(
-			captureLockfileState(fixture.path).pipe(
-				Effect.provide(WorkspacesLive.pipe(Layer.provide(WorkspacesEffectLive))),
-				Effect.provide(NodeContext.layer),
-			),
-		);
+		const before = await Effect.runPromise(captureLockfileState(fixture.path).pipe(Effect.provide(WorkspacesLive)));
 
 		// Stage 2: capture the "after" lockfile
 		copyFileSync(join(fixture.path, "pnpm-lock.after.yaml"), join(fixture.path, "pnpm-lock.yaml"));
 
-		const after = await Effect.runPromise(
-			captureLockfileState(fixture.path).pipe(
-				Effect.provide(WorkspacesLive.pipe(Layer.provide(WorkspacesEffectLive))),
-				Effect.provide(NodeContext.layer),
-			),
-		);
+		const after = await Effect.runPromise(captureLockfileState(fixture.path).pipe(Effect.provide(WorkspacesLive)));
 
 		// Stage 3: compare and inspect
 		const changes = await Effect.runPromise(
-			compareLockfiles(before, after, fixture.path).pipe(
-				Effect.provide(WorkspacesLive.pipe(Layer.provide(WorkspacesEffectLive))),
-				Effect.provide(NodeContext.layer),
-			),
+			compareLockfiles(before, after, fixture.path).pipe(Effect.provide(WorkspacesLive)),
 		);
 
 		const lodashChange = changes.find((c) => c.dependency === "lodash");

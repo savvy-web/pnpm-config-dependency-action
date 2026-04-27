@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect, Layer, LogLevel, Logger } from "effect";
 import { describe, expect, it, vi } from "vitest";
+import { FileSystemError } from "../errors/errors.js";
 import type { DependencyUpdateResult } from "../schemas/domain.js";
 import { computePeerRange, syncPeers } from "./peer-sync.js";
 import { Workspaces } from "./workspaces.js";
@@ -35,15 +36,14 @@ const makeWorkspacesLayer = (packages: ReadonlyArray<{ name: string; path: strin
  */
 const makeFailingWorkspacesLayer = () =>
 	Layer.succeed(Workspaces, {
-		listPackages: vi.fn(
-			() =>
-				Effect.fail(
-					// Use a plain object cast since FileSystemError is a tagged error; its shape is what matters for the test
-					Object.assign(new Error("workspace detection failed"), {
-						_tag: "FileSystemError",
-						reason: "workspace detection failed",
-					}),
-				) as never,
+		listPackages: vi.fn((root) =>
+			Effect.fail(
+				new FileSystemError({
+					operation: "read",
+					path: root,
+					reason: "workspace detection failed",
+				}),
+			),
 		),
 		importerMap: vi.fn(() => Effect.succeed(new Map())),
 	});
