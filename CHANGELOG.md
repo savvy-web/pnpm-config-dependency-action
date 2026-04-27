@@ -1,5 +1,48 @@
 # pnpm-config-dependency-action
 
+## 0.12.0
+
+### Features
+
+* [`d06ac37`](https://github.com/savvy-web/pnpm-config-dependency-action/commit/d06ac37f48542eb67b8de34082419ffdbeb8eb5c) ### Versionable + trigger-driven changeset emission
+
+Changesets now follow precise rules:
+
+* A workspace package gets a changeset only if it is **versionable** (publishable per silk or vanilla mode rules, OR non-publishable with `privatePackages.version: true` in `.changeset/config.json`).
+* A versionable package gets a changeset only when at least one **trigger** fires for it: a `dependencies` / `optionalDependencies` / `peerDependencies` specifier change in its own `package.json`, a peer-sync rewrite of one of its peers, or a non-dev catalog reference resolving to a different version after the run.
+* `devDependencies`-only changes never produce a changeset (they appear in the table only when a changeset is being written for other reasons).
+* Empty changesets are no longer emitted.
+
+### Bug Fixes
+
+* [`d06ac37`](https://github.com/savvy-web/pnpm-config-dependency-action/commit/d06ac37f48542eb67b8de34082419ffdbeb8eb5c) ### Catalog consumer detection on pnpm v9 lockfiles
+
+`findCatalogConsumers` in the lockfile service now reads catalog specifiers from the importer's flat `specifiers` map (the pnpm v9 lockfile shape) instead of incorrectly looking for a `.specifier` property on the per-dep value (which is just a version string). Previously, catalog changes never surfaced as triggers because consumers were never matched. Catalog reference changes consumed in `dependencies`, `optionalDependencies`, or `peerDependencies` now correctly trigger changesets for the consuming workspace.
+
+* [`ef5b742`](https://github.com/savvy-web/pnpm-config-dependency-action/commit/ef5b7420ca76d66232a1f910622983acfe9cfd41) ### Root-package name resolution
+
+The action now correctly resolves the root workspace package's name when emitting changesets. Previously, dependency changes affecting the root would produce a changeset with the literal frontmatter key `"."` instead of the root's actual `name` field from `package.json`. The root cause was the underlying `workspace-tools` dependency excluding the root package from its package list; replaced with `workspaces-effect` which always includes the root.
+
+* [`cadb1df`](https://github.com/savvy-web/pnpm-config-dependency-action/commit/cadb1dfc766d0112a611ddd80f2766f8ef1e3080) ### Preserve transitive dependencies during install
+
+The action's lockfile-refresh step previously deleted `node_modules` and `pnpm-lock.yaml` before running `pnpm install`, forcing a from-scratch resolve. This had the side effect of bumping transitive dependencies for packages the action was not asked to touch — every run could quietly move unrelated transitives forward to whatever the registry currently resolved them to.
+
+* [`ef5b742`](https://github.com/savvy-web/pnpm-config-dependency-action/commit/ef5b7420ca76d66232a1f910622983acfe9cfd41) Replace `workspace-tools` with `workspaces-effect` for workspace discovery and package metadata, via a new `Workspaces` domain service in `src/services/`.
+* Add integration test infrastructure under `__test__/integration/` with two committed mock-workspace fixtures (`single-package-private-root` and `multi-package-public-root`).
+
+The step now runs `pnpm install --frozen-lockfile=false --fix-lockfile` instead. The new command reconciles the lockfile against the just-modified `package.json` and `pnpm-workspace.yaml` files and installs `node_modules` to match, touching only the directly-bumped specifiers and their strict transitives. Unrelated transitives stay at their currently-pinned versions.
+
+The `--frozen-lockfile=false` flag is required because pnpm auto-enables `--frozen-lockfile` in CI (`CI=true` is always set in GitHub Actions), which would otherwise refuse to write the lockfile changes the action just made.
+
+### Maintenance
+
+* [`ef5b742`](https://github.com/savvy-web/pnpm-config-dependency-action/commit/ef5b7420ca76d66232a1f910622983acfe9cfd41) Replace `workspace-tools` with `workspaces-effect` for workspace discovery and package metadata, via a new `Workspaces` domain service in `src/services/`.
+* Add integration test infrastructure under `__test__/integration/` with two committed mock-workspace fixtures (`single-package-private-root` and `multi-package-public-root`).
+
+### Per-importer per-section catalog change records
+
+`compareCatalogs` now emits one `LockfileChange` per `(catalog change, consuming importer, dep section)` triple instead of a single aggregated record. Each record carries the accurate `type` field, so changes consumed only in `devDependencies` no longer incorrectly produce changesets for those workspaces.
+
 ## 0.11.2
 
 ### Other
