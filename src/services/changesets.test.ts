@@ -1,465 +1,216 @@
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+/**
+ * Unit tests for the rewritten Changesets service.
+ */
+
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Effect, LogLevel, Logger } from "effect";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { Effect, Layer } from "effect";
+import { beforeEach, describe, expect, it } from "vitest";
+import type { WorkspacePackage } from "workspaces-effect";
+import { PublishTarget, PublishabilityDetector } from "workspaces-effect";
 
 import type { DependencyUpdateResult, LockfileChange } from "../schemas/domain.js";
-import {
-	Changesets,
-	ChangesetsLive,
-	analyzeAffectedPackages,
-	createChangesets,
-	formatChangesetSummary,
-	hasChangesets,
-} from "./changesets.js";
+import { ChangesetConfig } from "./changeset-config.js";
+import { Changesets, ChangesetsLive } from "./changesets.js";
+import { Workspaces } from "./workspaces.js";
+
+const mockWorkspaces = (packages: ReadonlyArray<{ name: string; path: string }>) =>
+	Layer.succeed(Workspaces, {
+		listPackages: () => Effect.succeed(packages),
+		importerMap: () => Effect.die("not used"),
+	});
 
 /**
- * Run an Effect with logging suppressed.
+ * Mock PublishabilityDetector: versionable names produce one PublishTarget,
+ * others produce [].
+ *
+ * Changesets constructs a WorkspacePackage from disk and calls detect().
+ * The mock matches by pkg.name.
  */
-const runEffect = <A, E>(effect: Effect.Effect<A, E>) =>
-	Effect.runPromise(effect.pipe(Logger.withMinimumLogLevel(LogLevel.None)) as Effect.Effect<A>);
+const mockDetector = (versionableNames: ReadonlySet<string>) =>
+	Layer.succeed(PublishabilityDetector, {
+		detect: (pkg: WorkspacePackage) =>
+			Effect.succeed(
+				versionableNames.has(pkg.name)
+					? [
+							new PublishTarget({
+								name: pkg.name,
+								registry: "https://registry.npmjs.org/",
+								directory: ".",
+								access: "public",
+							}),
+						]
+					: [],
+			),
+	});
 
-describe("hasChangesets", () => {
-	let tempDir: string;
+/**
+ * Mock ChangesetConfig with configurable versionPrivate.
+ */
+const mockConfig = (versionPrivate = false) =>
+	Layer.succeed(ChangesetConfig, {
+		mode: () => Effect.succeed("silk" as const),
+		versionPrivate: () => Effect.succeed(versionPrivate),
+	});
 
+const setupChangesetDir = (root: string): void => {
+	mkdirSync(join(root, ".changeset"), { recursive: true });
+};
+
+const writePkgJson = (dir: string, content: unknown): void => {
+	writeFileSync(join(dir, "package.json"), JSON.stringify(content));
+};
+
+const readChangesets = (root: string): ReadonlyArray<{ name: string; content: string }> => {
+	const dir = join(root, ".changeset");
+	return readdirSync(dir)
+		.filter((f) => f.endsWith(".md"))
+		.map((f) => ({ name: f, content: readFileSync(join(dir, f), "utf-8") }));
+};
+
+describe("Changesets — versionable + trigger gating", () => {
+	let tmpDir: string;
 	beforeEach(() => {
-		tempDir = mkdtempSync(join(tmpdir(), "changeset-test-"));
+		tmpDir = mkdtempSync(join(tmpdir(), "cs-"));
 	});
 
-	afterEach(() => {
-		rmSync(tempDir, { recursive: true, force: true });
-	});
-
-	it("returns true when .changeset directory exists", () => {
-		mkdirSync(join(tempDir, ".changeset"));
-		expect(hasChangesets(tempDir)).toBe(true);
-	});
-
-	it("returns false when .changeset directory is missing", () => {
-		expect(hasChangesets(tempDir)).toBe(false);
-	});
-});
-
-describe("Changesets.create", () => {
-	let tempDir: string;
-
-	beforeEach(() => {
-		tempDir = mkdtempSync(join(tmpdir(), "create-changeset-test-"));
-	});
-
-	afterEach(() => {
-		rmSync(tempDir, { recursive: true, force: true });
-	});
-
-	it("returns empty array when .changeset directory is missing", async () => {
-		const changes: LockfileChange[] = [
-			{ type: "dependency", dependency: "effect", from: "3.0.0", to: "3.1.0", affectedPackages: ["@savvy-web/core"] },
-		];
-
-		const result = await runEffect(
-			Effect.gen(function* () {
-				const cs = yield* Changesets;
-				return yield* cs.create(changes, [], [], tempDir);
-			}).pipe(Effect.provide(ChangesetsLive)),
+	const runCreate = (
+		packages: ReadonlyArray<{ name: string; path: string }>,
+		versionable: ReadonlySet<string>,
+		lockfileChanges: ReadonlyArray<LockfileChange>,
+		devUpdates: ReadonlyArray<DependencyUpdateResult> = [],
+		peerUpdates: ReadonlyArray<DependencyUpdateResult> = [],
+		versionPrivate = false,
+	) =>
+		Effect.runPromise(
+			Effect.flatMap(Changesets, (c) => c.create(tmpDir, lockfileChanges, devUpdates, peerUpdates)).pipe(
+				Effect.provide(
+					ChangesetsLive.pipe(
+						Layer.provide(
+							Layer.mergeAll(mockWorkspaces(packages), mockDetector(versionable), mockConfig(versionPrivate)),
+						),
+					),
+				),
+			),
 		);
+
+	it("returns [] when .changeset/ does not exist", async () => {
+		writePkgJson(tmpDir, { name: "@x/a", version: "1.0.0" });
+		const result = await runCreate([{ name: "@x/a", path: tmpDir }], new Set(["@x/a"]), [
+			{ type: "dependency", dependency: "lodash", from: "^4.17.20", to: "^4.17.21", affectedPackages: ["@x/a"] },
+		]);
 		expect(result).toEqual([]);
 	});
 
-	it("returns empty array when no changes", async () => {
-		mkdirSync(join(tempDir, ".changeset"));
+	it("writes a changeset for a versionable package with a dependency trigger", async () => {
+		setupChangesetDir(tmpDir);
+		writePkgJson(tmpDir, { name: "@x/a", version: "1.0.0" });
+		const result = await runCreate([{ name: "@x/a", path: tmpDir }], new Set(["@x/a"]), [
+			{ type: "dependency", dependency: "lodash", from: "^4.17.20", to: "^4.17.21", affectedPackages: ["@x/a"] },
+		]);
+		expect(result).toHaveLength(1);
+		const files = readChangesets(tmpDir);
+		expect(files[0].content).toContain('"@x/a": patch');
+		expect(files[0].content).toContain("| lodash |");
+	});
 
-		const result = await runEffect(
-			Effect.gen(function* () {
-				const cs = yield* Changesets;
-				return yield* cs.create([], [], [], tempDir);
-			}).pipe(Effect.provide(ChangesetsLive)),
+	it("does NOT write a changeset for devDep-only changes", async () => {
+		setupChangesetDir(tmpDir);
+		writePkgJson(tmpDir, { name: "@x/a", version: "1.0.0" });
+		const result = await runCreate(
+			[{ name: "@x/a", path: tmpDir }],
+			new Set(["@x/a"]),
+			[],
+			[{ dependency: "rslib-builder", from: "^0.20.0", to: "^0.20.1", type: "devDependency", package: "@x/a" }],
 		);
+		expect(result).toEqual([]);
+		expect(readChangesets(tmpDir)).toHaveLength(0);
+	});
+
+	it("does NOT write a changeset for non-versionable package even with trigger", async () => {
+		setupChangesetDir(tmpDir);
+		writePkgJson(tmpDir, { name: "@x/a", version: "1.0.0" });
+		const result = await runCreate([{ name: "@x/a", path: tmpDir }], new Set(), [
+			{ type: "dependency", dependency: "lodash", from: "^4.17.20", to: "^4.17.21", affectedPackages: ["@x/a"] },
+		]);
 		expect(result).toEqual([]);
 	});
 
-	it("creates changeset file for regular dependency changes", async () => {
-		mkdirSync(join(tempDir, ".changeset"));
-
-		const changes: LockfileChange[] = [
-			{ type: "dependency", dependency: "effect", from: "3.0.0", to: "3.1.0", affectedPackages: ["@savvy-web/core"] },
-		];
-
-		const result = await runEffect(
-			Effect.gen(function* () {
-				const cs = yield* Changesets;
-				return yield* cs.create(changes, [], [], tempDir);
-			}).pipe(Effect.provide(ChangesetsLive)),
+	it("writes a changeset for peer-sync rewrites", async () => {
+		setupChangesetDir(tmpDir);
+		writePkgJson(tmpDir, { name: "@x/a", version: "1.0.0" });
+		const result = await runCreate(
+			[{ name: "@x/a", path: tmpDir }],
+			new Set(["@x/a"]),
+			[],
+			[],
+			[{ dependency: "react", from: "^17.0.0", to: "^18.0.0", type: "peerDependency", package: "@x/a" }],
 		);
-
 		expect(result).toHaveLength(1);
-		expect(result[0].packages).toEqual(["@savvy-web/core"]);
-		expect(result[0].type).toBe("patch");
-		expect(result[0].summary).toContain("effect");
-
-		// Verify file was actually written
-		const changesetFiles = readdirSync(join(tempDir, ".changeset")).filter((f) => f.endsWith(".md"));
-		expect(changesetFiles).toHaveLength(1);
-
-		const content = readFileSync(join(tempDir, ".changeset", changesetFiles[0]), "utf-8");
-		expect(content).toContain('"@savvy-web/core": patch');
-		expect(content).toContain("effect");
 	});
 
-	it("creates empty changeset for config dependency changes", async () => {
-		mkdirSync(join(tempDir, ".changeset"));
-
-		const changes: LockfileChange[] = [
-			{ type: "config", dependency: "typescript", from: "5.3.3", to: "5.4.0", affectedPackages: [] },
-		];
-
-		const result = await runEffect(
-			Effect.gen(function* () {
-				const cs = yield* Changesets;
-				return yield* cs.create(changes, [], [], tempDir);
-			}).pipe(Effect.provide(ChangesetsLive)),
+	it("includes devDep rows in table when changeset is created for other reasons", async () => {
+		setupChangesetDir(tmpDir);
+		writePkgJson(tmpDir, { name: "@x/a", version: "1.0.0" });
+		await runCreate(
+			[{ name: "@x/a", path: tmpDir }],
+			new Set(["@x/a"]),
+			[{ type: "dependency", dependency: "lodash", from: "^4.17.20", to: "^4.17.21", affectedPackages: ["@x/a"] }],
+			[{ dependency: "rslib-builder", from: "^0.20.0", to: "^0.20.1", type: "devDependency", package: "@x/a" }],
 		);
-
-		expect(result).toHaveLength(1);
-		expect(result[0].packages).toEqual([]);
-		expect(result[0].type).toBe("patch");
-		expect(result[0].summary).toContain("typescript");
+		const files = readChangesets(tmpDir);
+		expect(files[0].content).toContain("| lodash |");
+		expect(files[0].content).toContain("| rslib-builder |");
 	});
 
-	it("includes pnpm upgrade in root changeset summary", async () => {
-		mkdirSync(join(tempDir, ".changeset"));
-
-		const changes: LockfileChange[] = [
-			{ type: "config", dependency: "pnpm", from: "10.28.2", to: "10.29.0", affectedPackages: [] },
-			{ type: "config", dependency: "typescript", from: "5.3.3", to: "5.4.0", affectedPackages: [] },
-		];
-
-		const result = await runEffect(
-			Effect.gen(function* () {
-				const cs = yield* Changesets;
-				return yield* cs.create(changes, [], [], tempDir);
-			}).pipe(Effect.provide(ChangesetsLive)),
-		);
-
-		expect(result).toHaveLength(1);
-		expect(result[0].packages).toEqual([]);
-		expect(result[0].summary).toContain("pnpm");
-		expect(result[0].summary).toContain("10.28.2");
-		expect(result[0].summary).toContain("10.29.0");
-		expect(result[0].summary).toContain("typescript");
+	it("never writes empty changesets", async () => {
+		setupChangesetDir(tmpDir);
+		writePkgJson(tmpDir, { name: "@x/a", version: "1.0.0" });
+		const result = await runCreate([{ name: "@x/a", path: tmpDir }], new Set(["@x/a"]), [], [], []);
+		expect(result).toEqual([]);
+		expect(readChangesets(tmpDir)).toHaveLength(0);
 	});
 
-	it("creates separate changesets for packages and root", async () => {
-		mkdirSync(join(tempDir, ".changeset"));
-
-		const changes: LockfileChange[] = [
-			{ type: "config", dependency: "typescript", from: "5.3.3", to: "5.4.0", affectedPackages: [] },
-			{ type: "dependency", dependency: "effect", from: "3.0.0", to: "3.1.0", affectedPackages: ["@savvy-web/core"] },
-		];
-
-		const result = await runEffect(
-			Effect.gen(function* () {
-				const cs = yield* Changesets;
-				return yield* cs.create(changes, [], [], tempDir);
-			}).pipe(Effect.provide(ChangesetsLive)),
-		);
-
-		expect(result).toHaveLength(2);
-		// Should have one package changeset and one root/empty changeset
-		const pkgChangeset = result.find((cs) => cs.packages.length > 0);
-		const rootChangeset = result.find((cs) => cs.packages.length === 0);
-		expect(pkgChangeset).toBeDefined();
-		expect(rootChangeset).toBeDefined();
-	});
-
-	it("creates changeset for multiple affected packages from same dependency", async () => {
-		mkdirSync(join(tempDir, ".changeset"));
-
-		const changes: LockfileChange[] = [
-			{
-				type: "dependency",
-				dependency: "effect",
-				from: "3.0.0",
-				to: "3.1.0",
-				affectedPackages: ["@savvy-web/core", "@savvy-web/utils"],
-			},
-		];
-
-		const result = await runEffect(
-			Effect.gen(function* () {
-				const cs = yield* Changesets;
-				return yield* cs.create(changes, [], [], tempDir);
-			}).pipe(Effect.provide(ChangesetsLive)),
-		);
-
-		// Each affected package gets its own changeset
-		expect(result).toHaveLength(2);
-		const packageNames = result.flatMap((cs) => cs.packages).sort();
-		expect(packageNames).toEqual(["@savvy-web/core", "@savvy-web/utils"]);
-	});
-});
-
-describe("analyzeAffectedPackages", () => {
-	it("groups changes by package, excludes (root)", () => {
-		const changes: LockfileChange[] = [
-			{ type: "config", dependency: "typescript", from: "5.3.3", to: "5.4.0", affectedPackages: [] },
-			{ type: "dependency", dependency: "effect", from: "3.0.0", to: "3.1.0", affectedPackages: ["@savvy-web/core"] },
-		];
-
-		const result = analyzeAffectedPackages(changes);
-
-		expect(result).toHaveLength(1);
-		expect(result[0].name).toBe("@savvy-web/core");
-		expect(result[0].changes).toHaveLength(1);
-		expect(result[0].changes[0].dependency).toBe("effect");
-	});
-
-	it("maps change fields correctly", () => {
-		const changes: LockfileChange[] = [
-			{ type: "dependency", dependency: "effect", from: "3.0.0", to: "3.1.0", affectedPackages: ["@savvy-web/core"] },
-		];
-
-		const result = analyzeAffectedPackages(changes);
-
-		expect(result[0].changes[0]).toEqual({
-			dependency: "effect",
-			from: "3.0.0",
-			to: "3.1.0",
-		});
-	});
-
-	it("returns empty array for config-only changes", () => {
-		const changes: LockfileChange[] = [
-			{ type: "config", dependency: "typescript", from: "5.3.3", to: "5.4.0", affectedPackages: [] },
-		];
-
-		const result = analyzeAffectedPackages(changes);
-		expect(result).toHaveLength(0);
-	});
-
-	it("handles empty changes array", () => {
-		const result = analyzeAffectedPackages([]);
-		expect(result).toHaveLength(0);
-	});
-
-	it("handles changes affecting multiple packages", () => {
-		const changes: LockfileChange[] = [
-			{
-				type: "dependency",
-				dependency: "effect",
-				from: "3.0.0",
-				to: "3.1.0",
-				affectedPackages: ["@savvy-web/core", "@savvy-web/utils"],
-			},
-		];
-
-		const result = analyzeAffectedPackages(changes);
-
-		expect(result).toHaveLength(2);
-		expect(result.map((p) => p.name).sort()).toEqual(["@savvy-web/core", "@savvy-web/utils"]);
-	});
-});
-
-describe("formatChangesetSummary", () => {
-	it("starts with ## Dependencies heading and table header", () => {
-		const changes: LockfileChange[] = [
-			{ type: "dependency", dependency: "effect", from: "3.0.0", to: "3.1.0", affectedPackages: ["@savvy-web/core"] },
-		];
-
-		const result = formatChangesetSummary(changes);
-
-		expect(result).toMatch(/^## Dependencies/);
-		expect(result).toContain("| Dependency | Type | Action | From | To |");
-		expect(result).toContain("| :--- | :--- | :--- | :--- | :--- |");
-	});
-
-	it("formats config dependency as table row with type 'config'", () => {
-		const changes: LockfileChange[] = [
-			{ type: "config", dependency: "typescript", from: "5.3.3", to: "5.4.0", affectedPackages: [] },
-		];
-
-		const result = formatChangesetSummary(changes);
-
-		expect(result).toContain("| typescript | config | updated | 5.3.3 | 5.4.0 |");
-	});
-
-	it("formats regular dependency as table row with type 'dependency'", () => {
-		const changes: LockfileChange[] = [
-			{ type: "dependency", dependency: "effect", from: "3.0.0", to: "3.1.0", affectedPackages: ["@savvy-web/core"] },
-		];
-
-		const result = formatChangesetSummary(changes);
-
-		expect(result).toContain("| effect | dependency | updated | 3.0.0 | 3.1.0 |");
-	});
-
-	it("uses em dash and 'added' action when from is null", () => {
-		const changes: LockfileChange[] = [
-			{
-				type: "dependency",
-				dependency: "@effect/schema",
-				from: null,
-				to: "0.61.0",
-				affectedPackages: ["@savvy-web/core"],
-			},
-		];
-
-		const result = formatChangesetSummary(changes);
-
-		expect(result).toContain("| @effect/schema | dependency | added | \u2014 | 0.61.0 |");
-	});
-
-	it("renders all changes in a single table without sub-headings", () => {
-		const changes: LockfileChange[] = [
-			{ type: "config", dependency: "typescript", from: "5.3.3", to: "5.4.0", affectedPackages: [] },
-			{ type: "dependency", dependency: "effect", from: "3.0.0", to: "3.1.0", affectedPackages: ["@savvy-web/core"] },
-		];
-
-		const result = formatChangesetSummary(changes);
-
-		expect(result).toContain("| typescript | config | updated | 5.3.3 | 5.4.0 |");
-		expect(result).toContain("| effect | dependency | updated | 3.0.0 | 3.1.0 |");
-		expect(result).not.toContain("### Config");
-		expect(result).not.toContain("### Packages");
-	});
-
-	it("handles config-only new dependency with em dash", () => {
-		const changes: LockfileChange[] = [
-			{ type: "config", dependency: "@biomejs/biome", from: null, to: "1.6.1", affectedPackages: [] },
-		];
-
-		const result = formatChangesetSummary(changes);
-
-		expect(result).toContain("| @biomejs/biome | config | added | \u2014 | 1.6.1 |");
-	});
-});
-
-describe("changeset triggering rules", () => {
-	let tempDir: string;
-
-	beforeEach(() => {
-		tempDir = mkdtempSync(join(tmpdir(), "changeset-trigger-test-"));
-		mkdirSync(join(tempDir, ".changeset"));
-	});
-
-	afterEach(() => {
-		rmSync(tempDir, { recursive: true, force: true });
-	});
-
-	it("should NOT create changeset for devDependency-only changes", async () => {
-		const devUpdates: DependencyUpdateResult[] = [
-			{
-				dependency: "vitest",
-				from: "1.0.0",
-				to: "1.1.0",
-				type: "devDependency",
-				package: "@savvy-web/core",
-			},
-		];
-
-		const result = await runEffect(createChangesets([], devUpdates, [], tempDir));
-
+	it("config-type lockfile changes never trigger a changeset", async () => {
+		setupChangesetDir(tmpDir);
+		writePkgJson(tmpDir, { name: "@x/a", version: "1.0.0" });
+		const result = await runCreate([{ name: "@x/a", path: tmpDir }], new Set(["@x/a"]), [
+			{ type: "config", dependency: "@savvy-web/x", from: "1.0.0", to: "2.0.0", affectedPackages: [] },
+		]);
 		expect(result).toEqual([]);
 	});
 
-	it("should create changeset when peerDependency changed, including all rows", async () => {
-		const peerUpdates: DependencyUpdateResult[] = [
-			{
-				dependency: "react",
-				from: "^18.0.0",
-				to: "^19.0.0",
-				type: "peerDependency",
-				package: "@savvy-web/ui",
-			},
-		];
-
-		const devUpdates: DependencyUpdateResult[] = [
-			{
-				dependency: "vitest",
-				from: "1.0.0",
-				to: "1.1.0",
-				type: "devDependency",
-				package: "@savvy-web/ui",
-			},
-		];
-
-		const result = await runEffect(createChangesets([], devUpdates, peerUpdates, tempDir));
-
-		expect(result).toHaveLength(1);
-		expect(result[0].packages).toEqual(["@savvy-web/ui"]);
-
-		// Summary should contain both the peer and the dev rows
-		expect(result[0].summary).toContain("react");
-		expect(result[0].summary).toContain("peerDependency");
-		expect(result[0].summary).toContain("vitest");
-		expect(result[0].summary).toContain("devDependency");
-
-		// Verify file was written
-		const changesetFiles = readdirSync(join(tempDir, ".changeset")).filter((f) => f.endsWith(".md"));
-		expect(changesetFiles).toHaveLength(1);
-
-		const content = readFileSync(join(tempDir, ".changeset", changesetFiles[0]), "utf-8");
-		expect(content).toContain('"@savvy-web/ui": patch');
+	it("catalog change in devDependency does NOT trigger (informational only)", async () => {
+		setupChangesetDir(tmpDir);
+		writePkgJson(tmpDir, { name: "@x/a", version: "1.0.0" });
+		const result = await runCreate([{ name: "@x/a", path: tmpDir }], new Set(["@x/a"]), [
+			{ type: "devDependency", dependency: "lodash", from: "^4.17.20", to: "^4.17.21", affectedPackages: ["@x/a"] },
+		]);
+		expect(result).toEqual([]);
 	});
 
-	it("should create changeset when lockfile change exists, including dev rows", async () => {
-		const lockfileChanges: LockfileChange[] = [
-			{
-				type: "dependency",
-				dependency: "effect",
-				from: "3.0.0",
-				to: "3.1.0",
-				affectedPackages: ["@savvy-web/core"],
-			},
-		];
-
-		const devUpdates: DependencyUpdateResult[] = [
-			{
-				dependency: "vitest",
-				from: "1.0.0",
-				to: "1.1.0",
-				type: "devDependency",
-				package: "@savvy-web/core",
-			},
-		];
-
-		const result = await runEffect(createChangesets(lockfileChanges, devUpdates, [], tempDir));
-
+	it("catalog change in peerDependency triggers a changeset", async () => {
+		setupChangesetDir(tmpDir);
+		writePkgJson(tmpDir, { name: "@x/a", version: "1.0.0" });
+		const result = await runCreate([{ name: "@x/a", path: tmpDir }], new Set(["@x/a"]), [
+			{ type: "peerDependency", dependency: "react", from: "^17", to: "^18", affectedPackages: ["@x/a"] },
+		]);
 		expect(result).toHaveLength(1);
-		expect(result[0].packages).toEqual(["@savvy-web/core"]);
-
-		// Summary should contain both the lockfile change and the dev row
-		expect(result[0].summary).toContain("effect");
-		expect(result[0].summary).toContain("dependency");
-		expect(result[0].summary).toContain("vitest");
-		expect(result[0].summary).toContain("devDependency");
 	});
 
-	it("should not create changeset for package with only dev updates when another package has lockfile changes", async () => {
-		const lockfileChanges: LockfileChange[] = [
-			{
-				type: "dependency",
-				dependency: "effect",
-				from: "3.0.0",
-				to: "3.1.0",
-				affectedPackages: ["@savvy-web/core"],
-			},
-		];
-
-		const devUpdates: DependencyUpdateResult[] = [
-			{
-				dependency: "vitest",
-				from: "1.0.0",
-				to: "1.1.0",
-				type: "devDependency",
-				package: "@savvy-web/utils",
-			},
-		];
-
-		const result = await runEffect(createChangesets(lockfileChanges, devUpdates, [], tempDir));
-
-		// Only @savvy-web/core should get a changeset, not @savvy-web/utils
+	it("non-publishable + versionPrivate=true → changeset written", async () => {
+		setupChangesetDir(tmpDir);
+		writePkgJson(tmpDir, { name: "@x/a", version: "1.0.0", private: true });
+		// empty versionable set (not publishable), but versionPrivate=true
+		const result = await runCreate(
+			[{ name: "@x/a", path: tmpDir }],
+			new Set(),
+			[{ type: "dependency", dependency: "lodash", from: "^4.17.20", to: "^4.17.21", affectedPackages: ["@x/a"] }],
+			[],
+			[],
+			true,
+		);
 		expect(result).toHaveLength(1);
-		expect(result[0].packages).toEqual(["@savvy-web/core"]);
 	});
 });

@@ -1,0 +1,8 @@
+{
+	"name": "@scope/catalog-prod-leaf",
+	"version": "0.1.0",
+	"private": false,
+	"dependencies": {
+		"lodash": "catalog:silk"
+	}
+}

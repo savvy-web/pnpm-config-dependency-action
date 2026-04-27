@@ -1,0 +1,8 @@
+{
+	"name": "@scope/silk-devdep-leaf",
+	"version": "0.1.0",
+	"private": false,
+	"devDependencies": {
+		"lodash": "^4.17.20"
+	}
+}

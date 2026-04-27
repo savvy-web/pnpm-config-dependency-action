@@ -255,6 +255,92 @@ describe("Lockfile.compare - named catalogs", () => {
 		expect(changes[0].to).toBe("^3.1.0");
 		expect(changes[0].affectedPackages).toContain("@savvy-web/core");
 	});
+
+	it("detects catalog consumer via pnpm v9 specifiers map (fast path)", async () => {
+		// pnpm v9 lockfile shape: the catalog specifier lives in the importer's
+		// flat specifiers map; the dependencies object holds only the resolved
+		// version string. Verifies findCatalogConsumers's fast-path branch.
+		const before = makeLockfile({
+			catalogs: {
+				silk: {
+					effect: { specifier: "^3.0.0", version: "3.0.5" },
+				},
+			},
+			importers: {
+				"pkgs/core": {
+					specifiers: { effect: "catalog:silk" },
+					dependencies: { effect: "3.0.5" },
+				},
+			},
+		});
+
+		const after = makeLockfile({
+			catalogs: {
+				silk: {
+					effect: { specifier: "^3.1.0", version: "3.1.2" },
+				},
+			},
+			importers: {
+				"pkgs/core": {
+					specifiers: { effect: "catalog:silk" },
+					dependencies: { effect: "3.1.2" },
+				},
+			},
+		});
+
+		const changes = await runCompare(before, after);
+
+		expect(changes).toHaveLength(1);
+		expect(changes[0].dependency).toBe("effect");
+		expect(changes[0].type).toBe("dependency");
+		expect(changes[0].affectedPackages).toContain("@savvy-web/core");
+	});
+
+	it("emits one record per dep section when a catalog ref is consumed in multiple sections", async () => {
+		// A catalog ref declared in BOTH dependencies and peerDependencies of the
+		// same workspace should produce two LockfileChange records (one per
+		// section). This was previously bugged in the v9 fast path where the loop
+		// broke after the first matching section.
+		const before = makeLockfile({
+			catalogs: {
+				silk: {
+					effect: { specifier: "^3.0.0", version: "3.0.5" },
+				},
+			},
+			importers: {
+				"pkgs/core": {
+					specifiers: { effect: "catalog:silk" },
+					dependencies: { effect: "3.0.5" },
+					peerDependencies: { effect: "3.0.5" },
+				},
+			},
+		});
+
+		const after = makeLockfile({
+			catalogs: {
+				silk: {
+					effect: { specifier: "^3.1.0", version: "3.1.2" },
+				},
+			},
+			importers: {
+				"pkgs/core": {
+					specifiers: { effect: "catalog:silk" },
+					dependencies: { effect: "3.1.2" },
+					peerDependencies: { effect: "3.1.2" },
+				},
+			},
+		});
+
+		const changes = await runCompare(before, after);
+
+		expect(changes).toHaveLength(2);
+		const types = changes.map((c) => c.type).sort();
+		expect(types).toEqual(["dependency", "peerDependency"]);
+		for (const change of changes) {
+			expect(change.dependency).toBe("effect");
+			expect(change.affectedPackages).toContain("@savvy-web/core");
+		}
+	});
 });
 
 describe("Lockfile.compare - importer specifier changes", () => {
@@ -553,7 +639,13 @@ describe("Lockfile.compare - catalog resolved version changes", () => {
 					turbo: { specifier: "^2.8.4", version: "2.8.6" },
 				},
 			},
-			importers: {},
+			importers: {
+				"pkgs/core": {
+					devDependencies: {
+						turbo: { specifier: "catalog:", version: "2.8.6" },
+					},
+				} as unknown,
+			},
 		});
 
 		const after = makeLockfile({
@@ -562,7 +654,13 @@ describe("Lockfile.compare - catalog resolved version changes", () => {
 					turbo: { specifier: "^2.9.0", version: "2.9.1" },
 				},
 			},
-			importers: {},
+			importers: {
+				"pkgs/core": {
+					devDependencies: {
+						turbo: { specifier: "catalog:", version: "2.9.1" },
+					},
+				} as unknown,
+			},
 		});
 
 		const changes = await runCompare(before, after);
@@ -571,6 +669,8 @@ describe("Lockfile.compare - catalog resolved version changes", () => {
 		expect(changes[0].dependency).toBe("turbo");
 		expect(changes[0].from).toBe("^2.8.4");
 		expect(changes[0].to).toBe("^2.9.0");
+		expect(changes[0].type).toBe("devDependency");
+		expect(changes[0].affectedPackages).toEqual(["@savvy-web/core"]);
 	});
 
 	it("reports specifier versions when both specifier and version changed", async () => {
@@ -580,7 +680,13 @@ describe("Lockfile.compare - catalog resolved version changes", () => {
 					effect: { specifier: "^3.0.0", version: "3.0.5" },
 				},
 			},
-			importers: {},
+			importers: {
+				"pkgs/utils": {
+					dependencies: {
+						effect: { specifier: "catalog:", version: "3.0.5" },
+					},
+				} as unknown,
+			},
 		});
 
 		const after = makeLockfile({
@@ -589,7 +695,13 @@ describe("Lockfile.compare - catalog resolved version changes", () => {
 					effect: { specifier: "^3.1.0", version: "3.1.2" },
 				},
 			},
-			importers: {},
+			importers: {
+				"pkgs/utils": {
+					dependencies: {
+						effect: { specifier: "catalog:", version: "3.1.2" },
+					},
+				} as unknown,
+			},
 		});
 
 		const changes = await runCompare(before, after);
@@ -597,6 +709,8 @@ describe("Lockfile.compare - catalog resolved version changes", () => {
 		expect(changes).toHaveLength(1);
 		expect(changes[0].from).toBe("^3.0.0");
 		expect(changes[0].to).toBe("^3.1.0");
+		expect(changes[0].type).toBe("dependency");
+		expect(changes[0].affectedPackages).toEqual(["@savvy-web/utils"]);
 	});
 
 	it("reports no changes when both specifier and version are identical", async () => {

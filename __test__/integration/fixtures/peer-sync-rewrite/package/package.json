@@ -1,0 +1,13 @@
+{
+	"name": "@scope/peer-sync-leaf",
+	"version": "0.1.0",
+	"private": false,
+	"peerDependencies": {
+		"lodash": "^4.17.20"
+	},
+	"peerDependenciesMeta": {
+		"lodash": {
+			"optional": true
+		}
+	}
+}
