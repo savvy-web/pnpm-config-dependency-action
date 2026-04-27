@@ -40,29 +40,22 @@ export class Workspaces extends Context.Tag("Workspaces")<
 // Live Layer
 // ══════════════════════════════════════════════════════════════════════════════
 
+const scanPackages = (workspaceRoot: string): Effect.Effect<ReadonlyArray<WorkspacePackageInfo>, FileSystemError> =>
+	Effect.try({
+		try: () => getWorkspacePackagesSync(workspaceRoot),
+		catch: (e) =>
+			new FileSystemError({
+				operation: "read",
+				path: workspaceRoot,
+				reason: `Failed to list workspace packages: ${String(e)}`,
+			}),
+	});
+
 export const WorkspacesLive = Layer.succeed(Workspaces, {
-	listPackages: (workspaceRoot) =>
-		Effect.try({
-			try: () => getWorkspacePackagesSync(workspaceRoot),
-			catch: (e) =>
-				new FileSystemError({
-					operation: "read",
-					path: workspaceRoot,
-					reason: `Failed to list workspace packages: ${String(e)}`,
-				}),
-		}),
+	listPackages: (workspaceRoot) => scanPackages(workspaceRoot),
 	importerMap: (workspaceRoot) =>
 		Effect.gen(function* () {
-			const packages = yield* Effect.try({
-				try: () => getWorkspacePackagesSync(workspaceRoot),
-				catch: (e) =>
-					new FileSystemError({
-						operation: "read",
-						path: workspaceRoot,
-						reason: `Failed to list workspace packages: ${String(e)}`,
-					}),
-			});
-
+			const packages = yield* scanPackages(workspaceRoot);
 			const map = new Map<string, WorkspacePackageInfo>();
 			const normalizedRoot = workspaceRoot.replace(/\/$/, "");
 			for (const pkg of packages) {

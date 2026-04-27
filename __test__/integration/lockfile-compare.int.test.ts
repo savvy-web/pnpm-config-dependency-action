@@ -20,12 +20,12 @@ describe("Lockfile.compare integration", () => {
 		// Stage 1: capture the "before" lockfile
 		copyFileSync(join(fixture.path, "pnpm-lock.before.yaml"), join(fixture.path, "pnpm-lock.yaml"));
 
-		const before = await Effect.runPromise(captureLockfileState(fixture.path).pipe(Effect.provide(WorkspacesLive)));
+		const before = await Effect.runPromise(captureLockfileState(fixture.path));
 
 		// Stage 2: capture the "after" lockfile
 		copyFileSync(join(fixture.path, "pnpm-lock.after.yaml"), join(fixture.path, "pnpm-lock.yaml"));
 
-		const after = await Effect.runPromise(captureLockfileState(fixture.path).pipe(Effect.provide(WorkspacesLive)));
+		const after = await Effect.runPromise(captureLockfileState(fixture.path));
 
 		// Stage 3: compare and inspect
 		const changes = await Effect.runPromise(
