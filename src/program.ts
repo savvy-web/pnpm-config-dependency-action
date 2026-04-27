@@ -22,7 +22,7 @@ import { Config, Duration, Effect, LogLevel, Logger, Redacted } from "effect";
 import { makeAppLayer } from "./layers/app.js";
 import type { ChangesetFile, DependencyUpdateResult, PullRequestResult } from "./schemas/domain.js";
 import { BranchManager } from "./services/branch.js";
-import { createChangesets } from "./services/changesets.js";
+import { Changesets } from "./services/changesets.js";
 import { ConfigDeps } from "./services/config-deps.js";
 import { captureLockfileState, compareLockfiles } from "./services/lockfile.js";
 import type { PeerSyncConfig } from "./services/peer-sync.js";
@@ -399,17 +399,8 @@ const innerProgram = (
 						let changesets: ReadonlyArray<ChangesetFile> = [];
 						if (inputs.changesets) {
 							yield* Effect.logInfo("Step 11: Creating changesets");
-
-							const configChangesForChangeset = [...configUpdatesFromPnpm, ...configUpdates].map((u) => ({
-								type: "config" as const,
-								dependency: u.dependency,
-								from: u.from,
-								to: u.to,
-								affectedPackages: [] as string[],
-							}));
-
-							const allChangesForChangeset = [...configChangesForChangeset, ...changes];
-							changesets = yield* createChangesets(allChangesForChangeset, regularUpdates, peerUpdates);
+							const changesetsService = yield* Changesets;
+							changesets = yield* changesetsService.create(process.cwd(), changes, regularUpdates, peerUpdates);
 						} else {
 							yield* Effect.logInfo("Step 11: Skipping changesets (disabled)");
 						}

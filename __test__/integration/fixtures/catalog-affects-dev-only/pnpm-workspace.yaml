@@ -1,0 +1,5 @@
+packages:
+  - package
+catalogs:
+  silk:
+    lodash: ^4.17.20

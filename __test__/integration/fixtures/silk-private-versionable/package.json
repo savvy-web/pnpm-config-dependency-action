@@ -1,0 +1,8 @@
+{
+	"name": "silk-private-versionable-root",
+	"version": "1.0.0",
+	"private": true,
+	"dependencies": {
+		"lodash": "^4.17.20"
+	}
+}

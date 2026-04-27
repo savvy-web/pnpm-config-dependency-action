@@ -20,8 +20,11 @@ import {
 import { Layer } from "effect";
 
 import { BranchManagerLive } from "../services/branch.js";
+import { ChangesetConfigLive } from "../services/changeset-config.js";
+import { ChangesetsLive } from "../services/changesets.js";
 import { ConfigDepsLive } from "../services/config-deps.js";
 import { PnpmUpgradeLive } from "../services/pnpm-upgrade.js";
+import { PublishabilityDetectorAdaptiveLive } from "../services/publishability.js";
 import { RegularDepsLive } from "../services/regular-deps.js";
 import { ReportLive } from "../services/report.js";
 import { WorkspacesLive } from "../services/workspaces.js";
@@ -35,6 +38,10 @@ export const makeAppLayer = (dryRun: boolean) => {
 	const prLayer = PullRequestLive.pipe(Layer.provide(Layer.merge(GitHubClientLive, ghGraphql)));
 
 	const workspaces = WorkspacesLive;
+	const changesetConfig = ChangesetConfigLive;
+	// PublishabilityDetectorAdaptiveLive overrides PublishabilityDetector and
+	// reads ChangesetConfig.mode per-call to dispatch to silk/vanilla/noop.
+	const publishabilityDetector = PublishabilityDetectorAdaptiveLive.pipe(Layer.provide(changesetConfig));
 
 	const libraryLayers = Layer.mergeAll(
 		GitHubClientLive,
@@ -49,6 +56,9 @@ export const makeAppLayer = (dryRun: boolean) => {
 
 	const domainLayers = Layer.mergeAll(
 		workspaces,
+		changesetConfig,
+		publishabilityDetector,
+		ChangesetsLive.pipe(Layer.provide(Layer.mergeAll(workspaces, publishabilityDetector, changesetConfig))),
 		BranchManagerLive.pipe(Layer.provide(Layer.mergeAll(gitBranch, gitCommit, CommandRunnerLive))),
 		PnpmUpgradeLive.pipe(Layer.provide(CommandRunnerLive)),
 		ConfigDepsLive.pipe(Layer.provide(npmRegistry)),

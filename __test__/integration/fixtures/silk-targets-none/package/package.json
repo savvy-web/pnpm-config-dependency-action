@@ -1,0 +1,16 @@
+{
+	"name": "@scope/silk-targets-none-leaf",
+	"version": "0.1.0",
+	"private": true,
+	"dependencies": {
+		"lodash": "^4.17.20"
+	},
+	"publishConfig": {
+		"targets": [
+			{
+				"protocol": "npm",
+				"registry": "https://x"
+			}
+		]
+	}
+}

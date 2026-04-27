@@ -1,0 +1,12 @@
+{
+	"changelog": ["@savvy-web/changesets/changelog", { "repo": "test/test" }],
+	"commit": false,
+	"access": "public",
+	"baseBranch": "main",
+	"updateInternalDependencies": "patch",
+	"ignore": [],
+	"privatePackages": {
+		"tag": true,
+		"version": true
+	}
+}

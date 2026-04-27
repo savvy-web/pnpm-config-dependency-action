@@ -206,36 +206,64 @@ const compareLockfilesImpl = (
 	});
 
 /**
- * Find packages that use a specific catalog entry.
+ * Find each (importer, dep section) pair that consumes a catalog entry.
  *
- * Scans all importers to find dependencies with `catalog:<catalogName>` specifier.
+ * Returns one record per consumer per dep section, so callers can emit a
+ * LockfileChange with the precise type field. Catalog refs in
+ * devDependencies are returned with type "devDependency" — downstream
+ * Changesets gating treats those as informational only.
  */
-const findPackagesUsingCatalog = (
+const findCatalogConsumers = (
 	importers: LockfileObject["importers"],
 	catalogName: string,
 	dependencyName: string,
 	importerToPackage: Map<string, string>,
-): string[] => {
-	const affectedSet = new Set<string>();
+): ReadonlyArray<{ readonly packageName: string; readonly type: LockfileChange["type"] }> => {
+	const consumers: Array<{ readonly packageName: string; readonly type: LockfileChange["type"] }> = [];
 	const catalogSpecifier = catalogName === "default" ? "catalog:" : `catalog:${catalogName}`;
-
+	const depSections = [
+		{ field: "dependencies", type: "dependency" as const },
+		{ field: "devDependencies", type: "devDependency" as const },
+		{ field: "optionalDependencies", type: "optionalDependency" as const },
+		{ field: "peerDependencies", type: "peerDependency" as const },
+	];
 	for (const [importerId, snapshot] of Object.entries(importers ?? {})) {
-		// Check all dependency types
-		const depTypes = ["dependencies", "devDependencies", "optionalDependencies"] as const;
+		// In pnpm lockfile v9, the specifier for a dep lives in `snapshot.specifiers`,
+		// not inside the `dependencies` object entries (which only contain the resolved version).
+		// Check specifiers first; fall back to scanning dependency object entries for
+		// older lockfile shapes that embed { specifier, version } objects.
+		type SpecifiersRecord = Record<string, string>;
+		const specifiers = (snapshot.specifiers ?? {}) as SpecifiersRecord;
+		const specifier = specifiers[dependencyName];
 
-		for (const depType of depTypes) {
-			const deps = snapshot[depType] as Record<string, DependencySnapshot> | undefined;
-			if (!deps) continue;
-
-			const dep = deps[dependencyName];
-			if (dep?.specifier?.startsWith(catalogSpecifier)) {
-				const packageName = importerToPackage.get(importerId) ?? importerId;
-				affectedSet.add(packageName);
+		if (specifier !== undefined) {
+			// Fast path: specifier found in the top-level specifiers map
+			if (specifier.startsWith(catalogSpecifier)) {
+				// Emit one record per dep section the dep is declared in.
+				// A dep in both dependencies and peerDependencies (unusual but
+				// valid) gets two records, mirroring the fallback path below.
+				for (const { field, type } of depSections) {
+					const deps = snapshot[field as keyof typeof snapshot] as Record<string, unknown> | undefined;
+					if (deps && dependencyName in deps) {
+						const packageName = importerToPackage.get(importerId) ?? importerId;
+						consumers.push({ packageName, type });
+					}
+				}
+			}
+		} else {
+			// Fallback: older lockfile shapes may embed DependencySnapshot objects
+			for (const { field, type } of depSections) {
+				const deps = snapshot[field as keyof typeof snapshot] as Record<string, DependencySnapshot> | undefined;
+				if (!deps) continue;
+				const dep = deps[dependencyName];
+				if (dep?.specifier?.startsWith(catalogSpecifier)) {
+					const packageName = importerToPackage.get(importerId) ?? importerId;
+					consumers.push({ packageName, type });
+				}
 			}
 		}
 	}
-
-	return [...affectedSet];
+	return consumers;
 };
 
 /**
@@ -244,9 +272,10 @@ const findPackagesUsingCatalog = (
  * NOTE: Catalogs (catalog:silk, etc.) are shared version definitions.
  * These are different from configDependencies in pnpm-workspace.yaml.
  *
- * Catalog changes affect packages that use those catalog references,
- * so they are treated as regular dependency changes with the affected
- * packages populated from the importers that use the catalog specifier.
+ * Emits one LockfileChange per (catalog change, consuming importer, dep section)
+ * triple. Each record carries the accurate type field (dependency, devDependency,
+ * optionalDependency, peerDependency) so downstream consumers can use type alone
+ * as the trigger signal.
  */
 const compareCatalogs = (
 	before: CatalogSnapshots,
@@ -258,10 +287,7 @@ const compareCatalogs = (
 		const changes: LockfileChange[] = [];
 
 		yield* Effect.logDebug("=== Comparing Catalogs ===");
-		yield* Effect.logDebug(`Before catalogs: ${JSON.stringify(before)}`);
-		yield* Effect.logDebug(`After catalogs: ${JSON.stringify(after)}`);
 
-		// Check all catalogs in 'after' for changes/additions
 		for (const [catalogName, afterEntries] of Object.entries(after)) {
 			const beforeEntries = before[catalogName] ?? {};
 
@@ -272,51 +298,36 @@ const compareCatalogs = (
 				const afterVersion = afterEntry.version;
 				const beforeVersion = beforeEntry?.version ?? null;
 
-				// Detect specifier OR resolved version change
 				if (beforeSpecifier !== afterSpecifier || beforeVersion !== afterVersion) {
-					const depName = catalogName === "default" ? dep : `${dep} (catalog:${catalogName})`;
-
-					// Use resolved versions when specifier unchanged (e.g., ^2.8.4 stayed same but resolved 2.8.6 -> 2.8.7)
 					const from = beforeSpecifier !== afterSpecifier ? beforeSpecifier : beforeVersion;
 					const to = beforeSpecifier !== afterSpecifier ? afterSpecifier : afterVersion;
 
-					// Find which packages actually use this catalog entry
-					const affectedPackages = findPackagesUsingCatalog(
-						afterLockfile.importers,
-						catalogName,
-						dep,
-						importerToPackage,
+					const consumers = findCatalogConsumers(afterLockfile.importers, catalogName, dep, importerToPackage);
+
+					yield* Effect.logDebug(
+						`Catalog change: ${dep} (${catalogName}): ${from} -> ${to}; ${consumers.length} consumer(s)`,
 					);
 
-					yield* Effect.logDebug(`Catalog change: ${depName}: ${from} -> ${to}`);
-					yield* Effect.logDebug(`Affected packages for ${depName}: ${JSON.stringify(affectedPackages)}`);
-
-					// Catalog changes are "dependency" type - they affect the packages using them
-					changes.push({
-						type: "dependency",
-						dependency: dep, // Use raw dep name, not with catalog suffix
-						from,
-						to,
-						affectedPackages,
-					});
+					for (const consumer of consumers) {
+						changes.push({
+							type: consumer.type,
+							dependency: dep,
+							from,
+							to,
+							affectedPackages: [consumer.packageName],
+						});
+					}
 				}
 			}
 		}
 
-		// Check for removed catalogs/dependencies
+		// Removed-catalog handling unchanged
 		for (const [catalogName, beforeEntries] of Object.entries(before)) {
 			const afterEntries = after[catalogName] ?? {};
-
 			for (const dep of Object.keys(beforeEntries as Record<string, unknown>)) {
 				if (!(dep in afterEntries)) {
 					const beforeEntry = (beforeEntries as Record<string, ResolvedCatalogEntry>)[dep];
-					const depName = catalogName === "default" ? dep : `${dep} (catalog:${catalogName})`;
-
-					// For removed entries, check the 'before' lockfile importers
-					// But we only have 'after' - so these packages no longer use this catalog
-					// Mark as affecting no packages (the catalog was removed)
-					yield* Effect.logDebug(`Catalog removed: ${depName}`);
-
+					yield* Effect.logDebug(`Catalog removed: ${dep} (${catalogName})`);
 					changes.push({
 						type: "dependency",
 						dependency: dep,
