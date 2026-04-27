@@ -45,7 +45,7 @@
 		"@effect/platform-node": "catalog:silk",
 		"@pnpm/lockfile.fs": "^1001.1.32",
 		"@pnpm/lockfile.types": "^1002.1.0",
-		"@savvy-web/github-action-effects": "^0.11.12",
+		"@savvy-web/github-action-effects": "^0.11.14",
 		"effect": "catalog:silk",
 		"semver-effect": "^0.2.1",
 		"workspaces-effect": "^0.4.1",
