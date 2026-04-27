@@ -52,7 +52,7 @@ export const makeAppLayer = (dryRun: boolean) => {
 		BranchManagerLive.pipe(Layer.provide(Layer.mergeAll(gitBranch, gitCommit, CommandRunnerLive))),
 		PnpmUpgradeLive.pipe(Layer.provide(CommandRunnerLive)),
 		ConfigDepsLive.pipe(Layer.provide(npmRegistry)),
-		RegularDepsLive.pipe(Layer.provide(npmRegistry)),
+		RegularDepsLive.pipe(Layer.provide(Layer.merge(npmRegistry, workspaces))),
 		ReportLive.pipe(Layer.provide(prLayer)),
 	);
 

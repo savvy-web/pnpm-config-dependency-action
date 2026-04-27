@@ -7,6 +7,7 @@ import { Effect, Layer, LogLevel, Logger } from "effect";
 import { describe, expect, it, vi } from "vitest";
 import { matchesPattern, parseSpecifier } from "../utils/deps.js";
 import { RegularDeps, RegularDepsLive } from "./regular-deps.js";
+import { Workspaces } from "./workspaces.js";
 
 // Mock workspace-tools to return our test workspace info
 const { mockGetPackageInfosAsync } = vi.hoisted(() => ({
@@ -59,14 +60,35 @@ const makeRegistryState = (
 	return map;
 };
 
+// Stub Workspaces layer backed by mockGetPackageInfosAsync so existing tests
+// keep their behaviour until T10 rewrites them with a real Workspaces mock.
+const makeWorkspacesLayer = (workspaceRoot: string) =>
+	Layer.succeed(Workspaces, {
+		listPackages: (_root) =>
+			Effect.gen(function* () {
+				const infos = yield* Effect.promise(() =>
+					(mockGetPackageInfosAsync(workspaceRoot) as Promise<Record<string, { packageJsonPath: string }>>).catch(
+						() => ({}) as Record<string, { packageJsonPath: string }>,
+					),
+				);
+				return Object.entries(infos).map(([name, info]) => ({
+					name,
+					path: info.packageJsonPath.replace(/\/package\.json$/, ""),
+				}));
+			}),
+		importerMap: (_root) => Effect.succeed(new Map()),
+	});
+
 const runWithService = <A, E>(
 	fn: (service: Context.Tag.Service<typeof RegularDeps>) => Effect.Effect<A, E>,
 	packages?: Record<string, string>,
+	workspaceRoot?: string,
 ) => {
 	const registryLayer = packages
 		? NpmRegistryTest.layer({ packages: makeRegistryState(packages) })
 		: NpmRegistryTest.empty();
-	const layer = RegularDepsLive.pipe(Layer.provide(registryLayer));
+	const workspacesLayer = makeWorkspacesLayer(workspaceRoot ?? "");
+	const layer = RegularDepsLive.pipe(Layer.provide(Layer.merge(registryLayer, workspacesLayer)));
 	return Effect.runPromise(
 		Effect.gen(function* () {
 			const service = yield* RegularDeps;
