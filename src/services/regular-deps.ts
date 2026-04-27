@@ -182,7 +182,7 @@ const updateRegularDepsImpl = (
 			Effect.catchAll((error) =>
 				Effect.gen(function* () {
 					yield* Effect.logWarning(`Failed to list workspace packages: ${String(error)}`);
-					return [] as ReadonlyArray<{ readonly name: string; readonly path: string }>;
+					return [];
 				}),
 			),
 		);

@@ -19,7 +19,6 @@ Services are organized in two tiers:
   actor, etc.) without depending on `@actions/github`
 - `ActionLogger` - Routes `Effect.logDebug` to `core.debug()`, `Effect.logInfo`
   to `core.info()`, etc.
-- `NodeContext.layer` - Platform layer provided automatically
 
 **Token lifecycle:**
 
@@ -41,35 +40,52 @@ Services are organized in two tiers:
 
 Each domain service uses `Context.Tag` + `Layer`:
 
+- `Workspaces` / `WorkspacesLive` — Wraps `workspaces-effect`'s
+  `getWorkspacePackagesSync`. No upstream deps.
+- `ChangesetConfig` / `ChangesetConfigLive` — Reads `.changeset/config.json`
+  with per-`workspaceRoot` caching. No upstream deps.
+- `PublishabilityDetectorAdaptiveLive` (and the simpler
+  `SilkPublishabilityDetectorLive`) — `workspaces-effect`'s
+  `PublishabilityDetector` Tag overrides; the adaptive variant depends on
+  `ChangesetConfig`.
 - `BranchManager` / `BranchManagerLive` - Depends on `GitBranch`, `GitCommit`, `CommandRunner`
 - `PnpmUpgrade` / `PnpmUpgradeLive` - Depends on `CommandRunner`
 - `ConfigDeps` / `ConfigDepsLive` - Depends on `NpmRegistry`
-- `RegularDeps` / `RegularDepsLive` - Depends on `NpmRegistry`
+- `RegularDeps` / `RegularDepsLive` - Depends on `NpmRegistry`, `Workspaces`
+- `Changesets` / `ChangesetsLive` — Depends on `Workspaces`,
+  `PublishabilityDetector`, `ChangesetConfig`
 - `Report` / `ReportLive` - Depends on `PullRequest`
 
-Stateless services (`Lockfile`, `Changesets`, `WorkspaceYaml`) export standalone
-helper functions used directly by `main.ts`.
+Stateless concerns (`PeerSync`, `WorkspaceYaml`, `Lockfile` standalone
+helpers) export standalone helper functions used directly by `program.ts`.
+`syncPeers` requires `Workspaces` in its environment; `compareLockfiles`
+requires `Workspaces` in its environment.
 
 ### Layer Composition
 
 All layers are wired together in `src/layers/app.ts`:
 
 ```typescript
-// Action.run provides plumbing services + GitHubApp
-Action.run(program, { layer: GitHubAppLive });
+// main.ts wires the auth dependency before invoking Action.run:
+const AppLayer = GitHubAppLive.pipe(Layer.provide(OctokitAuthAppLive));
+Action.run(program, { layer: AppLayer });
 
-// Inside program:
+// Inside program (program.ts):
 const ghApp = yield* GitHubApp;
 yield* ghApp.withToken(appId, privateKey, (token) =>
  Effect.gen(function* () {
-  const appLayer = makeAppLayer(token, dryRun);
-  yield* Effect.provide(innerProgram(inputs, dryRun), appLayer);
+  process.env.GITHUB_TOKEN = token; // bridge to GitHubClientLive
+  const appLayer = makeAppLayer(dryRun);
+  yield* innerProgram(inputs, dryRun, headSha, appLayer);
  }),
 );
 ```
 
-`makeAppLayer` separates library layers from domain layers, then uses
-`Layer.provideMerge` to wire domain layers on top of library layers.
+`makeAppLayer(dryRun)` takes only `dryRun` — the GitHub App token is bridged
+to `GitHubClientLive` via `process.env.GITHUB_TOKEN` rather than passed as a
+Layer parameter. The function separates library layers from domain layers,
+then uses `Layer.provideMerge` to wire domain layers on top of library
+layers.
 
 ## Error Handling Strategy
 
@@ -144,7 +160,10 @@ yield* checkRunService.withCheckRun(name, headSha, (checkRunId) =>
 ## Running the Effect Program
 
 ```typescript
-import { Action, ActionOutputs, GitHubApp, GitHubAppLive } from "@savvy-web/github-action-effects";
+// program.ts
+import {
+ Action, ActionEnvironment, ActionInputError, GitHubApp,
+} from "@savvy-web/github-action-effects";
 import { Config, Duration, Effect, Redacted } from "effect";
 import { makeAppLayer } from "./layers/app.js";
 
@@ -152,26 +171,34 @@ export const program = Effect.gen(function* () {
  const appId = yield* Config.string("app-id");
  const appPrivateKey = yield* Config.secret("app-private-key");
  const dryRun = yield* Config.boolean("dry-run").pipe(Config.withDefault(false));
+ const timeout = yield* Config.integer("timeout").pipe(Config.withDefault(180));
  // ... other Config.* calls
+
  const ghApp = yield* GitHubApp;
- yield* ghApp.withToken(appId, Redacted.value(appPrivateKey), (token) =>
-  Effect.gen(function* () {
-   const appLayer = makeAppLayer(token, dryRun);
-   yield* Effect.provide(innerProgram(inputs, dryRun), appLayer);
-  }),
- );
+ const env = yield* ActionEnvironment;
+ const headSha = (yield* env.github).sha;
+
+ yield* ghApp
+  .withToken(appId, Redacted.value(appPrivateKey), (token) =>
+   Effect.gen(function* () {
+    process.env.GITHUB_TOKEN = token;
+    const appLayer = makeAppLayer(dryRun);
+    yield* innerProgram(inputs, dryRun, headSha, appLayer);
+   }),
+  )
+  .pipe(Effect.timeoutFail({
+   duration: Duration.seconds(timeout),
+   onTimeout: () => new Error(`Action timed out after ${timeout} seconds`),
+  }));
 });
 
-Action.run(
- program.pipe(
-  Effect.timeoutFail({ duration: Duration.seconds(180), ... }),
-  Effect.catchAll((error) => ...),
- ),
- { layer: GitHubAppLive },
-);
+// main.ts
+const AppLayer = GitHubAppLive.pipe(Layer.provide(OctokitAuthAppLive));
+Action.run(program, { layer: AppLayer });
 ```
 
-**Testing:** The `program` is exported for testability. Tests mock
-`@savvy-web/github-action-effects` via `vi.mock()` to prevent module-level
-`Action.run` execution, then test the exported `program` Effect directly
-with mock service layers.
+**Testing:** The `program` is exported from `program.ts` for testability.
+Tests import `program` and `runCommands` directly without going through
+`main.ts` (which only contains the module-level `Action.run` call). They
+mock `@savvy-web/github-action-effects` via `vi.mock()` and test the
+exported `program` Effect with mock service layers.

@@ -85,6 +85,20 @@ export const runCommands = (commands: ReadonlyArray<string>): Effect.Effect<RunC
 	});
 
 /**
+ * Run `pnpm install --frozen-lockfile=false --fix-lockfile`.
+ *
+ * Uses `--frozen-lockfile=false` to opt out of the CI default that refuses to
+ * write lockfile changes, and `--fix-lockfile` to reconcile the lockfile
+ * against the just-modified manifests while leaving unrelated transitives at
+ * their currently-pinned versions.
+ */
+export const runInstall = (): Effect.Effect<void, CommandRunnerError, CommandRunner> =>
+	Effect.gen(function* () {
+		const runner = yield* CommandRunner;
+		yield* runner.exec("pnpm", ["install", "--frozen-lockfile=false", "--fix-lockfile"]);
+	});
+
+/**
  * Main action program.
  *
  * Single-phase entry point that handles token lifecycle, check runs,
@@ -92,7 +106,7 @@ export const runCommands = (commands: ReadonlyArray<string>): Effect.Effect<RunC
  */
 /* v8 ignore start -- orchestration code tested via integration */
 export const program = Effect.gen(function* () {
-	// Step 1: Parse inputs via Config API
+	// Parse inputs via Config API
 	yield* Effect.logInfo("Starting pnpm config dependency action");
 
 	const appId = yield* Config.string("app-id");
@@ -172,7 +186,7 @@ export const program = Effect.gen(function* () {
 		yield* Effect.logWarning("Running in dry-run mode - will detect changes but skip commit/push/PR");
 	}
 
-	// Step 2: Generate GitHub App token and run the main workflow
+	// Generate GitHub App token and run the main workflow
 	const ghApp = yield* GitHubApp;
 	const env = yield* ActionEnvironment;
 	const github = yield* env.github;
@@ -243,13 +257,13 @@ const innerProgram = (
 			yield* checkRunService.withCheckRun(checkRunName, headSha, (checkRunId) =>
 				Effect.provide(
 					Effect.gen(function* () {
-						// Step 3: Manage branch
+						// Manage branch
 						yield* Effect.logInfo("Step 1: Managing branch");
 						const branchManager = yield* BranchManager;
 						const branchResult = yield* branchManager.manage(inputs.branch, "main");
 						yield* Effect.logInfo(`Branch: ${branchResult.branch} (created: ${branchResult.created})`);
 
-						// Step 4: Capture lockfile state before updates
+						// Capture lockfile state before updates
 						yield* Effect.logInfo("Step 2: Capturing lockfile state (before)");
 						const lockfileBefore = yield* captureLockfileState();
 						yield* Effect.logDebug(
@@ -259,7 +273,7 @@ const innerProgram = (
 							})}`,
 						);
 
-						// Step 5: Upgrade pnpm (if enabled)
+						// Upgrade pnpm (if enabled)
 						const configUpdatesFromPnpm: DependencyUpdateResult[] = [];
 						if (inputs["update-pnpm"]) {
 							yield* Effect.logInfo("Step 3: Upgrading pnpm");
@@ -287,7 +301,7 @@ const innerProgram = (
 							}
 						}
 
-						// Step 6: Update config dependencies
+						// Update config dependencies
 						yield* Effect.logInfo("Step 4: Updating config dependencies");
 						const workspaceBefore = yield* readWorkspaceYaml().pipe(Effect.catchAll(() => Effect.succeed(null)));
 						yield* Effect.logDebug(`pnpm-workspace.yaml (before): ${JSON.stringify(workspaceBefore)}`);
@@ -296,12 +310,12 @@ const innerProgram = (
 						const configUpdates = yield* configDepsService.updateConfigDeps(inputs["config-dependencies"]);
 						yield* Effect.logDebug(`Config dependency updates: ${JSON.stringify(configUpdates)}`);
 
-						// Step 7: Update regular dependencies
+						// Update regular dependencies
 						yield* Effect.logInfo("Step 5: Updating regular dependencies");
 						const regularDepsService = yield* RegularDeps;
 						const regularUpdates = yield* regularDepsService.updateRegularDeps(inputs.dependencies);
 
-						// Step 5b: Sync peer dependencies
+						// Sync peer dependencies
 						const peerSyncConfig: PeerSyncConfig = {
 							lock: inputs["peer-lock"],
 							minor: inputs["peer-minor"],
@@ -312,27 +326,25 @@ const innerProgram = (
 							yield* Effect.logInfo(`Synced ${peerUpdates.length} peer dependency range(s)`);
 						}
 
-						// Step 8: Clean install
+						// Reconcile lockfile and install
 						if (
 							configUpdates.length > 0 ||
 							regularUpdates.length > 0 ||
 							configUpdatesFromPnpm.length > 0 ||
 							peerUpdates.length > 0
 						) {
-							yield* Effect.logInfo("Step 6: Running clean install");
-							const runner = yield* CommandRunner;
-							yield* runner.execCapture("sh", ["-c", "rm -rf node_modules pnpm-lock.yaml"]);
-							yield* runner.exec("pnpm", ["install"]);
+							yield* Effect.logInfo("Step 6: Reconciling lockfile and installing");
+							yield* runInstall();
 						}
 
-						// Step 9: Format pnpm-workspace.yaml
+						// Format pnpm-workspace.yaml
 						yield* Effect.logInfo("Step 7: Formatting pnpm-workspace.yaml");
 						yield* formatWorkspaceYaml();
 
 						const workspaceAfter = yield* readWorkspaceYaml().pipe(Effect.catchAll(() => Effect.succeed(null)));
 						yield* Effect.logDebug(`pnpm-workspace.yaml (after): ${JSON.stringify(workspaceAfter)}`);
 
-						// Step 10: Run custom commands (if specified)
+						// Run custom commands (if specified)
 						if (inputs.run.length > 0) {
 							yield* Effect.logInfo("Step 8: Running custom commands");
 							const runCommandsResult = yield* runCommands(inputs.run);
@@ -355,7 +367,7 @@ const innerProgram = (
 							}
 						}
 
-						// Step 11: Capture lockfile state after updates
+						// Capture lockfile state after updates
 						yield* Effect.logInfo("Step 9: Capturing lockfile state (after)");
 						const lockfileAfter = yield* captureLockfileState();
 						yield* Effect.logDebug(
@@ -365,7 +377,7 @@ const innerProgram = (
 							})}`,
 						);
 
-						// Step 12: Detect changes
+						// Detect changes
 						yield* Effect.logInfo("Step 10: Detecting changes");
 						const changes = yield* compareLockfiles(lockfileBefore, lockfileAfter);
 						yield* Effect.logDebug(`Detected changes: ${JSON.stringify(changes)}`);
@@ -395,7 +407,7 @@ const innerProgram = (
 							return;
 						}
 
-						// Step 13: Create changesets (if enabled)
+						// Create changesets (if enabled)
 						let changesets: ReadonlyArray<ChangesetFile> = [];
 						if (inputs.changesets) {
 							yield* Effect.logInfo("Step 11: Creating changesets");
@@ -405,7 +417,7 @@ const innerProgram = (
 							yield* Effect.logInfo("Step 11: Skipping changesets (disabled)");
 						}
 
-						// Step 14: Commit and push
+						// Commit and push
 						const report = yield* Report;
 						if (dryRun) {
 							yield* Effect.logInfo("Step 12: [DRY RUN] Skipping commit and push");
@@ -415,7 +427,7 @@ const innerProgram = (
 							yield* branchManager.commitChanges(commitMessage, inputs.branch);
 						}
 
-						// Step 15: Create/update PR
+						// Create/update PR
 						let pr: PullRequestResult | null = null;
 						if (dryRun) {
 							yield* Effect.logInfo("Step 13: [DRY RUN] Skipping PR creation/update");

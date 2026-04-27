@@ -3,7 +3,7 @@ import { CommandRunner, CommandRunnerTest } from "@savvy-web/github-action-effec
 import type { Context } from "effect";
 import { Effect, Layer, LogLevel, Logger } from "effect";
 import { describe, expect, it } from "vitest";
-import { runCommands } from "./program.js";
+import { runCommands, runInstall } from "./program.js";
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Test Helpers
@@ -35,6 +35,40 @@ const makeTestRunner = (
 // ══════════════════════════════════════════════════════════════════════════════
 // Tests
 // ══════════════════════════════════════════════════════════════════════════════
+
+describe("runInstall", () => {
+	it("issues exactly pnpm install --frozen-lockfile=false --fix-lockfile", async () => {
+		const issuedExec: Array<{ command: string; args: ReadonlyArray<string> }> = [];
+
+		const layer = makeTestRunner({
+			exec: (command: string, args?: ReadonlyArray<string>) => {
+				issuedExec.push({ command, args: args ?? [] });
+				return Effect.succeed(0);
+			},
+		});
+
+		await Effect.runPromise(runInstall().pipe(Effect.provide(layer), Logger.withMinimumLogLevel(LogLevel.None)));
+
+		expect(issuedExec).toHaveLength(1);
+		expect(issuedExec[0].command).toBe("pnpm");
+		expect(issuedExec[0].args).toEqual(["install", "--frozen-lockfile=false", "--fix-lockfile"]);
+	});
+
+	it("does not issue any rm or execCapture calls", async () => {
+		const issuedExecCapture: Array<{ command: string; args: ReadonlyArray<string> }> = [];
+
+		const layer = makeTestRunner({
+			execCapture: (command: string, args?: ReadonlyArray<string>) => {
+				issuedExecCapture.push({ command, args: args ?? [] });
+				return Effect.succeed({ exitCode: 0, stdout: "", stderr: "" });
+			},
+		});
+
+		await Effect.runPromise(runInstall().pipe(Effect.provide(layer), Logger.withMinimumLogLevel(LogLevel.None)));
+
+		expect(issuedExecCapture).toHaveLength(0);
+	});
+});
 
 describe("runCommands", () => {
 	it("returns empty result for empty commands", async () => {

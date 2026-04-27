@@ -5,10 +5,10 @@ import { NpmRegistryTest } from "@savvy-web/github-action-effects";
 import type { Context } from "effect";
 import { Effect, Layer, LogLevel, Logger } from "effect";
 import { describe, expect, it } from "vitest";
+import type { WorkspacePackage } from "workspaces-effect";
 import { FileSystemError } from "../errors/errors.js";
 import { matchesPattern, parseSpecifier } from "../utils/deps.js";
 import { RegularDeps, RegularDepsLive } from "./regular-deps.js";
-import type { WorkspacePackageInfo } from "./workspaces.js";
 import { Workspaces } from "./workspaces.js";
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -57,9 +57,9 @@ const makeRegistryState = (
  * Create a Workspaces layer that returns a fixed list of packages.
  * Use this to control which package.json files the RegularDeps service sees.
  */
-const mockWorkspaces = (packages: ReadonlyArray<WorkspacePackageInfo>): Layer.Layer<Workspaces> =>
+const mockWorkspaces = (packages: ReadonlyArray<{ name: string; path: string }>): Layer.Layer<Workspaces> =>
 	Layer.succeed(Workspaces, {
-		listPackages: () => Effect.succeed(packages),
+		listPackages: () => Effect.succeed(packages as unknown as ReadonlyArray<WorkspacePackage>),
 		importerMap: () => Effect.die("importerMap not used in regular-deps tests"),
 	});
 

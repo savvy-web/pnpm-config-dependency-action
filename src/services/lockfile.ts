@@ -127,7 +127,7 @@ const buildImporterToPackageMap = (
 			Effect.catchAll((e) =>
 				Effect.gen(function* () {
 					yield* Effect.logWarning(`Failed to read workspace importer map: ${String(e)}`);
-					return new Map<string, { readonly name: string; readonly path: string }>();
+					return new Map();
 				}),
 			),
 		);

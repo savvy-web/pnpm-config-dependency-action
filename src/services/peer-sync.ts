@@ -84,7 +84,7 @@ export const syncPeers = (
 			Effect.catchAll((error) =>
 				Effect.gen(function* () {
 					yield* Effect.logWarning(`Failed to get workspace info: ${error.reason}`);
-					return [] as ReadonlyArray<{ name: string; path: string }>;
+					return [];
 				}),
 			),
 		);

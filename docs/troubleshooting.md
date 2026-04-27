@@ -127,9 +127,14 @@ packages were affected by the changes.
 
 - Ensure `.changeset/` exists in the repository root (run `pnpm changeset init`
   if needed)
-- Check that workspace packages actually use the updated dependencies
-- Config dependency changes create empty changesets (no packages listed), which
-  is intentional
+- Check that workspace packages actually use the updated dependencies as
+  runtime/peer/optional dependencies. `devDependency`-only updates do not
+  trigger changesets.
+- Verify the affected packages are versionable: either publishable, or marked
+  via the `versionPrivate` config. Private packages without `versionPrivate`
+  are skipped.
+- Config-only changes (`pnpm-workspace.yaml` `configDependencies`) no longer
+  produce empty changesets
 
 ### Changeset created for wrong package
 

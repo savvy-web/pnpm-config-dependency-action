@@ -9,12 +9,13 @@
  "dependencies": {
   "@effect/platform": "catalog:silk",
   "@effect/platform-node": "catalog:silk",
-  "@pnpm/lockfile.fs": "^1001.1.29",
+  "@pnpm/lockfile.fs": "^1001.1.32",
   "@pnpm/lockfile.types": "^1002.1.0",
   "@savvy-web/github-action-effects": "^0.11.12",
   "effect": "catalog:silk",
-  "workspace-tools": "^0.41.0",
-  "yaml": "^2.8.2"
+  "semver-effect": "^0.2.1",
+  "workspaces-effect": "^0.4.1",
+  "yaml": "^2.8.3"
  }
 }
 ```
@@ -28,12 +29,26 @@
     `AutoMerge.enable()`
   - **Config API:** `Config.*` from Effect for typed input parsing (replaces `Action.parseInputs()`)
   - **Domain services:** `CommandRunner`, `GitBranch`, `GitCommit`, `GitHubClient`,
-    `GitHubGraphQL`, `NpmRegistry`, `PullRequest`, `DryRun`
-  - **Live layers:** `GitHubAppLive`, `GitHubClientLive`, `GitBranchLive`, `GitCommitLive`,
-    `CheckRunLive`, `CommandRunnerLive`, `DryRunLive`, `GitHubGraphQLLive`
+    `GitHubGraphQL`, `NpmRegistry`, `PullRequest`, `DryRun`, `GithubMarkdown`
+  - **Live layers:** `GitHubAppLive` (requires `OctokitAuthAppLive`), `GitHubClientLive`,
+    `GitBranchLive`, `GitCommitLive`, `CheckRunLive`, `CommandRunnerLive`, `DryRunLive`,
+    `GitHubGraphQLLive`, `OctokitAuthAppLive`
 - `@effect/platform` / `@effect/platform-node` - Effect platform layer for `Command`
-  (shell execution). `NodeContext.layer` is provided automatically by `Action.run()`.
+  (shell execution). `NodeContext.layer` is provided by the library's `Action.run()`
+  pipeline at the platform level — domain layers do not pull it in directly.
 - `effect` - Typed error handling, retry logic, resource management
+- `semver-effect` (^0.2.1) - Effect-native semver parsing/comparison; used by
+  `services/peer-sync.ts` (`SemVer.parse`) for bump-classification under the
+  `peer-minor` strategy.
+- `workspaces-effect` (^0.4.1) - Effect-native workspace + publishability layer.
+  Replaces the previous `workspace-tools` (Microsoft) dependency. Provides:
+  - `getWorkspacePackagesSync(workspaceRoot)` - synchronously enumerate workspace
+    packages (including the root workspace package, unlike workspace-tools'
+    package-pattern-only discovery).
+  - `WorkspacePackage`, `PublishTarget`, `PublishConfig` value classes.
+  - `PublishabilityDetector` Tag + `PublishabilityDetectorLive` (vanilla rules).
+    The action overrides this Tag via `services/publishability.ts` with either
+    silk rules or an adaptive dispatcher driven by `ChangesetConfig.mode`.
 - `yaml` - Parse and stringify `pnpm-workspace.yaml` with consistent formatting
 
 ## pnpm Official Packages (for lockfile/workspace analysis)
@@ -42,11 +57,4 @@
   - `readWantedLockfile(pkgPath, opts)` - Read lockfile, get `LockfileObject`
   - Returns catalogs, packages, importers for diff comparison
 - `@pnpm/lockfile.types` - TypeScript types for lockfile structures
-  - `LockfileObject`, `CatalogSnapshots`, `ProjectSnapshot`
-
-## workspace-tools (Microsoft)
-
-- `getWorkspaceManagerAndRoot(cwd)` - Detect pnpm/yarn/npm and workspace root
-- `getWorkspaceInfos(cwd)` / `getWorkspaceInfosAsync(cwd)` - Get all package info
-- `getWorkspacePackagePaths(cwd)` - Get paths to all workspace packages
-- `getCatalogs(root, manager)` - Get catalogs for pnpm/yarn
+  - `LockfileObject`, `CatalogSnapshots`, `ResolvedCatalogEntry`, `ProjectSnapshot`

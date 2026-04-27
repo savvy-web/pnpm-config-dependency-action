@@ -11,9 +11,9 @@ vi.mock("@pnpm/lockfile.fs", () => ({
 	readWantedLockfile: (...args: unknown[]) => mockReadWantedLockfile(...args),
 }));
 
+import type { WorkspacePackage } from "workspaces-effect";
 import type { LockfileChange } from "../schemas/domain.js";
 import { Lockfile, LockfileLive, groupChangesByPackage } from "./lockfile.js";
-import type { WorkspacePackageInfo } from "./workspaces.js";
 import { Workspaces } from "./workspaces.js";
 
 /**
@@ -21,18 +21,20 @@ import { Workspaces } from "./workspaces.js";
  *
  * Maps importer paths to package names matching what the old workspace-tools
  * mock returned, so all existing test assertions stay valid.
+ *
+ * Cast to WorkspacePackage since tests only need name/path on mock objects.
  */
 const MockWorkspacesLive = Layer.succeed(Workspaces, {
 	listPackages: (_workspaceRoot) =>
 		Effect.succeed([
 			{ name: "@savvy-web/core", path: "/workspace/pkgs/core" },
 			{ name: "@savvy-web/utils", path: "/workspace/pkgs/utils" },
-		] as ReadonlyArray<WorkspacePackageInfo>),
+		] as unknown as ReadonlyArray<WorkspacePackage>),
 	importerMap: (_workspaceRoot) =>
 		Effect.succeed(
-			new Map<string, WorkspacePackageInfo>([
-				["pkgs/core", { name: "@savvy-web/core", path: "/workspace/pkgs/core" }],
-				["pkgs/utils", { name: "@savvy-web/utils", path: "/workspace/pkgs/utils" }],
+			new Map<string, WorkspacePackage>([
+				["pkgs/core", { name: "@savvy-web/core", path: "/workspace/pkgs/core" } as unknown as WorkspacePackage],
+				["pkgs/utils", { name: "@savvy-web/utils", path: "/workspace/pkgs/utils" } as unknown as WorkspacePackage],
 			]),
 		),
 });

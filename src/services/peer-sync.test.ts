@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect, Layer, LogLevel, Logger } from "effect";
 import { describe, expect, it, vi } from "vitest";
+import type { WorkspacePackage } from "workspaces-effect";
 import { FileSystemError } from "../errors/errors.js";
 import type { DependencyUpdateResult } from "../schemas/domain.js";
 import { computePeerRange, syncPeers } from "./peer-sync.js";
@@ -27,7 +28,7 @@ const readPackageJson = (dir: string) => {
  */
 const makeWorkspacesLayer = (packages: ReadonlyArray<{ name: string; path: string }>) =>
 	Layer.succeed(Workspaces, {
-		listPackages: vi.fn(() => Effect.succeed(packages)),
+		listPackages: vi.fn(() => Effect.succeed(packages as unknown as ReadonlyArray<WorkspacePackage>)),
 		importerMap: vi.fn(() => Effect.succeed(new Map())),
 	});
 

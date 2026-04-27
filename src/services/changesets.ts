@@ -12,16 +12,15 @@
  */
 
 import { randomBytes } from "node:crypto";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Context, Effect, Layer } from "effect";
-import { PublishabilityDetector, WorkspacePackage } from "workspaces-effect";
+import { PublishabilityDetector } from "workspaces-effect";
 
 import type { ChangesetError } from "../errors/errors.js";
 import { FileSystemError } from "../errors/errors.js";
 import type { ChangesetFile, DependencyUpdateResult, LockfileChange } from "../schemas/domain.js";
 import { ChangesetConfig } from "./changeset-config.js";
-import type { WorkspacePackageInfo } from "./workspaces.js";
 import { Workspaces } from "./workspaces.js";
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -140,35 +139,6 @@ const dedupeRows = (rows: ChangesetTableRow[]): ChangesetTableRow[] => {
 	});
 };
 
-/**
- * Construct a minimal WorkspacePackage for publishability detection.
- * Reads version and other fields from the on-disk package.json.
- */
-const readWorkspacePackage = (info: WorkspacePackageInfo, workspaceRoot: string): WorkspacePackage | null => {
-	try {
-		const pkgJsonPath = join(info.path, "package.json");
-		if (!existsSync(pkgJsonPath)) return null;
-		const raw = JSON.parse(readFileSync(pkgJsonPath, "utf-8")) as {
-			version?: string;
-			private?: boolean;
-			publishConfig?: Record<string, unknown>;
-		};
-		const normalizedRoot = workspaceRoot.replace(/\/$/, "");
-		const normalizedPath = info.path.replace(/\/$/, "");
-		const relativePath = normalizedPath === normalizedRoot ? "." : normalizedPath.replace(`${normalizedRoot}/`, "");
-		return new WorkspacePackage({
-			name: info.name,
-			version: raw.version ?? "0.0.0",
-			path: info.path,
-			packageJsonPath: pkgJsonPath,
-			relativePath,
-			private: raw.private === true,
-		});
-	} catch {
-		return null;
-	}
-};
-
 // ══════════════════════════════════════════════════════════════════════════════
 // Implementation
 // ══════════════════════════════════════════════════════════════════════════════
@@ -192,7 +162,7 @@ const createChangesetsImpl = (
 			Effect.catchAll((error) =>
 				Effect.gen(function* () {
 					yield* Effect.logWarning(`Failed to list workspace packages: ${String(error)}`);
-					return [] as ReadonlyArray<WorkspacePackageInfo>;
+					return [];
 				}),
 			),
 		);
@@ -239,12 +209,8 @@ const createChangesetsImpl = (
 			if (!entry || entry.triggerRows.length === 0) continue;
 
 			// Versionable cascade: publishable OR versionPrivate
-			const workspacePkg = readWorkspacePackage(pkg, workspaceRoot);
-			if (!workspacePkg) {
-				yield* Effect.logDebug(`Skipping changeset for ${pkg.name}: could not read package.json`);
-				continue;
-			}
-			const targets = yield* detector.detect(workspacePkg, workspaceRoot);
+			// pkg is already a full WorkspacePackage from getWorkspacePackagesSync v0.5.0
+			const targets = yield* detector.detect(pkg, workspaceRoot);
 			const publishable = targets.length > 0;
 			const versionable = publishable || (yield* config.versionPrivate(workspaceRoot));
 

@@ -43,8 +43,8 @@ The core orchestration logic. Executes 14 steps sequentially:
 5. Update config dependencies
 6. Update dev dependencies
 6b. Sync peer dependency ranges
-7. Clean install (remove `node_modules` and `pnpm-lock.yaml`, then
-   `pnpm install`)
+7. Reconcile lockfile and install
+   (`pnpm install --frozen-lockfile=false --fix-lockfile`)
 8. Format `pnpm-workspace.yaml`
 9. Run custom commands (if specified)
 10. Capture lockfile state (after)
@@ -95,7 +95,7 @@ src/
 | [@savvy-web/github-action-effects](https://github.com/savvy-web/github-action-effects) | GitHub Actions services: inputs, outputs, token lifecycle, check runs, git operations, markdown helpers |
 | [@effect/platform](https://effect.website) | Cross-platform command execution |
 | [@pnpm/lockfile.fs](https://pnpm.io) | Official pnpm lockfile reader |
-| [workspace-tools](https://github.com/nicolo-ribaudo/workspace-tools) | Workspace package detection |
+| [workspaces-effect](https://github.com/savvy-web/workspaces-effect) | Workspace package detection and publishability |
 | [yaml](https://eemeli.org/yaml) | YAML parsing and stringifying |
 
 ### Why Effect?

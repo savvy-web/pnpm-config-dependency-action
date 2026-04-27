@@ -11,7 +11,7 @@ Detailed breakdown of the 14-step workflow executed in the main phase.
 - [Step 5: Update Config Dependencies](#step-5-update-config-dependencies)
 - [Step 6: Update Dev Dependencies](#step-6-update-dev-dependencies)
 - [Step 6b: Sync Peer Dependencies](#step-6b-sync-peer-dependencies)
-- [Step 7: Clean Install](#step-7-clean-install)
+- [Step 7: Reconcile Lockfile and Install](#step-7-reconcile-lockfile-and-install)
 - [Step 8: Format pnpm-workspace.yaml](#step-8-format-pnpm-workspaceyaml)
 - [Step 9: Run Custom Commands](#step-9-run-custom-commands)
 - [Step 10: Capture Lockfile (After)](#step-10-capture-lockfile-after)
@@ -87,13 +87,18 @@ Detailed breakdown of the 14-step workflow executed in the main phase.
 - Preserves the existing prefix (`^`, `~`, `>=`, etc.)
 - Skips with a warning if no peer entry exists for the package
 
-## Step 7: Clean Install
+## Step 7: Reconcile Lockfile and Install
 
-- Only runs if there are config dependencies, regular dependencies, or a pnpm
-  upgrade to process
-- Removes `node_modules` and `pnpm-lock.yaml` for a fresh lockfile
-- Runs `pnpm install` to regenerate the lockfile from scratch
-- Ensures a fully coherent lockfile after all dependency updates
+- Only runs if there are config dependencies, regular dependencies, peer-sync
+  rewrites, or a pnpm upgrade to process
+- Runs `pnpm install --frozen-lockfile=false --fix-lockfile`:
+  - `--frozen-lockfile=false` opts out of CI's default refusal to write
+    lockfile changes
+  - `--fix-lockfile` reconciles the lockfile against the just-modified
+    manifests while leaving unrelated transitives at their currently-pinned
+    versions
+- Avoids deleting `node_modules` or `pnpm-lock.yaml`, which keeps installs
+  fast and prevents unrelated lockfile churn from appearing in the PR diff
 
 ## Step 8: Format pnpm-workspace.yaml
 
@@ -146,11 +151,21 @@ action exits early with a "neutral" check run conclusion.
 
 - Skips entirely if the `changesets` input is `false`
 - Checks whether a `.changeset/` directory exists
-- Creates a `patch` changeset for each workspace package with consumer-facing
-  changes (peer range updates or runtime dependency changes)
-- Dev dependency-only changes do not trigger a changeset
-- Creates an empty changeset (no packages) for config-only changes
-- Changeset tables include all changes for a package, using specific type values
+- For each affected workspace package, applies two gates before writing a
+  changeset:
+  1. **Trigger gate**: at least one change must be consumer-facing -- a
+     `dependency`, `optionalDependency`, or `peerDependency` lockfile change,
+     or a peer-sync rewrite. `devDependency`-only changes are informational
+     and do not by themselves produce a changeset.
+  2. **Versionable gate**: the package must be versionable -- either
+     publishable (as determined by `workspaces-effect`'s
+     `PublishabilityDetector`) or marked via the `versionPrivate` config.
+- When both gates pass, writes a `patch` changeset for the package. The
+  changeset table includes all changes for that package (triggers and dev
+  rows), using specific type values: `dependency`, `optionalDependency`,
+  `peerDependency`, `devDependency`.
+- Empty changesets are no longer written. Config-only changes do not produce
+  a changeset.
 
 ## Step 13: Commit and Push
 
