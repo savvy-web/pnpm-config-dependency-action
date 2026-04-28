@@ -6,6 +6,7 @@
  * @module layers/app
  */
 
+import { NodeContext } from "@effect/platform-node";
 import {
 	CheckRunLive,
 	CommandRunnerLive,
@@ -18,6 +19,7 @@ import {
 	PullRequestLive,
 } from "@savvy-web/github-action-effects";
 import { Layer } from "effect";
+import { WorkspaceDiscoveryLive, WorkspaceRootLive } from "workspaces-effect";
 
 import { BranchManagerLive } from "../services/branch.js";
 import { ChangesetConfigLive } from "../services/changeset-config.js";
@@ -27,7 +29,6 @@ import { PnpmUpgradeLive } from "../services/pnpm-upgrade.js";
 import { PublishabilityDetectorAdaptiveLive } from "../services/publishability.js";
 import { RegularDepsLive } from "../services/regular-deps.js";
 import { ReportLive } from "../services/report.js";
-import { WorkspacesLive } from "../services/workspaces.js";
 
 /* v8 ignore start - pure Layer wiring, tested indirectly via service integration tests */
 export const makeAppLayer = (dryRun: boolean) => {
@@ -37,7 +38,11 @@ export const makeAppLayer = (dryRun: boolean) => {
 	const gitCommit = GitCommitLive.pipe(Layer.provide(GitHubClientLive));
 	const prLayer = PullRequestLive.pipe(Layer.provide(Layer.merge(GitHubClientLive, ghGraphql)));
 
-	const workspaces = WorkspacesLive;
+	// Platform layer (FileSystem, Path) for workspaces-effect's WorkspaceDiscovery.
+	const platform = NodeContext.layer;
+	const workspaceRoot = WorkspaceRootLive.pipe(Layer.provide(platform));
+	const workspaceDiscovery = WorkspaceDiscoveryLive.pipe(Layer.provide(Layer.merge(workspaceRoot, platform)));
+
 	const changesetConfig = ChangesetConfigLive;
 	// PublishabilityDetectorAdaptiveLive overrides PublishabilityDetector and
 	// reads ChangesetConfig.mode per-call to dispatch to silk/vanilla/noop.
@@ -55,14 +60,14 @@ export const makeAppLayer = (dryRun: boolean) => {
 	);
 
 	const domainLayers = Layer.mergeAll(
-		workspaces,
+		workspaceDiscovery,
 		changesetConfig,
 		publishabilityDetector,
-		ChangesetsLive.pipe(Layer.provide(Layer.mergeAll(workspaces, publishabilityDetector, changesetConfig))),
+		ChangesetsLive.pipe(Layer.provide(Layer.mergeAll(workspaceDiscovery, publishabilityDetector, changesetConfig))),
 		BranchManagerLive.pipe(Layer.provide(Layer.mergeAll(gitBranch, gitCommit, CommandRunnerLive))),
 		PnpmUpgradeLive.pipe(Layer.provide(CommandRunnerLive)),
 		ConfigDepsLive.pipe(Layer.provide(npmRegistry)),
-		RegularDepsLive.pipe(Layer.provide(Layer.merge(npmRegistry, workspaces))),
+		RegularDepsLive.pipe(Layer.provide(Layer.merge(npmRegistry, workspaceDiscovery))),
 		ReportLive.pipe(Layer.provide(prLayer)),
 	);
 

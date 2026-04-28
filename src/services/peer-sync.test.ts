@@ -4,10 +4,9 @@ import { join } from "node:path";
 import { Effect, Layer, LogLevel, Logger } from "effect";
 import { describe, expect, it, vi } from "vitest";
 import type { WorkspacePackage } from "workspaces-effect";
-import { FileSystemError } from "../errors/errors.js";
+import { WorkspaceDiscovery, WorkspaceDiscoveryError } from "workspaces-effect";
 import type { DependencyUpdateResult } from "../schemas/domain.js";
 import { computePeerRange, syncPeers } from "./peer-sync.js";
-import { Workspaces } from "./workspaces.js";
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Test Helpers
@@ -24,38 +23,39 @@ const readPackageJson = (dir: string) => {
 };
 
 /**
- * Build a Workspaces mock layer that returns the given packages list.
+ * Build a WorkspaceDiscovery mock layer that returns the given packages list.
  */
 const makeWorkspacesLayer = (packages: ReadonlyArray<{ name: string; path: string }>) =>
-	Layer.succeed(Workspaces, {
+	Layer.succeed(WorkspaceDiscovery, {
 		listPackages: vi.fn(() => Effect.succeed(packages as unknown as ReadonlyArray<WorkspacePackage>)),
+		getPackage: vi.fn(() => Effect.die("getPackage not used in peer-sync tests")),
 		importerMap: vi.fn(() => Effect.succeed(new Map())),
 	});
 
 /**
- * Build a Workspaces mock layer that fails with a FileSystemError.
+ * Build a WorkspaceDiscovery mock layer that fails with a WorkspaceDiscoveryError.
  */
 const makeFailingWorkspacesLayer = () =>
-	Layer.succeed(Workspaces, {
-		listPackages: vi.fn((root) =>
+	Layer.succeed(WorkspaceDiscovery, {
+		listPackages: vi.fn((root?: string) =>
 			Effect.fail(
-				new FileSystemError({
-					operation: "read",
-					path: root,
+				new WorkspaceDiscoveryError({
+					root: root ?? "",
 					reason: "workspace detection failed",
 				}),
 			),
 		),
+		getPackage: vi.fn(() => Effect.die("getPackage not used in peer-sync tests")),
 		importerMap: vi.fn(() => Effect.succeed(new Map())),
 	});
 
 /**
- * Run a syncPeers Effect with the given Workspaces layer, suppressing logs.
+ * Run a syncPeers Effect with the given WorkspaceDiscovery layer, suppressing logs.
  */
 const runSyncPeers = (
 	config: { lock: string[]; minor: string[] },
 	devUpdates: DependencyUpdateResult[],
-	workspacesLayer: Layer.Layer<Workspaces>,
+	workspacesLayer: Layer.Layer<WorkspaceDiscovery>,
 	workspaceRoot: string,
 ) =>
 	Effect.runPromise(

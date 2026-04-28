@@ -6,7 +6,7 @@
 
 **Test Framework:** Vitest with v8 coverage, forks pool for Effect-TS compatibility
 
-**Key Test Suites (18 test files, ~283 `it`/`test` blocks):**
+**Key Test Suites (17 test files, ~287 `it`/`test` blocks):**
 
 1. **Main action** (`src/main.test.ts`) — 24 tests
 
@@ -48,21 +48,25 @@
    - Version comparison and skip logic
    - Missing dependency handling
 
-8. **RegularDeps service** (`src/services/regular-deps.test.ts`) — 33 tests
+8. **RegularDeps service** (`src/services/regular-deps.test.ts`) — 36 tests
 
    - `matchesPattern`: exact match, scoped wildcard, bare wildcard, dot
      metacharacter safety
    - `parseSpecifier`: caret, tilde, exact, `catalog:`, `catalog:named`,
      `workspace:`
-   - `updateRegularDeps` Effect integration: empty patterns, single dep,
-     already latest, wildcard matching, `catalog:` skip, multi-file updates,
-     npm query failure resilience, prefix preservation, deduplication
+   - `updateRegularDeps` Effect integration across `dependencies`,
+     `devDependencies`, and `optionalDependencies`: empty patterns, single
+     dep, already latest, wildcard matching, `catalog:` skip, multi-file
+     updates, multi-section updates within one package, npm query failure
+     resilience, prefix preservation, deduplication, accurate `type`
+     reporting per section.
 
 9. **PeerSync helpers** (`src/services/peer-sync.test.ts`) — 17 tests
 
    - `computePeerRange` lock vs minor strategies, including patch-only
      suppression and floor-to-`.0` semantics for minor bumps
-   - `syncPeers` workspace integration via the `Workspaces` Tag
+   - `syncPeers` workspace integration via the upstream `WorkspaceDiscovery`
+     Tag from `workspaces-effect`
 
 10. **PnpmUpgrade service** (`src/services/pnpm-upgrade.test.ts`) — 34 tests
 
@@ -83,38 +87,49 @@
     - Package importer comparison
     - No-change detection
     - Missing lockfile handling
+    - Yields `WorkspaceDiscovery` from `workspaces-effect` directly (no
+      local wrapper).
 
-13. **Workspaces service** (`src/services/workspaces.test.ts`) — 1 test
-
-    - `getWorkspacePackagesSync` wrapper smoke test
-
-14. **ChangesetConfig service** (`src/services/changeset-config.test.ts`) — 9 tests
+13. **ChangesetConfig service** (`src/services/changeset-config.test.ts`) — 9 tests
 
     - Mode detection (silk / vanilla / none) for string and array
       `changelog` config shapes
     - `versionPrivate` flag plumbing
     - Per-`workspaceRoot` caching
 
-15. **Publishability layers** (`src/services/publishability.test.ts`) — 14 tests
+14. **Publishability layers** (`src/services/publishability.test.ts`) — 14 tests
 
     - Silk rules (private + targets, shorthand string targets, access
       inheritance)
     - Adaptive dispatch via `ChangesetConfig.mode`
 
-16. **Changesets service** (`src/services/changesets.test.ts`) — 11 tests
+15. **Changesets service** (`src/services/changesets.test.ts`) — 13 tests
 
     - Trigger vs informational classification (devDeps suppressed)
+    - `regularUpdates` routing by `update.type`
+      (dependency/optionalDependency/peerDependency are triggers,
+      devDependency is informational only)
+    - Catalog change in peerDependency triggers a changeset (covers the
+      "config dep updates a catalog consumed in peerDependencies"
+      scenario)
+    - Peer-sync rewrites trigger a changeset (covers the
+      "RegularDeps + peer-minor/peer-lock" scenario)
     - Versionable cascade (publishable OR `versionPrivate`)
     - Empty-changeset suppression (no fallback path)
     - Multi-package emission
 
-17. **Report service** (`src/services/report.test.ts`) — 9 tests
+16. **Report service** (`src/services/report.test.ts`) — 9 tests
 
     - PR creation/update via `PullRequest` service
     - Commit message formatting
     - Summary generation
 
-18. **Test fixtures** (`src/utils/fixtures.test.ts`) — shared test utilities
+17. **Test fixtures** (`src/utils/fixtures.test.ts`) — shared test utilities
+
+The previous `Workspaces service` test file was removed when the local
+wrapper was deleted (issue #38). Workspace discovery is now exercised via
+the `__test__/integration/workspaces.int.test.ts` integration suite, which
+runs `WorkspaceDiscoveryLive` against real fixtures.
 
 ## Test Patterns
 
@@ -156,16 +171,27 @@ patterns. The module is still tested thoroughly via `pnpm-upgrade.test.ts`.
 
 ## Integration Testing
 
-**Test Repository Setup:**
+**In-Repo Integration Suites (`__test__/integration/`):**
 
-Create a test repository with:
+Each suite builds its own `discoveryLayer` from `NodeContext.layer` directly:
 
-- pnpm workspace configuration
-- Multiple packages
-- Changesets enabled
-- Config dependencies defined
+```typescript
+const platform = NodeContext.layer;
+const discoveryLayer = WorkspaceDiscoveryLive.pipe(
+ Layer.provide(Layer.merge(WorkspaceRootLive.pipe(Layer.provide(platform)), platform)),
+);
+```
 
-**Integration Test Scenarios:**
+- `workspaces.int.test.ts` — Verifies `WorkspaceDiscovery.listPackages` and
+  `importerMap` against real single-leaf and multi-leaf fixtures.
+- `lockfile-compare.int.test.ts` — Exercises `compareLockfiles` against
+  paired `pnpm-lock.before.yaml` / `pnpm-lock.after.yaml` fixtures
+  covering catalog and importer change shapes.
+- `changeset-emission.int.test.ts` — Exercises the full
+  `Changesets.create` gating cascade against fixtures with varying
+  publishability and `versionPrivate` settings.
+
+**External Integration Test Scenarios (live GitHub repo, future work):**
 
 1. **Full Workflow** - End-to-end test of entire action
 2. **No Changes** - Verify early exit when already up-to-date

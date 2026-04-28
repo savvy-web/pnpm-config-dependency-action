@@ -42,14 +42,23 @@ config-dependencies: |
 
 #### `dependencies`
 
-Dev dependencies to update, one per line. Matches against `devDependencies` in
-all workspace `package.json` files. Supports glob patterns.
+Workspace dependencies to update, one per line. Matches against the
+`dependencies`, `devDependencies`, and `optionalDependencies` fields in all
+workspace `package.json` files. Supports glob patterns.
 
 ```yaml
 dependencies: |
   vitest
   @savvy-web/*
 ```
+
+`peerDependencies` are intentionally not matched here -- peer ranges are
+managed by the [`peer-lock`](#peer-lock) and [`peer-minor`](#peer-minor) inputs
+instead.
+
+If a package lists the same dependency in multiple sections (for example, both
+`dependencies` and `devDependencies`), each section is updated independently
+and reported as a separate row in the PR summary.
 
 At least one of `config-dependencies`, `dependencies`, or `update-pnpm: true`
 must be active.
@@ -234,13 +243,16 @@ configDependencies:
   "@biomejs/biome": 1.6.1
 ```
 
-### Dev Dependencies
+### Workspace Dependencies
 
-Dev dependencies in workspace packages are matched against the `devDependencies`
-field in all `package.json` files. The action queries the npm registry directly
-for latest versions (avoids `pnpm up --latest` which promotes deps to catalogs
-when `catalogMode: strict` is enabled). Glob patterns follow Node's
-`path.matchesGlob`:
+Workspace dependencies are matched against the `dependencies`,
+`devDependencies`, and `optionalDependencies` fields in all `package.json`
+files. `peerDependencies` are intentionally excluded -- peer ranges are
+managed by the `peer-lock` and `peer-minor` inputs.
+
+The action queries the npm registry directly for latest versions (avoids
+`pnpm up --latest` which promotes deps to catalogs when `catalogMode: strict`
+is enabled). Glob patterns follow Node's `path.matchesGlob`:
 
 | Pattern | Matches |
 | --- | --- |
@@ -250,15 +262,15 @@ when `catalogMode: strict` is enabled). Glob patterns follow Node's
 
 ### Peer Dependency Syncing
 
-Peer dependency ranges can be automatically synced when the corresponding dev
-dependency updates. This is controlled by the `peer-lock` and `peer-minor`
-inputs.
+Peer dependency ranges can be automatically synced when the corresponding
+workspace dependency updates. This is controlled by the `peer-lock` and
+`peer-minor` inputs.
 
 **Why sync peers?** Published packages list peer dependencies to declare
-compatibility. When you update a dev dependency like `vitest`, the peer range
-should reflect the tested version. Dev dependency changes alone do not trigger a
-release (they are stripped from published packages), but peer range changes are
-consumer-facing and produce a patch changeset.
+compatibility. When you update a dependency like `vitest`, the peer range
+should reflect the tested version. `devDependency` changes alone do not
+trigger a release (they are stripped from published packages), but peer range
+changes are consumer-facing and produce a patch changeset.
 
 **Strategies:**
 
@@ -267,9 +279,9 @@ consumer-facing and produce a patch changeset.
 | `peer-lock` | Sync on every bump | `1.0.0` to `1.0.3` updates peer to `^1.0.3` |
 | `peer-minor` | Sync on minor+ only | `3.1.0` to `3.1.2` leaves peer at `^3.1.0`; `3.1.0` to `3.2.0` updates to `^3.2.0` |
 
-Version resolution follows semver naturally. If the dev dependency specifier is
-`^3.1.0`, the action resolves the latest version satisfying that range. There is
-no special major-version skip rule.
+Version resolution follows semver naturally. If the workspace dependency
+specifier is `^3.1.0`, the action resolves the latest version satisfying that
+range. There is no special major-version skip rule.
 
 ## Post-Update Commands
 

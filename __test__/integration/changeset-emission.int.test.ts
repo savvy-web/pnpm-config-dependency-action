@@ -12,21 +12,27 @@
 
 import { copyFileSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import { NodeContext } from "@effect/platform-node";
 import { Effect, Layer } from "effect";
 import { describe, expect, it } from "vitest";
+import { WorkspaceDiscoveryLive, WorkspaceRootLive } from "workspaces-effect";
 import type { DependencyUpdateResult } from "../../src/schemas/domain.js";
 import { ChangesetConfigLive } from "../../src/services/changeset-config.js";
 import { Changesets, ChangesetsLive } from "../../src/services/changesets.js";
 import { captureLockfileState, compareLockfiles } from "../../src/services/lockfile.js";
 import { PublishabilityDetectorAdaptiveLive } from "../../src/services/publishability.js";
-import { WorkspacesLive } from "../../src/services/workspaces.js";
 import { loadFixture } from "./utils/load-fixture.js";
+
+const platform = NodeContext.layer;
+const discoveryLayer = WorkspaceDiscoveryLive.pipe(
+	Layer.provide(Layer.merge(WorkspaceRootLive.pipe(Layer.provide(platform)), platform)),
+);
 
 // Combined layer for Changesets and its dependencies
 const fullLayer = ChangesetsLive.pipe(
 	Layer.provide(
 		Layer.mergeAll(
-			WorkspacesLive,
+			discoveryLayer,
 			PublishabilityDetectorAdaptiveLive.pipe(Layer.provide(ChangesetConfigLive)),
 			ChangesetConfigLive,
 		),
@@ -51,7 +57,7 @@ const runScenario = async (
 	const after = await Effect.runPromise(captureLockfileState(fixture.path));
 
 	const changes = await Effect.runPromise(
-		compareLockfiles(before, after, fixture.path).pipe(Effect.provide(WorkspacesLive)),
+		compareLockfiles(before, after, fixture.path).pipe(Effect.provide(discoveryLayer)),
 	);
 
 	await Effect.runPromise(

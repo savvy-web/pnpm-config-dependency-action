@@ -10,12 +10,12 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Effect } from "effect";
 import { SemVer } from "semver-effect";
+import { WorkspaceDiscovery } from "workspaces-effect";
 
 import { FileSystemError } from "../errors/errors.js";
 import type { DependencyUpdateResult } from "../schemas/domain.js";
 import { parseSpecifier } from "../utils/deps.js";
 import { detectIndent } from "../utils/pnpm.js";
-import { Workspaces } from "./workspaces.js";
 
 export type PeerStrategy = "lock" | "minor";
 
@@ -68,7 +68,7 @@ export const syncPeers = (
 	config: PeerSyncConfig,
 	devUpdates: ReadonlyArray<DependencyUpdateResult>,
 	workspaceRoot: string = process.cwd(),
-): Effect.Effect<ReadonlyArray<DependencyUpdateResult>, FileSystemError, Workspaces> =>
+): Effect.Effect<ReadonlyArray<DependencyUpdateResult>, FileSystemError, WorkspaceDiscovery> =>
 	Effect.gen(function* () {
 		if (config.lock.length === 0 && config.minor.length === 0) return [];
 
@@ -79,12 +79,12 @@ export const syncPeers = (
 		for (const pkg of config.lock) strategyMap.set(pkg, "lock");
 		for (const pkg of config.minor) strategyMap.set(pkg, "minor");
 
-		const workspacesService = yield* Workspaces;
-		const packages = yield* workspacesService.listPackages(workspaceRoot).pipe(
+		const discovery = yield* WorkspaceDiscovery;
+		const packages = yield* discovery.listPackages(workspaceRoot).pipe(
 			Effect.catchAll((error) =>
 				Effect.gen(function* () {
 					yield* Effect.logWarning(`Failed to get workspace info: ${error.reason}`);
-					return [];
+					return [] as ReadonlyArray<{ readonly name: string; readonly path: string }>;
 				}),
 			),
 		);

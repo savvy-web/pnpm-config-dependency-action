@@ -36,30 +36,40 @@ Services are organized in two tiers:
 - `CommandRunner` / `CommandRunnerLive` - Shell command execution: `exec`, `execCapture`
 - `DryRun` / `DryRunLive(flag)` - Dry-run mode flag
 
-### Domain Services (src/services/)
+### Workspace Services (from workspaces-effect)
 
-Each domain service uses `Context.Tag` + `Layer`:
+Workspace enumeration and publishability come from `workspaces-effect`
+directly — there is no local wrapper service:
 
-- `Workspaces` / `WorkspacesLive` — Wraps `workspaces-effect`'s
-  `getWorkspacePackagesSync`. No upstream deps.
-- `ChangesetConfig` / `ChangesetConfigLive` — Reads `.changeset/config.json`
-  with per-`workspaceRoot` caching. No upstream deps.
+- `WorkspaceDiscovery` / `WorkspaceDiscoveryLive` — Upstream Effect-native
+  workspace enumeration. Provides `listPackages(cwd?)` and
+  `importerMap(cwd?)`. Requires `WorkspaceRoot` and `NodeContext.layer`
+  (FileSystem/Path).
+- `WorkspaceRoot` / `WorkspaceRootLive` — Resolves workspace root from cwd.
 - `PublishabilityDetectorAdaptiveLive` (and the simpler
   `SilkPublishabilityDetectorLive`) — `workspaces-effect`'s
   `PublishabilityDetector` Tag overrides; the adaptive variant depends on
   `ChangesetConfig`.
+
+### Domain Services (src/services/)
+
+Each domain service uses `Context.Tag` + `Layer`:
+
+- `ChangesetConfig` / `ChangesetConfigLive` — Reads `.changeset/config.json`
+  with per-`workspaceRoot` caching. No upstream deps.
 - `BranchManager` / `BranchManagerLive` - Depends on `GitBranch`, `GitCommit`, `CommandRunner`
 - `PnpmUpgrade` / `PnpmUpgradeLive` - Depends on `CommandRunner`
 - `ConfigDeps` / `ConfigDepsLive` - Depends on `NpmRegistry`
-- `RegularDeps` / `RegularDepsLive` - Depends on `NpmRegistry`, `Workspaces`
-- `Changesets` / `ChangesetsLive` — Depends on `Workspaces`,
+- `RegularDeps` / `RegularDepsLive` - Depends on `NpmRegistry`,
+  `WorkspaceDiscovery`
+- `Changesets` / `ChangesetsLive` — Depends on `WorkspaceDiscovery`,
   `PublishabilityDetector`, `ChangesetConfig`
 - `Report` / `ReportLive` - Depends on `PullRequest`
 
 Stateless concerns (`PeerSync`, `WorkspaceYaml`, `Lockfile` standalone
 helpers) export standalone helper functions used directly by `program.ts`.
-`syncPeers` requires `Workspaces` in its environment; `compareLockfiles`
-requires `Workspaces` in its environment.
+`syncPeers` requires `WorkspaceDiscovery` in its environment;
+`compareLockfiles` requires `WorkspaceDiscovery` in its environment.
 
 ### Layer Composition
 

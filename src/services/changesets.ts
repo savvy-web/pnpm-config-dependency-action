@@ -1,12 +1,14 @@
 /**
  * Changesets service for creating changeset files after dependency updates.
  *
- * Per the new rules: a workspace package gets a changeset only when it
- * is versionable (publishable OR versionPrivate) AND a consumer-facing change
- * occurred. Triggers are non-dev LockfileChange records (dependency,
- * optionalDependency, peerDependency) plus peer-sync rewrites.
- * devDependency updates are informational table rows only and never
- * themselves trigger a changeset. Empty changesets are no longer written.
+ * A workspace package gets a changeset only when it is versionable
+ * (publishable OR versionPrivate) AND a consumer-facing change occurred.
+ * Triggers are non-dev LockfileChange records (dependency,
+ * optionalDependency, peerDependency), peer-sync rewrites, and any
+ * regularUpdates whose `type` is dependency/optionalDependency/peerDependency.
+ * devDependency rows (from lockfile changes or regularUpdates) are
+ * informational only and never themselves trigger a changeset. Empty
+ * changesets are not written.
  *
  * @module services/changesets
  */
@@ -15,13 +17,13 @@ import { randomBytes } from "node:crypto";
 import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Context, Effect, Layer } from "effect";
-import { PublishabilityDetector } from "workspaces-effect";
+import type { WorkspacePackage } from "workspaces-effect";
+import { PublishabilityDetector, WorkspaceDiscovery } from "workspaces-effect";
 
 import type { ChangesetError } from "../errors/errors.js";
 import { FileSystemError } from "../errors/errors.js";
 import type { ChangesetFile, DependencyUpdateResult, LockfileChange } from "../schemas/domain.js";
 import { ChangesetConfig } from "./changeset-config.js";
-import { Workspaces } from "./workspaces.js";
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Service Interface
@@ -33,7 +35,7 @@ export class Changesets extends Context.Tag("Changesets")<
 		readonly create: (
 			workspaceRoot: string,
 			lockfileChanges: ReadonlyArray<LockfileChange>,
-			devUpdates?: ReadonlyArray<DependencyUpdateResult>,
+			regularUpdates?: ReadonlyArray<DependencyUpdateResult>,
 			peerUpdates?: ReadonlyArray<DependencyUpdateResult>,
 		) => Effect.Effect<ReadonlyArray<ChangesetFile>, ChangesetError | FileSystemError>;
 	}
@@ -56,12 +58,12 @@ export const hasChangesets = (workspaceRoot: string = process.cwd()): boolean =>
 export const ChangesetsLive = Layer.effect(
 	Changesets,
 	Effect.gen(function* () {
-		const workspaces = yield* Workspaces;
+		const discovery = yield* WorkspaceDiscovery;
 		const detector = yield* PublishabilityDetector;
 		const config = yield* ChangesetConfig;
 		return {
-			create: (workspaceRoot, lockfileChanges, devUpdates = [], peerUpdates = []) =>
-				createChangesetsImpl(workspaceRoot, lockfileChanges, devUpdates, peerUpdates, workspaces, detector, config),
+			create: (workspaceRoot, lockfileChanges, regularUpdates = [], peerUpdates = []) =>
+				createChangesetsImpl(workspaceRoot, lockfileChanges, regularUpdates, peerUpdates, discovery, detector, config),
 		};
 	}),
 );
@@ -121,10 +123,10 @@ const lockfileChangeToRow = (c: LockfileChange): ChangesetTableRow => ({
 	to: c.to,
 });
 
-const updateToRow = (u: DependencyUpdateResult, type: string): ChangesetTableRow => ({
+const updateToRow = (u: DependencyUpdateResult, typeOverride?: string): ChangesetTableRow => ({
 	dependency: u.dependency,
-	type,
-	action: "updated",
+	type: typeOverride ?? u.type,
+	action: u.from === null ? "added" : "updated",
 	from: u.from,
 	to: u.to,
 });
@@ -146,9 +148,9 @@ const dedupeRows = (rows: ChangesetTableRow[]): ChangesetTableRow[] => {
 const createChangesetsImpl = (
 	workspaceRoot: string,
 	lockfileChanges: ReadonlyArray<LockfileChange>,
-	devUpdates: ReadonlyArray<DependencyUpdateResult>,
+	regularUpdates: ReadonlyArray<DependencyUpdateResult>,
 	peerUpdates: ReadonlyArray<DependencyUpdateResult>,
-	workspaces: Context.Tag.Service<typeof Workspaces>,
+	discovery: Context.Tag.Service<typeof WorkspaceDiscovery>,
 	detector: Context.Tag.Service<typeof PublishabilityDetector>,
 	config: Context.Tag.Service<typeof ChangesetConfig>,
 ): Effect.Effect<ReadonlyArray<ChangesetFile>, ChangesetError | FileSystemError> =>
@@ -158,11 +160,11 @@ const createChangesetsImpl = (
 			return [];
 		}
 
-		const allPackages = yield* workspaces.listPackages(workspaceRoot).pipe(
+		const allPackages = yield* discovery.listPackages(workspaceRoot).pipe(
 			Effect.catchAll((error) =>
 				Effect.gen(function* () {
 					yield* Effect.logWarning(`Failed to list workspace packages: ${String(error)}`);
-					return [];
+					return [] as ReadonlyArray<WorkspacePackage>;
 				}),
 			),
 		);
@@ -196,9 +198,18 @@ const createChangesetsImpl = (
 			ensure(update.package).triggerRows.push(updateToRow(update, "peerDependency"));
 		}
 
-		for (const update of devUpdates) {
+		// regularUpdates carry the real section type (dependency / devDependency
+		// / optionalDependency). Route by type — non-dev types are triggers,
+		// devDependency is informational only.
+		for (const update of regularUpdates) {
 			if (!update.package) continue;
-			ensure(update.package).devRows.push(updateToRow(update, "devDependency"));
+			const isTrigger = TRIGGER_TYPES.has(update.type as LockfileChange["type"]);
+			const row = updateToRow(update);
+			if (isTrigger) {
+				ensure(update.package).triggerRows.push(row);
+			} else {
+				ensure(update.package).devRows.push(row);
+			}
 		}
 
 		const changesetDir = join(workspaceRoot, ".changeset");

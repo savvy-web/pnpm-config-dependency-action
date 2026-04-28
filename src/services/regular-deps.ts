@@ -12,15 +12,15 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { NpmRegistry } from "@savvy-web/github-action-effects";
 import { Context, Effect, Layer } from "effect";
+import { WorkspaceDiscovery } from "workspaces-effect";
 
 import { FileSystemError } from "../errors/errors.js";
 import type { DependencyUpdateResult } from "../schemas/domain.js";
 import { matchesPattern, parseSpecifier } from "../utils/deps.js";
 import { detectIndent } from "../utils/pnpm.js";
-import { Workspaces } from "./workspaces.js";
 
 type NpmRegistryShape = Context.Tag.Service<typeof NpmRegistry>;
-type WorkspacesShape = Context.Tag.Service<typeof Workspaces>;
+type WorkspaceDiscoveryShape = Context.Tag.Service<typeof WorkspaceDiscovery>;
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Service Interface
@@ -40,10 +40,10 @@ export const RegularDepsLive = Layer.effect(
 	RegularDeps,
 	Effect.gen(function* () {
 		const registry = yield* NpmRegistry;
-		const workspaces = yield* Workspaces;
+		const discovery = yield* WorkspaceDiscovery;
 		return {
 			updateRegularDeps: (patterns, workspaceRoot = process.cwd()) =>
-				updateRegularDepsImpl(patterns, registry, workspaces, workspaceRoot),
+				updateRegularDepsImpl(patterns, registry, discovery, workspaceRoot),
 		};
 	}),
 );
@@ -63,23 +63,47 @@ const queryLatestVersion = (packageName: string, registry: NpmRegistryShape): Ef
 		return version;
 	});
 
-const DEP_FIELDS = ["devDependencies"] as const;
+/**
+ * Writable dependency sections, in priority order. peerDependencies are
+ * intentionally excluded — peer ranges are managed by syncPeers, not by
+ * direct version bumps.
+ */
+const DEP_SECTIONS = [
+	{ field: "dependencies", type: "dependency" },
+	{ field: "devDependencies", type: "devDependency" },
+	{ field: "optionalDependencies", type: "optionalDependency" },
+] as const;
+
+type DepSectionField = (typeof DEP_SECTIONS)[number]["field"];
+type DepSectionType = (typeof DEP_SECTIONS)[number]["type"];
 
 interface PackageJsonDeps {
+	dependencies?: Record<string, string>;
 	devDependencies?: Record<string, string>;
+	optionalDependencies?: Record<string, string>;
 	peerDependencies?: Record<string, string>;
 	[key: string]: unknown;
 }
 
+interface MatchedDep {
+	readonly path: string;
+	readonly field: DepSectionField;
+	readonly type: DepSectionType;
+	readonly currentSpecifier: string;
+}
+
 /**
- * Collect all dependencies matching patterns across all workspace package.json files.
+ * Collect all dependencies matching patterns across all workspace package.json
+ * files. Emits one record per (path, dep, section) — a dep that appears in
+ * both `dependencies` and `devDependencies` of the same package yields two
+ * records so each section can be updated and reported with its real type.
  */
 const collectMatchingDeps = (
 	packageJsonPaths: ReadonlyArray<string>,
 	patterns: ReadonlyArray<string>,
-): Effect.Effect<Map<string, Array<{ path: string; currentSpecifier: string }>>, FileSystemError> =>
+): Effect.Effect<Map<string, MatchedDep[]>, FileSystemError> =>
 	Effect.gen(function* () {
-		const depMap = new Map<string, Array<{ path: string; currentSpecifier: string }>>();
+		const depMap = new Map<string, MatchedDep[]>();
 
 		for (const pkgPath of packageJsonPaths) {
 			const raw = yield* Effect.try({
@@ -92,24 +116,21 @@ const collectMatchingDeps = (
 				catch: (e) => new FileSystemError({ operation: "read", path: pkgPath, reason: `Invalid JSON: ${e}` }),
 			});
 
-			for (const field of DEP_FIELDS) {
+			for (const { field, type } of DEP_SECTIONS) {
 				const deps = pkg[field];
 				if (!deps) continue;
 
 				for (const [name, specifier] of Object.entries(deps)) {
-					// Check if name matches any pattern
-					const matches = patterns.some((p) => matchesPattern(name, p));
-					if (!matches) continue;
+					if (!patterns.some((p) => matchesPattern(name, p))) continue;
 
 					// Skip catalog: and workspace: specifiers
-					const parsed = parseSpecifier(specifier);
-					if (!parsed) continue;
+					if (!parseSpecifier(specifier)) continue;
 
-					// Deduplicate: skip if this path+dep already tracked
-					// (same dep can appear in dependencies AND devDependencies)
 					const entries = depMap.get(name) ?? [];
-					if (entries.some((e) => e.path === pkgPath)) continue;
-					entries.push({ path: pkgPath, currentSpecifier: specifier });
+					// Deduplicate by (path, field) — a dep should never appear twice in
+					// the same section, but guard against pathological package.json.
+					if (entries.some((e) => e.path === pkgPath && e.field === field)) continue;
+					entries.push({ path: pkgPath, field, type, currentSpecifier: specifier });
 					depMap.set(name, entries);
 				}
 			}
@@ -119,9 +140,14 @@ const collectMatchingDeps = (
 	});
 
 /**
- * Update a single package.json file with new version specifiers.
+ * Update a single package.json file. `updates` is keyed by (field, depName)
+ * so a dep present in both `dependencies` and `devDependencies` updates
+ * each independently if both are tracked.
  */
-const updatePackageJson = (pkgPath: string, updates: Map<string, string>): Effect.Effect<void, FileSystemError> =>
+const updatePackageJson = (
+	pkgPath: string,
+	updates: Map<DepSectionField, Map<string, string>>,
+): Effect.Effect<void, FileSystemError> =>
 	Effect.gen(function* () {
 		const raw = yield* Effect.try({
 			try: () => readFileSync(pkgPath, "utf-8"),
@@ -136,18 +162,16 @@ const updatePackageJson = (pkgPath: string, updates: Map<string, string>): Effec
 
 		let changed = false;
 
-		for (const field of DEP_FIELDS) {
+		for (const { field } of DEP_SECTIONS) {
 			const deps = pkg[field];
-			if (!deps) continue;
+			const fieldUpdates = updates.get(field);
+			if (!deps || !fieldUpdates) continue;
 
-			for (const [name, newSpecifier] of updates) {
-				if (name in deps) {
-					const current = deps[name];
-					// Only update if the dep exists and is a parseable specifier (not catalog:/workspace:)
-					if (current && parseSpecifier(current) && current !== newSpecifier) {
-						deps[name] = newSpecifier;
-						changed = true;
-					}
+			for (const [name, newSpecifier] of fieldUpdates) {
+				const current = deps[name];
+				if (current && parseSpecifier(current) && current !== newSpecifier) {
+					deps[name] = newSpecifier;
+					changed = true;
 				}
 			}
 		}
@@ -171,18 +195,18 @@ const updatePackageJson = (pkgPath: string, updates: Map<string, string>): Effec
 const updateRegularDepsImpl = (
 	patterns: ReadonlyArray<string>,
 	registry: NpmRegistryShape,
-	workspaces: WorkspacesShape,
+	discovery: WorkspaceDiscoveryShape,
 	workspaceRoot: string,
 ): Effect.Effect<ReadonlyArray<DependencyUpdateResult>> =>
 	Effect.gen(function* () {
 		if (patterns.length === 0) return [];
 
-		// Step 1: Find all workspace package.json paths via Workspaces service
-		const packages = yield* workspaces.listPackages(workspaceRoot).pipe(
+		// Step 1: Find all workspace package.json paths via WorkspaceDiscovery
+		const packages = yield* discovery.listPackages(workspaceRoot).pipe(
 			Effect.catchAll((error) =>
 				Effect.gen(function* () {
 					yield* Effect.logWarning(`Failed to list workspace packages: ${String(error)}`);
-					return [];
+					return [] as ReadonlyArray<{ readonly name: string; readonly path: string }>;
 				}),
 			),
 		);
@@ -198,7 +222,7 @@ const updateRegularDepsImpl = (
 			Effect.catchAll((error) =>
 				Effect.gen(function* () {
 					yield* Effect.logWarning(`Failed to collect matching deps: ${error.reason}`);
-					return new Map<string, Array<{ path: string; currentSpecifier: string }>>();
+					return new Map<string, MatchedDep[]>();
 				}),
 			),
 		);
@@ -210,10 +234,12 @@ const updateRegularDepsImpl = (
 
 		yield* Effect.logInfo(`Found ${depMap.size} unique dependencies matching patterns`);
 
-		// Step 3: Query npm for latest versions and compute updates
+		// Step 3: Query npm for latest versions and compute updates.
 		const results: DependencyUpdateResult[] = [];
-		// Track updates per package.json path
-		const fileUpdates = new Map<string, Map<string, string>>();
+		// Track updates per (package.json path, dep section). A dep present in
+		// both dependencies and devDependencies of the same package needs
+		// independent tracking so the writer updates the right field.
+		const fileUpdates = new Map<string, Map<DepSectionField, Map<string, string>>>();
 
 		for (const [depName, entries] of depMap) {
 			const latest = yield* queryLatestVersion(depName, registry);
@@ -223,38 +249,37 @@ const updateRegularDepsImpl = (
 				continue;
 			}
 
-			// Group by unique specifier to avoid redundant comparisons
 			for (const entry of entries) {
 				const parsed = parseSpecifier(entry.currentSpecifier);
 				if (!parsed) continue;
 
-				// Compare current version with latest
 				if (parsed.version === latest) continue;
 
 				const newSpecifier = `${parsed.prefix}${latest}`;
 
-				// Track file update
-				const updates = fileUpdates.get(entry.path) ?? new Map<string, string>();
-				updates.set(depName, newSpecifier);
-				fileUpdates.set(entry.path, updates);
+				const sections = fileUpdates.get(entry.path) ?? new Map<DepSectionField, Map<string, string>>();
+				const fieldUpdates = sections.get(entry.field) ?? new Map<string, string>();
+				fieldUpdates.set(depName, newSpecifier);
+				sections.set(entry.field, fieldUpdates);
+				fileUpdates.set(entry.path, sections);
 
-				// Derive package name from path
 				const pkgName = pathToPackageName.get(entry.path) ?? entry.path;
 
 				results.push({
 					dependency: depName,
 					from: entry.currentSpecifier,
 					to: newSpecifier,
-					type: "devDependency",
+					type: entry.type,
 					package: pkgName,
 				});
 			}
 		}
 
-		// Step 4: Apply updates to package.json files
-		for (const [pkgPath, updates] of fileUpdates) {
-			yield* updatePackageJson(pkgPath, updates).pipe(
-				Effect.tap(() => Effect.logInfo(`Updated ${updates.size} dependencies in ${pkgPath}`)),
+		// Step 4: Apply updates to package.json files.
+		for (const [pkgPath, sections] of fileUpdates) {
+			const total = [...sections.values()].reduce((sum, m) => sum + m.size, 0);
+			yield* updatePackageJson(pkgPath, sections).pipe(
+				Effect.tap(() => Effect.logInfo(`Updated ${total} dependencies in ${pkgPath}`)),
 				Effect.catchAll((error) => Effect.logWarning(`Failed to update ${pkgPath}: ${error.reason}`)),
 			);
 		}

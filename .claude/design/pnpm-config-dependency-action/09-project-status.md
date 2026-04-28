@@ -17,10 +17,13 @@ publishability concerns; `workspace-tools` is no longer a dependency.
   with `runCommands` and `runInstall` helpers.
 - **Effect-first services:** Domain services in `src/services/` —
   `BranchManager`, `PnpmUpgrade`, `ConfigDeps`, `RegularDeps`,
-  `Report`, `Lockfile`, `Changesets`, `Workspaces`, `ChangesetConfig`, plus
-  the `Publishability` Layer overrides for the `PublishabilityDetector` Tag
+  `Report`, `Lockfile`, `Changesets`, `ChangesetConfig`, plus the
+  `Publishability` Layer overrides for the `PublishabilityDetector` Tag
   from `workspaces-effect`. Stateless helpers (`PeerSync`, `WorkspaceYaml`)
-  export functions without their own Tag.
+  export functions without their own Tag. Workspace enumeration goes
+  through `WorkspaceDiscovery` from `workspaces-effect` directly — the
+  local `Workspaces` wrapper service was removed (issue #38) when
+  `workspaces-effect@0.5.1` exposed cwd-accepting methods upstream.
 - **Layer composition:** `makeAppLayer(dryRun)` in `src/layers/app.ts` wires
   all library and domain layers together. The GitHub App token reaches
   `GitHubClientLive` via `process.env.GITHUB_TOKEN` set inside
@@ -42,7 +45,10 @@ publishability concerns; `workspace-tools` is no longer a dependency.
   service.
 - Config dependency updates via `ConfigDeps` service (uses `NpmRegistry`).
 - Regular dependency updates via `RegularDeps` service (uses `NpmRegistry`
-  and `Workspaces`).
+  and `WorkspaceDiscovery` from `workspaces-effect`). Iterates
+  `dependencies`, `devDependencies`, and `optionalDependencies`
+  independently and reports the real section type per update —
+  `peerDependencies` are managed by `syncPeers`.
 - Peer dependency range syncing via `syncPeers` (`peer-lock` and
   `peer-minor` strategies, powered by `semver-effect`).
 - pnpm self-upgrade via `PnpmUpgrade` service.
@@ -58,6 +64,17 @@ publishability concerns; `workspace-tools` is no longer a dependency.
 - Changeset creation via `Changesets` service. The new gating rules
   (versionable cascade + trigger/informational classification) replace the
   previous always-on patch fallback. Empty changesets are no longer written.
+  The third parameter to `Changesets.create` was renamed from `devUpdates`
+  to `regularUpdates` and is now routed by `update.type` against the same
+  `TRIGGER_TYPES` set already used for lockfile changes
+  (dependency/optionalDependency/peerDependency are triggers,
+  devDependency is informational only). PeerDependency changes still
+  arrive primarily via two existing paths — `compareCatalogs` for
+  catalog refs in workspace peerDependencies, and `syncPeers` for
+  peer-minor/peer-lock rewrites — both of which already feed the
+  trigger lane and are covered by `changesets.test.ts`
+  ("catalog change in peerDependency triggers a changeset",
+  "writes a changeset for peer-sync rewrites").
 - `ChangesetConfig` service: silk vs vanilla mode detection plus
   `versionPrivate` flag for `.changeset/config.json`.
 - `PublishabilityDetector` overrides (`SilkPublishabilityDetectorLive`,
@@ -81,10 +98,21 @@ publishability concerns; `workspace-tools` is no longer a dependency.
 - `src/lib/schemas/index.ts` — Replaced by `src/schemas/domain.ts`.
 - `src/lib/schemas/errors.ts` — Replaced by `src/errors/errors.ts`.
 - `src/lib/__test__/fixtures.ts` — Replaced by `src/utils/fixtures.test.ts`.
-- `workspace-tools` — Replaced by `workspaces-effect` via the `Workspaces`
-  service.
+- `workspace-tools` — Replaced by `workspaces-effect`. Domain services
+  consume the upstream `WorkspaceDiscovery` Tag directly.
+- `src/services/workspaces.ts` and `src/services/workspaces.test.ts`
+  (issue #38) — The local `Workspaces` wrapper service became unnecessary
+  once `workspaces-effect@0.5.1` exposed
+  `WorkspaceDiscovery.listPackages(cwd?)` and
+  `WorkspaceDiscovery.importerMap(cwd?)` accepting an optional cwd
+  parameter. `RegularDeps`, `PeerSync`, `Lockfile`, and `Changesets` now
+  yield `WorkspaceDiscovery` from `workspaces-effect` directly.
 - The empty-changeset fallback path inside `Changesets.create` (a generic
   patch was previously written when nothing else triggered).
+- The single-section `DEP_FIELDS = ["devDependencies"]` constant in
+  `RegularDeps` — replaced by `DEP_SECTIONS` covering
+  `dependencies` / `devDependencies` / `optionalDependencies`, each with
+  its accurate `type` field.
 
 **Next Steps:**
 

@@ -9,7 +9,7 @@ Detailed breakdown of the 14-step workflow executed in the main phase.
 - [Step 3: Capture Lockfile (Before)](#step-3-capture-lockfile-before)
 - [Step 4: Upgrade pnpm](#step-4-upgrade-pnpm)
 - [Step 5: Update Config Dependencies](#step-5-update-config-dependencies)
-- [Step 6: Update Dev Dependencies](#step-6-update-dev-dependencies)
+- [Step 6: Update Workspace Dependencies](#step-6-update-workspace-dependencies)
 - [Step 6b: Sync Peer Dependencies](#step-6b-sync-peer-dependencies)
 - [Step 7: Reconcile Lockfile and Install](#step-7-reconcile-lockfile-and-install)
 - [Step 8: Format pnpm-workspace.yaml](#step-8-format-pnpm-workspaceyaml)
@@ -67,10 +67,15 @@ Detailed breakdown of the 14-step workflow executed in the main phase.
   proceed
 - Failed updates are logged as warnings but do not stop the workflow
 
-## Step 6: Update Dev Dependencies
+## Step 6: Update Workspace Dependencies
 
 - Iterates over each dependency pattern listed in the `dependencies` input
-- Matches against `devDependencies` in all workspace `package.json` files
+- Matches against `dependencies`, `devDependencies`, and `optionalDependencies`
+  in all workspace `package.json` files (`peerDependencies` are intentionally
+  excluded -- those are managed by `peer-lock` / `peer-minor`)
+- A dependency listed in multiple sections of the same `package.json` (for
+  example, in both `dependencies` and `devDependencies`) is updated in each
+  section independently and produces one update record per section
 - Queries npm registry directly for latest versions (avoids `pnpm up --latest`
   which promotes deps to catalogs when `catalogMode: strict` is enabled)
 - Supports glob patterns (e.g., `@savvy-web/*`)
@@ -78,7 +83,8 @@ Detailed breakdown of the 14-step workflow executed in the main phase.
 
 ## Step 6b: Sync Peer Dependencies
 
-- For each dev dependency update matching a `peer-lock` or `peer-minor` entry:
+- For each workspace dependency update matching a `peer-lock` or `peer-minor`
+  entry:
   - Finds the corresponding `peerDependencies` entry in the same `package.json`
   - Computes the new peer range based on the strategy
   - Writes the updated `package.json`

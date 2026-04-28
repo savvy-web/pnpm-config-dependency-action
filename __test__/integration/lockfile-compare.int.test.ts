@@ -7,11 +7,17 @@
 
 import { copyFileSync } from "node:fs";
 import { join } from "node:path";
-import { Effect } from "effect";
+import { NodeContext } from "@effect/platform-node";
+import { Effect, Layer } from "effect";
 import { describe, expect, it } from "vitest";
+import { WorkspaceDiscoveryLive, WorkspaceRootLive } from "workspaces-effect";
 import { captureLockfileState, compareLockfiles } from "../../src/services/lockfile.js";
-import { WorkspacesLive } from "../../src/services/workspaces.js";
 import { loadFixture } from "./utils/load-fixture.js";
+
+const platform = NodeContext.layer;
+const discoveryLayer = WorkspaceDiscoveryLive.pipe(
+	Layer.provide(Layer.merge(WorkspaceRootLive.pipe(Layer.provide(platform)), platform)),
+);
 
 describe("Lockfile.compare integration", () => {
 	it("attributes a root devDep change to the root package's real name", async () => {
@@ -29,7 +35,7 @@ describe("Lockfile.compare integration", () => {
 
 		// Stage 3: compare and inspect
 		const changes = await Effect.runPromise(
-			compareLockfiles(before, after, fixture.path).pipe(Effect.provide(WorkspacesLive)),
+			compareLockfiles(before, after, fixture.path).pipe(Effect.provide(discoveryLayer)),
 		);
 
 		const lodashChange = changes.find((c) => c.dependency === "lodash");
