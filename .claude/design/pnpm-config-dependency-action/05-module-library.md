@@ -9,33 +9,33 @@ or (for stateless concerns) exported as standalone helper functions. Each
 service depends on library services from `@savvy-web/github-action-effects`
 and/or the new `workspaces-effect` package.
 
-### src/services/workspaces.ts - Workspaces
+### Workspace discovery (via workspaces-effect)
 
-Thin wrapper over `workspaces-effect`'s `getWorkspacePackagesSync` that
-exposes Effect-native methods accepting an explicit `workspaceRoot` per call.
-Replaces the previous `workspace-tools` (Microsoft) integration. Includes the
-root workspace package, unlike workspace-tools' package-pattern-only
-discovery.
+There is no local `Workspaces` wrapper service. Domain services consume the
+upstream `WorkspaceDiscovery` Tag from `workspaces-effect` directly. The
+local wrapper was removed (issue #38) once `workspaces-effect@0.5.1` exposed
+`WorkspaceDiscovery.listPackages(cwd?)` and
+`WorkspaceDiscovery.importerMap(cwd?)` accepting an optional cwd parameter.
 
-**Service interface:**
+The upstream service interface (relevant slice):
 
 ```typescript
-export interface WorkspacePackageInfo {
- readonly name: string;
- readonly path: string;
-}
+import { WorkspaceDiscovery } from "workspaces-effect";
 
-export class Workspaces extends Context.Tag("Workspaces")<Workspaces, {
- readonly listPackages: (workspaceRoot: string) =>
-  Effect.Effect<ReadonlyArray<WorkspacePackageInfo>, FileSystemError>;
- readonly importerMap: (workspaceRoot: string) =>
-  Effect.Effect<ReadonlyMap<string, WorkspacePackageInfo>, FileSystemError>;
-}>() {}
+// WorkspaceDiscovery exposes (among others):
+//   listPackages: (cwd?: string) =>
+//     Effect.Effect<ReadonlyArray<WorkspacePackage>, ...>
+//   importerMap: (cwd?: string) =>
+//     Effect.Effect<ReadonlyMap<string, WorkspacePackage>, ...>
 ```
 
 `importerMap` returns a map keyed by importer path relative to the workspace
 root (`.` for the root workspace), used by `Lockfile.compare` to translate
 importer ids into package names.
+
+`WorkspaceDiscoveryLive` requires `WorkspaceRootLive` and `NodeContext.layer`
+(FileSystem/Path). Both are wired in `makeAppLayer`; integration tests build
+their own `discoveryLayer` from `NodeContext.layer` directly.
 
 ### src/services/changeset-config.ts - ChangesetConfig
 
@@ -194,15 +194,24 @@ export class RegularDeps extends Context.Tag("RegularDeps")<RegularDeps, {
 **Key Design Decisions:**
 
 - Queries npm registry directly via `NpmRegistry` service.
-- Enumerates workspace `package.json` files via the `Workspaces` service
-  (replacing the previous `workspace-tools` calls).
+- Enumerates workspace `package.json` files via `WorkspaceDiscovery` from
+  `workspaces-effect` (consumed directly — no local wrapper service).
 - Uses `matchesPattern` from `src/utils/deps.ts` for glob matching.
 - Preserves specifier prefix (`^`, `~`, or exact) from `package.json`.
 - Skips `catalog:` and `workspace:` specifiers.
-- Currently iterates only `devDependencies` (`DEP_FIELDS = ["devDependencies"]`);
-  catalog-resolved `dependencies`/`peerDependencies`/`optionalDependencies`
-  flow through `compareCatalogs` instead.
-- Deduplicates per path+dep to avoid duplicate PR table rows.
+- Iterates `dependencies`, `devDependencies`, and `optionalDependencies`
+  via `DEP_SECTIONS` (a typed array of `{ field, type }` records).
+  `peerDependencies` are intentionally excluded — peer ranges are managed
+  by `syncPeers`, not by direct version bumps. Catalog-resolved deps in
+  any section still flow through `compareCatalogs` independently.
+- Each match carries its `field` and `type` through the pipeline. Dedup
+  is per `(path, field)`, so a dep declared in both `dependencies` and
+  `devDependencies` of one package emits two records, each with the
+  accurate `type`.
+- `updatePackageJson` accepts `Map<DepSectionField, Map<string, string>>`
+  so each section is updated independently without cross-pollination.
+- `DependencyUpdateResult.type` reflects the actual section (`dependency`
+  / `devDependency` / `optionalDependency`) instead of being hardcoded.
 - Gracefully handles npm query failures per-dependency.
 
 ### src/services/peer-sync.ts - PeerSync
@@ -210,15 +219,16 @@ export class RegularDeps extends Context.Tag("RegularDeps")<RegularDeps, {
 Sync peerDependency ranges after devDependency updates based on `peer-lock`
 and `peer-minor` input configuration. Uses `semver-effect` for version
 parsing. **Has no `Context.Tag` of its own** — exported as standalone
-functions and consumed directly from `program.ts`. Depends on the
-`Workspaces` service for resolving package paths.
+functions and consumed directly from `program.ts`. Yields `WorkspaceDiscovery`
+from `workspaces-effect` to resolve package paths.
 
 **Exported functions:**
 
 - `computePeerRange(params)` — Compute new peer range based on strategy
   (returns `Effect<string | null, never>`).
 - `syncPeers(config, devUpdates, workspaceRoot?)` — Sync all peer ranges;
-  signature is `Effect<readonly DependencyUpdateResult[], FileSystemError, Workspaces>`.
+  signature is
+  `Effect<readonly DependencyUpdateResult[], FileSystemError, WorkspaceDiscovery>`.
 
 **Types:**
 
@@ -233,7 +243,8 @@ functions and consumed directly from `program.ts`. Depends on the
 **Algorithm:**
 
 1. Build strategy lookup map from config.
-2. Get workspace package info from the `Workspaces` service.
+2. Yield `WorkspaceDiscovery` and call `listPackages(workspaceRoot)` to
+   resolve package paths.
 3. For each devDep update matching a strategy:
    - Read the package.json.
    - Find the peerDependencies entry.
@@ -243,7 +254,8 @@ functions and consumed directly from `program.ts`. Depends on the
 ### src/services/lockfile.ts - Lockfile
 
 Compare lockfile snapshots before and after updates to detect changes.
-Uses `@pnpm/lockfile.fs` and the `Workspaces` service.
+Uses `@pnpm/lockfile.fs` and yields `WorkspaceDiscovery` from
+`workspaces-effect`.
 
 **Service interface:**
 
@@ -252,7 +264,7 @@ export class Lockfile extends Context.Tag("Lockfile")<Lockfile, {
  readonly capture: (workspaceRoot?: string) =>
   Effect.Effect<LockfileObject | null, LockfileError>;
  readonly compare: (before, after, workspaceRoot?) =>
-  Effect.Effect<ReadonlyArray<LockfileChange>, LockfileError, Workspaces>;
+  Effect.Effect<ReadonlyArray<LockfileChange>, LockfileError, WorkspaceDiscovery>;
 }>() {}
 ```
 
@@ -272,14 +284,14 @@ removals), reading dep section from the `after` snapshot to type each entry.
 
 - `captureLockfileState(workspaceRoot?)` - Standalone capture function
 - `compareLockfiles(before, after, workspaceRoot?)` - Standalone compare
-  function (signature requires `Workspaces` in its environment)
+  function (signature requires `WorkspaceDiscovery` in its environment)
 - `groupChangesByPackage(changes)` - Group lockfile changes by affected package
 
 ### src/services/changesets.ts - Changesets
 
 Create changeset files for affected packages after dependency updates.
-Depends on `Workspaces`, `PublishabilityDetector` (from `workspaces-effect`),
-and `ChangesetConfig`.
+Depends on `WorkspaceDiscovery` (from `workspaces-effect`),
+`PublishabilityDetector` (from `workspaces-effect`), and `ChangesetConfig`.
 
 **Service interface:**
 
@@ -288,14 +300,17 @@ export class Changesets extends Context.Tag("Changesets")<Changesets, {
  readonly create: (
   workspaceRoot: string,
   lockfileChanges: ReadonlyArray<LockfileChange>,
-  devUpdates?: ReadonlyArray<DependencyUpdateResult>,
+  regularUpdates?: ReadonlyArray<DependencyUpdateResult>,
   peerUpdates?: ReadonlyArray<DependencyUpdateResult>,
  ) => Effect.Effect<ReadonlyArray<ChangesetFile>, ChangesetError | FileSystemError>;
 }>() {}
 ```
 
 Note that `workspaceRoot` is the **first** parameter (the previous signature
-that took it last is no longer supported).
+that took it last is no longer supported). The third parameter was renamed
+from `devUpdates` to `regularUpdates` to reflect that it now carries
+dependency/devDependency/optionalDependency updates from the multi-section
+RegularDeps scan.
 
 **Gating rules:**
 
@@ -304,8 +319,17 @@ that took it last is no longer supported).
   - `dependency`, `optionalDependency`, and `peerDependency` lockfile
     changes are **triggers**; `devDependency` lockfile changes are
     informational only.
-  - Peer-sync `peerUpdates` are always triggers.
-  - DevDep `devUpdates` are always informational only.
+  - Peer-sync `peerUpdates` are always triggers (with `type:
+    "peerDependency"`).
+  - `regularUpdates` are routed by `update.type` against the same
+    `TRIGGER_TYPES` set used for lockfile changes:
+    `dependency`/`optionalDependency`/`peerDependency` go to
+    `triggerRows`; `devDependency` goes to `devRows`. RegularDeps does
+    not currently emit `peerDependency`-typed records (peer ranges are
+    managed by `syncPeers`), but the routing tolerates them so future
+    expansion is safe. `updateToRow` honors `from === null` for the
+    "added" action and uses `update.type` directly when no override is
+    provided.
 - A changeset is emitted for a package only when it has at least one
   trigger row AND the package is **versionable**:
   `versionable = publishable || versionPrivate`, where:
@@ -359,7 +383,13 @@ export const makeAppLayer = (dryRun: boolean) => {
  const gitCommit = GitCommitLive.pipe(Layer.provide(GitHubClientLive));
  const prLayer = PullRequestLive.pipe(Layer.provide(Layer.merge(GitHubClientLive, ghGraphql)));
 
- const workspaces = WorkspacesLive;
+ // Platform layer (FileSystem, Path) for workspaces-effect's WorkspaceDiscovery.
+ const platform = NodeContext.layer;
+ const workspaceRoot = WorkspaceRootLive.pipe(Layer.provide(platform));
+ const workspaceDiscovery = WorkspaceDiscoveryLive.pipe(
+  Layer.provide(Layer.merge(workspaceRoot, platform)),
+ );
+
  const changesetConfig = ChangesetConfigLive;
  // PublishabilityDetectorAdaptiveLive overrides PublishabilityDetector and
  // reads ChangesetConfig.mode per-call to dispatch to silk/vanilla/noop.
@@ -372,20 +402,26 @@ export const makeAppLayer = (dryRun: boolean) => {
  );
 
  const domainLayers = Layer.mergeAll(
-  workspaces,
+  workspaceDiscovery,
   changesetConfig,
   publishabilityDetector,
-  ChangesetsLive.pipe(Layer.provide(Layer.mergeAll(workspaces, publishabilityDetector, changesetConfig))),
+  ChangesetsLive.pipe(Layer.provide(Layer.mergeAll(workspaceDiscovery, publishabilityDetector, changesetConfig))),
   BranchManagerLive.pipe(Layer.provide(Layer.mergeAll(gitBranch, gitCommit, CommandRunnerLive))),
   PnpmUpgradeLive.pipe(Layer.provide(CommandRunnerLive)),
   ConfigDepsLive.pipe(Layer.provide(npmRegistry)),
-  RegularDepsLive.pipe(Layer.provide(Layer.merge(npmRegistry, workspaces))),
+  RegularDepsLive.pipe(Layer.provide(Layer.merge(npmRegistry, workspaceDiscovery))),
   ReportLive.pipe(Layer.provide(prLayer)),
  );
 
  return Layer.provideMerge(domainLayers, libraryLayers);
 };
 ```
+
+`WorkspaceDiscoveryLive` and `WorkspaceRootLive` come from
+`workspaces-effect`; `NodeContext.layer` (from `@effect/platform-node`)
+satisfies their FileSystem/Path requirements. There is no local `Workspaces`
+service Tag — domain services consume the upstream `WorkspaceDiscovery` Tag
+directly.
 
 ## Pure Helpers (src/utils/)
 

@@ -4,7 +4,7 @@
 [![GitHub Action](https://img.shields.io/badge/GitHub-Action-blue?logo=github)](https://github.com/savvy-web/pnpm-config-dependency-action)
 [![Node.js 24+](https://img.shields.io/badge/Node.js-24%2B-green?logo=node.js)](https://nodejs.org)
 
-Automates updates to pnpm config dependencies, dev dependencies, and peer
+Automates updates to pnpm config dependencies, workspace dependencies, and peer
 dependency ranges with automated PR creation. Unlike Dependabot, this action
 supports [pnpm config dependencies](https://pnpm.io/config-dependencies),
 enabling centralized version management across monorepos.
@@ -12,7 +12,8 @@ enabling centralized version management across monorepos.
 ## Features
 
 - Updates config dependencies via direct npm queries and YAML editing
-- Updates dev dependencies via direct npm registry queries with glob pattern support
+- Updates workspace dependencies (across `dependencies`, `devDependencies`, and
+  `optionalDependencies`) via direct npm registry queries with glob pattern support
 - Syncs peer dependency ranges with configurable lock/minor strategies
 - Creates verified, signed commits through GitHub App authentication
 - Integrates with Changesets for automated versioning of affected packages
@@ -61,7 +62,7 @@ jobs:
 | `app-private-key` | Yes | -- | GitHub App private key (PEM format) |
 | `branch` | No | `pnpm/config-deps` | Branch name for the update PR |
 | `config-dependencies` | No | `""` | Config dependencies to update (one per line) |
-| `dependencies` | No | `""` | Dev dependencies to update (one per line, supports globs) |
+| `dependencies` | No | `""` | Workspace dependencies to update across `dependencies`, `devDependencies`, and `optionalDependencies` (one per line, supports globs) |
 | `peer-lock` | No | `""` | Peer ranges that sync on every version bump (one per line) |
 | `peer-minor` | No | `""` | Peer ranges that sync on minor+ bumps only (one per line) |
 | `update-pnpm` | No | `true` | Update pnpm version |

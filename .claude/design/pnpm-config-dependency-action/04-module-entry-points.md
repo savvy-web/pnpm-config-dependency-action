@@ -120,7 +120,8 @@ The module exports:
 `ConfigDeps`, `RegularDeps`, `Changesets`, `Report`) and helper functions
 (`captureLockfileState`, `compareLockfiles`, `syncPeers`,
 `formatWorkspaceYaml`) plus library services (`ActionOutputs`, `CheckRun`,
-`CommandRunner`, `Workspaces`) in its context.
+`CommandRunner`) and `WorkspaceDiscovery` (from `workspaces-effect`) in its
+context.
 
 The module-level call in `main.ts` uses `Action.run` which handles all error
 formatting via `formatCause` automatically:

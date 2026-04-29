@@ -6,10 +6,9 @@ import type { Context } from "effect";
 import { Effect, Layer, LogLevel, Logger } from "effect";
 import { describe, expect, it } from "vitest";
 import type { WorkspacePackage } from "workspaces-effect";
-import { FileSystemError } from "../errors/errors.js";
+import { WorkspaceDiscovery, WorkspaceDiscoveryError } from "workspaces-effect";
 import { matchesPattern, parseSpecifier } from "../utils/deps.js";
 import { RegularDeps, RegularDepsLive } from "./regular-deps.js";
-import { Workspaces } from "./workspaces.js";
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Test Helpers
@@ -54,36 +53,37 @@ const makeRegistryState = (
 };
 
 /**
- * Create a Workspaces layer that returns a fixed list of packages.
+ * Create a WorkspaceDiscovery layer that returns a fixed list of packages.
  * Use this to control which package.json files the RegularDeps service sees.
  */
-const mockWorkspaces = (packages: ReadonlyArray<{ name: string; path: string }>): Layer.Layer<Workspaces> =>
-	Layer.succeed(Workspaces, {
+const mockWorkspaces = (packages: ReadonlyArray<{ name: string; path: string }>): Layer.Layer<WorkspaceDiscovery> =>
+	Layer.succeed(WorkspaceDiscovery, {
 		listPackages: () => Effect.succeed(packages as unknown as ReadonlyArray<WorkspacePackage>),
+		getPackage: () => Effect.die("getPackage not used in regular-deps tests"),
 		importerMap: () => Effect.die("importerMap not used in regular-deps tests"),
 	});
 
 /**
- * Create a Workspaces layer that fails with a FileSystemError.
+ * Create a WorkspaceDiscovery layer that fails with a WorkspaceDiscoveryError.
  * Used to test graceful degradation when workspace discovery fails.
  */
-const failingWorkspaces = (): Layer.Layer<Workspaces> =>
-	Layer.succeed(Workspaces, {
+const failingWorkspaces = (): Layer.Layer<WorkspaceDiscovery> =>
+	Layer.succeed(WorkspaceDiscovery, {
 		listPackages: (root) =>
 			Effect.fail(
-				new FileSystemError({
-					operation: "read",
-					path: root,
+				new WorkspaceDiscoveryError({
+					root: root ?? "",
 					reason: "workspace detection failed",
 				}),
 			),
+		getPackage: () => Effect.die("getPackage not used in regular-deps tests"),
 		importerMap: () => Effect.die("importerMap not used in regular-deps tests"),
 	});
 
 const runWithService = <A, E>(
 	fn: (service: Context.Tag.Service<typeof RegularDeps>) => Effect.Effect<A, E>,
 	packages?: Record<string, string>,
-	workspacesLayer?: Layer.Layer<Workspaces>,
+	workspacesLayer?: Layer.Layer<WorkspaceDiscovery>,
 ) => {
 	const registryLayer = packages
 		? NpmRegistryTest.layer({ packages: makeRegistryState(packages) })
@@ -435,7 +435,32 @@ describe("RegularDeps.updateRegularDeps", () => {
 		expect(result).toHaveLength(0);
 	});
 
-	it("skips deps in optionalDependencies", async () => {
+	it("updates deps in dependencies", async () => {
+		const dir = makeTempDir();
+		writePackageJson(dir, {
+			name: "root",
+			dependencies: { effect: "^3.0.0" },
+		});
+
+		const result = await runWithService(
+			(s) => s.updateRegularDeps(["effect"], dir),
+			{ effect: "3.1.0" },
+			mockWorkspaces([{ name: "root", path: dir }]),
+		);
+
+		expect(result).toHaveLength(1);
+		expect(result[0]).toMatchObject({
+			dependency: "effect",
+			from: "^3.0.0",
+			to: "^3.1.0",
+			type: "dependency",
+		});
+
+		const pkg = readPackageJson(dir);
+		expect(pkg.dependencies.effect).toBe("^3.1.0");
+	});
+
+	it("updates deps in optionalDependencies", async () => {
 		const dir = makeTempDir();
 		writePackageJson(dir, {
 			name: "root",
@@ -448,11 +473,58 @@ describe("RegularDeps.updateRegularDeps", () => {
 			mockWorkspaces([{ name: "root", path: dir }]),
 		);
 
+		expect(result).toHaveLength(1);
+		expect(result[0]).toMatchObject({
+			dependency: "effect",
+			from: "^3.0.0",
+			to: "^3.1.0",
+			type: "optionalDependency",
+		});
+
+		const pkg = readPackageJson(dir);
+		expect(pkg.optionalDependencies.effect).toBe("^3.1.0");
+	});
+
+	it("skips deps in peerDependencies (peer ranges are managed by syncPeers)", async () => {
+		const dir = makeTempDir();
+		writePackageJson(dir, {
+			name: "root",
+			peerDependencies: { effect: "^3.0.0" },
+		});
+
+		const result = await runWithService(
+			(s) => s.updateRegularDeps(["effect"], dir),
+			{ effect: "3.1.0" },
+			mockWorkspaces([{ name: "root", path: dir }]),
+		);
+
 		expect(result).toHaveLength(0);
 
-		// Verify optionalDependencies was NOT changed
 		const pkg = readPackageJson(dir);
-		expect(pkg.optionalDependencies.effect).toBe("^3.0.0");
+		expect(pkg.peerDependencies.effect).toBe("^3.0.0");
+	});
+
+	it("emits one record per section when dep appears in both dependencies and devDependencies", async () => {
+		const dir = makeTempDir();
+		writePackageJson(dir, {
+			name: "root",
+			dependencies: { effect: "^3.0.0" },
+			devDependencies: { effect: "^3.0.0" },
+		});
+
+		const result = await runWithService(
+			(s) => s.updateRegularDeps(["effect"], dir),
+			{ effect: "3.1.0" },
+			mockWorkspaces([{ name: "root", path: dir }]),
+		);
+
+		expect(result).toHaveLength(2);
+		const types = result.map((r) => r.type).sort();
+		expect(types).toEqual(["dependency", "devDependency"]);
+
+		const pkg = readPackageJson(dir);
+		expect(pkg.dependencies.effect).toBe("^3.1.0");
+		expect(pkg.devDependencies.effect).toBe("^3.1.0");
 	});
 
 	it("preserves exact version (no prefix)", async () => {

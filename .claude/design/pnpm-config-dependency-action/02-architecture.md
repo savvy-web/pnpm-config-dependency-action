@@ -40,9 +40,7 @@ src/
 │   ├── report.ts          # Report service (PR, summary, commit msg)
 │   ├── report.test.ts
 │   ├── workspace-yaml.ts  # WorkspaceYaml helpers
-│   ├── workspace-yaml.test.ts
-│   ├── workspaces.ts      # Workspaces service (workspaces-effect wrapper)
-│   └── workspaces.test.ts
+│   └── workspace-yaml.test.ts
 └── utils/
     ├── deps.ts            # parseConfigEntry, matchesPattern, parseSpecifier
     ├── fixtures.test.ts   # Shared test fixtures
@@ -66,16 +64,22 @@ src/
   helpers without their own Tag.
 - **Layer composition:** `src/layers/app.ts` exports `makeAppLayer(dryRun)`
   which wires all library layers (from `@savvy-web/github-action-effects`),
-  the `workspaces-effect` `PublishabilityDetector` override, and domain service
-  layers together. Token plumbing lives upstream in `program.ts` —
+  upstream `WorkspaceDiscoveryLive` + `WorkspaceRootLive` from
+  `workspaces-effect` (provided by `NodeContext.layer` from
+  `@effect/platform-node`), the `PublishabilityDetector` override, and domain
+  service layers together. Token plumbing lives upstream in `program.ts` —
   `GitHubApp.withToken()` runs before `makeAppLayer` and bridges the token to
   `GitHubClientLive` via `process.env.GITHUB_TOKEN`. `makeAppLayer` itself does
   not take a token parameter.
 - **No barrel re-exports:** Direct imports everywhere. No `index.ts` files.
 - **Tests co-located:** Each `.ts` file has a `.test.ts` sibling in the same directory.
 - **Removed dependencies:** `workspace-tools` is no longer used. All workspace
-  enumeration now goes through the `Workspaces` service (which wraps
-  `workspaces-effect`'s `getWorkspacePackagesSync`).
+  enumeration now goes through `WorkspaceDiscovery` from `workspaces-effect`
+  (consumed directly by `RegularDeps`, `PeerSync`, `Lockfile`, and
+  `Changesets`). The local `Workspaces` wrapper service was removed (issue
+  #38) once `workspaces-effect@0.5.1` exposed
+  `WorkspaceDiscovery.listPackages(cwd?)` and
+  `WorkspaceDiscovery.importerMap(cwd?)` accepting an optional cwd parameter.
 
 ## Data Flow
 
@@ -164,12 +168,14 @@ happens upstream) wires:
 - Library layers: `GitHubClientLive`, `GitBranchLive`, `GitCommitLive`,
   `CheckRunLive`, `PullRequestLive`, `NpmRegistryLive`, `GitHubGraphQLLive`,
   `CommandRunnerLive`, `DryRunLive(dryRun)`.
+- Workspace layers from `workspaces-effect`: `WorkspaceDiscoveryLive`,
+  `WorkspaceRootLive` (both provided with `NodeContext.layer` from
+  `@effect/platform-node` for FileSystem/Path).
 - `workspaces-effect` overrides: `PublishabilityDetectorAdaptiveLive` (which
   consults `ChangesetConfig.mode` per call and dispatches to silk / vanilla /
   noop detection).
-- Domain layers: `Workspaces`, `ChangesetConfig`, `BranchManagerLive`,
-  `PnpmUpgradeLive`, `ConfigDepsLive`, `RegularDepsLive`, `ChangesetsLive`,
-  `ReportLive`.
+- Domain layers: `ChangesetConfig`, `BranchManagerLive`, `PnpmUpgradeLive`,
+  `ConfigDepsLive`, `RegularDepsLive`, `ChangesetsLive`, `ReportLive`.
 
 ### Step 3: Create Check Run
 
@@ -205,13 +211,18 @@ happens upstream) wires:
 ### Step 8: Update Regular Dependencies
 
 - `RegularDeps.updateRegularDeps()` queries npm via `NpmRegistry` service.
-- Enumerates workspace `package.json` files via the `Workspaces` service
-  (which wraps `workspaces-effect`'s `getWorkspacePackagesSync`).
+- Enumerates workspace `package.json` files via `WorkspaceDiscovery` from
+  `workspaces-effect` (consumed directly — there is no longer a local
+  `Workspaces` wrapper service).
 - Matches patterns and updates specifiers.
 - Skips `catalog:` and `workspace:` specifiers.
-- Currently iterates only `devDependencies` (see `DEP_FIELDS` in
-  `regular-deps.ts`); `dependencies` are not touched directly here, but
-  catalog-resolved deps are still picked up via `compareCatalogs`.
+- Iterates `dependencies`, `devDependencies`, and `optionalDependencies`
+  (see `DEP_SECTIONS` in `regular-deps.ts`); `peerDependencies` are
+  intentionally excluded — peer ranges are managed by `syncPeers`.
+- Each match emits one `DependencyUpdateResult` per (path, dep, section)
+  with the precise `type` field (`dependency` / `devDependency` /
+  `optionalDependency`) so a dep declared in multiple sections of the
+  same package gets one record per section.
 
 ### Step 8b: Sync Peer Dependencies
 
@@ -269,14 +280,22 @@ happens upstream) wires:
 ### Step 14: Create Changesets (conditional)
 
 - Skipped if `changesets` input is `false` (default: `true`).
-- `Changesets.create(workspaceRoot, lockfileChanges, devUpdates, peerUpdates)`
-  has `workspaceRoot` as the **first** parameter.
+- `Changesets.create(workspaceRoot, lockfileChanges, regularUpdates,
+  peerUpdates)` has `workspaceRoot` as the **first** parameter.
+  `regularUpdates` (renamed from `devUpdates`) now carries
+  dependency/devDependency/optionalDependency updates from the multi-section
+  RegularDeps scan.
 - Gating rules:
   - Skips entirely if no `.changeset/` directory exists.
-  - For each workspace package, builds per-package `triggerRows` and `devRows`.
-    `dependency`, `optionalDependency`, and `peerDependency` lockfile changes
-    plus peer-sync updates are **triggers**; `devDependency` lockfile changes
-    and devDep updates are **informational rows only**.
+  - For each workspace package, builds per-package `triggerRows` and
+    `devRows`. `dependency`, `optionalDependency`, and `peerDependency`
+    lockfile changes are **triggers**; `devDependency` lockfile changes
+    are informational only.
+  - Peer-sync updates are always triggers. `regularUpdates` are routed
+    by `update.type`: `dependency`/`optionalDependency`/`peerDependency`
+    go to triggers, `devDependency` goes to informational rows only. The
+    routing uses the same `TRIGGER_TYPES` set as lockfile changes so a
+    `peerDependency` arriving via either path is treated identically.
   - A package gets a changeset only when it has at least one trigger row
     AND it is **versionable** (publishable per `PublishabilityDetector`, OR
     `versionPrivate` per `ChangesetConfig`).

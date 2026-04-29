@@ -3,8 +3,8 @@ status: current
 module: pnpm-config-dependency-action
 category: architecture
 created: 2026-02-06
-updated: 2026-04-27
-last-synced: 2026-04-27
+updated: 2026-04-28
+last-synced: 2026-04-28
 completeness: 95
 related: []
 dependencies: []
@@ -30,8 +30,9 @@ dependency ranges across workspace packages to keep them consistent.
 - Supports glob patterns for dependency matching
 - Runs custom commands after updates (linting, testing, building)
 - Integrates with Changesets for versioning, with publishability- and
-  `versionPrivate`-aware gating via the `Workspaces`, `ChangesetConfig`, and
-  `Publishability` services (built on `workspaces-effect`)
+  `versionPrivate`-aware gating via the `WorkspaceDiscovery` service (from
+  `workspaces-effect`), `ChangesetConfig`, and `Publishability` Layer
+  overrides
 - Reconciles the lockfile via `pnpm install --frozen-lockfile=false --fix-lockfile`
 - Uses GitHub App authentication via `GitHubApp.withToken()` for secure, short-lived tokens
 - Manages dedicated update branch with delete-and-recreate strategy

@@ -100,8 +100,9 @@ config-dependencies: |
   @savvy-web/pnpm-plugin-silk
 ```
 
-**Dev dependencies** (`dependencies` input) are packages in your workspace
-`package.json` `devDependencies` fields. Glob patterns are supported:
+**Workspace dependencies** (`dependencies` input) are packages in your
+workspace `package.json` files -- matched across `dependencies`,
+`devDependencies`, and `optionalDependencies`. Glob patterns are supported:
 
 ```yaml
 dependencies: |
@@ -111,7 +112,7 @@ dependencies: |
 ```
 
 **Peer dependency syncing** (`peer-lock` and `peer-minor` inputs) keeps peer
-ranges in sync with dev dependencies:
+ranges in sync with workspace dependencies:
 
 ```yaml
 peer-lock: |

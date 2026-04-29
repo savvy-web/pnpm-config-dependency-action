@@ -1,26 +1,31 @@
 /**
- * Integration tests for the Workspaces domain service against real fixtures.
+ * Integration tests for workspaces-effect's WorkspaceDiscovery against real fixtures.
  *
- * Verifies that the service (which wraps workspaces-effect's
- * getWorkspacePackagesSync) correctly returns the root and all workspace
+ * Verifies the upstream service correctly returns the root and all workspace
  * leaf packages for both single-leaf and multi-leaf fixtures.
  */
 
-import { Effect } from "effect";
+import { NodeContext } from "@effect/platform-node";
+import { Effect, Layer } from "effect";
 import { describe, expect, it } from "vitest";
-import { Workspaces, WorkspacesLive } from "../../src/services/workspaces.js";
+import { WorkspaceDiscovery, WorkspaceDiscoveryLive, WorkspaceRootLive } from "workspaces-effect";
 import { loadFixture } from "./utils/load-fixture.js";
 
-const runWith = <A, E>(eff: Effect.Effect<A, E, Workspaces>): Promise<A> =>
-	Effect.runPromise(Effect.provide(eff, WorkspacesLive));
+const platform = NodeContext.layer;
+const discoveryLayer = WorkspaceDiscoveryLive.pipe(
+	Layer.provide(Layer.merge(WorkspaceRootLive.pipe(Layer.provide(platform)), platform)),
+);
 
-describe("Workspaces integration", () => {
+const runWith = <A, E>(eff: Effect.Effect<A, E, WorkspaceDiscovery>): Promise<A> =>
+	Effect.runPromise(Effect.provide(eff, discoveryLayer));
+
+describe("WorkspaceDiscovery integration", () => {
 	it("listPackages returns the root and leaf for a single-leaf private root fixture", async () => {
 		const fixture = loadFixture("single-package-private-root");
 
 		const packages = await runWith(
 			Effect.gen(function* () {
-				const ws = yield* Workspaces;
+				const ws = yield* WorkspaceDiscovery;
 				return yield* ws.listPackages(fixture.path);
 			}),
 		);
@@ -34,7 +39,7 @@ describe("Workspaces integration", () => {
 
 		const map = await runWith(
 			Effect.gen(function* () {
-				const ws = yield* Workspaces;
+				const ws = yield* WorkspaceDiscovery;
 				return yield* ws.importerMap(fixture.path);
 			}),
 		);
@@ -48,7 +53,7 @@ describe("Workspaces integration", () => {
 
 		const packages = await runWith(
 			Effect.gen(function* () {
-				const ws = yield* Workspaces;
+				const ws = yield* WorkspaceDiscovery;
 				return yield* ws.listPackages(fixture.path);
 			}),
 		);

@@ -9,9 +9,9 @@
 import { readWantedLockfile } from "@pnpm/lockfile.fs";
 import type { CatalogSnapshots, LockfileObject, ResolvedCatalogEntry } from "@pnpm/lockfile.types";
 import { Context, Effect, Layer } from "effect";
+import { WorkspaceDiscovery } from "workspaces-effect";
 import { LockfileError } from "../errors/errors.js";
 import type { LockfileChange } from "../schemas/domain.js";
-import { Workspaces } from "./workspaces.js";
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Service Interface
@@ -25,7 +25,7 @@ export class Lockfile extends Context.Tag("Lockfile")<
 			before: LockfileObject | null,
 			after: LockfileObject | null,
 			workspaceRoot?: string,
-		) => Effect.Effect<ReadonlyArray<LockfileChange>, LockfileError, Workspaces>;
+		) => Effect.Effect<ReadonlyArray<LockfileChange>, LockfileError, WorkspaceDiscovery>;
 	}
 >() {}
 
@@ -58,7 +58,7 @@ export const compareLockfiles = (
 	before: LockfileObject | null,
 	after: LockfileObject | null,
 	workspaceRoot: string = process.cwd(),
-): Effect.Effect<ReadonlyArray<LockfileChange>, LockfileError, Workspaces> =>
+): Effect.Effect<ReadonlyArray<LockfileChange>, LockfileError, WorkspaceDiscovery> =>
 	compareLockfilesImpl(before, after, workspaceRoot);
 
 /**
@@ -112,18 +112,17 @@ interface DependencySnapshot {
 
 /**
  * Build a map from importer path (relative to workspace root, "." for root)
- * to package name, via the Workspaces service.
+ * to package name, via WorkspaceDiscovery.
  *
- * Uses the Workspaces.importerMap method which wraps getWorkspacePackagesSync,
- * so importer "." resolves to the root's actual name rather than falling
+ * Importer "." resolves to the root's actual name rather than falling
  * through to the bare importer id.
  */
 const buildImporterToPackageMap = (
 	workspaceRoot: string,
-): Effect.Effect<Map<string, string>, LockfileError, Workspaces> =>
+): Effect.Effect<Map<string, string>, LockfileError, WorkspaceDiscovery> =>
 	Effect.gen(function* () {
-		const ws = yield* Workspaces;
-		const importerMap = yield* ws.importerMap(workspaceRoot).pipe(
+		const discovery = yield* WorkspaceDiscovery;
+		const importerMap = yield* discovery.importerMap(workspaceRoot).pipe(
 			Effect.catchAll((e) =>
 				Effect.gen(function* () {
 					yield* Effect.logWarning(`Failed to read workspace importer map: ${String(e)}`);
@@ -146,7 +145,7 @@ const compareLockfilesImpl = (
 	before: LockfileObject | null,
 	after: LockfileObject | null,
 	workspaceRoot: string,
-): Effect.Effect<ReadonlyArray<LockfileChange>, LockfileError, Workspaces> =>
+): Effect.Effect<ReadonlyArray<LockfileChange>, LockfileError, WorkspaceDiscovery> =>
 	Effect.gen(function* () {
 		if (!before || !after) {
 			yield* Effect.logWarning("Cannot compare lockfiles: one or both are null");

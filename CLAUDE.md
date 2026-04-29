@@ -85,10 +85,11 @@ pnpm vitest run --testNamePattern="parsePnpmVersion"
   `PullRequest`, `GithubMarkdown`. `GitHubAppLive` requires
   `OctokitAuthAppLive`; `main.ts` wires that pair before calling `Action.run`.
 - **Domain services**: `BranchManager`, `PnpmUpgrade`, `ConfigDeps`,
-  `RegularDeps`, `Report`, `Lockfile`, `Changesets`, `Workspaces`,
-  `ChangesetConfig`. `Publishability` provides Layer overrides for
-  `workspaces-effect`'s `PublishabilityDetector` Tag. Stateless helpers:
-  `WorkspaceYaml`, `PeerSync`.
+  `RegularDeps`, `Report`, `Lockfile`, `Changesets`, `ChangesetConfig`.
+  Workspace enumeration uses `WorkspaceDiscovery` from `workspaces-effect`
+  directly (no local `Workspaces` Tag). `Publishability` provides Layer
+  overrides for `workspaces-effect`'s `PublishabilityDetector` Tag.
+  Stateless helpers: `WorkspaceYaml`, `PeerSync`.
 - **Errors**: `Schema.TaggedError` (`PnpmError`, `GitHubApiError`, `FileSystemError`)
 - **Entry**: `Action.run(program, { layer: AppLayer })` from `main.ts`;
   inputs parsed via Effect `Config.*` API inside `program.ts`.

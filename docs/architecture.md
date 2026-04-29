@@ -41,7 +41,7 @@ The core orchestration logic. Executes 14 steps sequentially:
 3. Capture lockfile state (before)
 4. Upgrade pnpm (if `update-pnpm` is enabled)
 5. Update config dependencies
-6. Update dev dependencies
+6. Update workspace dependencies
 6b. Sync peer dependency ranges
 7. Reconcile lockfile and install
    (`pnpm install --frozen-lockfile=false --fix-lockfile`)

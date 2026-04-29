@@ -8,17 +8,17 @@ import { join } from "node:path";
 import { Effect, Layer } from "effect";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { WorkspacePackage } from "workspaces-effect";
-import { PublishTarget, PublishabilityDetector } from "workspaces-effect";
+import { PublishTarget, PublishabilityDetector, WorkspaceDiscovery } from "workspaces-effect";
 
 import type { DependencyUpdateResult, LockfileChange } from "../schemas/domain.js";
 import { ChangesetConfig } from "./changeset-config.js";
 import { Changesets, ChangesetsLive } from "./changesets.js";
-import { Workspaces } from "./workspaces.js";
 
 const mockWorkspaces = (packages: ReadonlyArray<{ name: string; path: string }>) =>
-	Layer.succeed(Workspaces, {
+	Layer.succeed(WorkspaceDiscovery, {
 		listPackages: () => Effect.succeed(packages as unknown as ReadonlyArray<WorkspacePackage>),
-		importerMap: () => Effect.die("not used"),
+		getPackage: () => Effect.die("getPackage not used"),
+		importerMap: () => Effect.die("importerMap not used"),
 	});
 
 /**
@@ -126,6 +126,35 @@ describe("Changesets — versionable + trigger gating", () => {
 		);
 		expect(result).toEqual([]);
 		expect(readChangesets(tmpDir)).toHaveLength(0);
+	});
+
+	it("writes a changeset when a regularUpdate has type=dependency", async () => {
+		setupChangesetDir(tmpDir);
+		writePkgJson(tmpDir, { name: "@x/a", version: "1.0.0" });
+		const result = await runCreate(
+			[{ name: "@x/a", path: tmpDir }],
+			new Set(["@x/a"]),
+			[],
+			[{ dependency: "lodash", from: "^4.17.20", to: "^4.17.21", type: "dependency", package: "@x/a" }],
+		);
+		expect(result).toHaveLength(1);
+		const files = readChangesets(tmpDir);
+		expect(files[0].content).toContain("| lodash |");
+		expect(files[0].content).toContain("| dependency |");
+	});
+
+	it("writes a changeset when a regularUpdate has type=optionalDependency", async () => {
+		setupChangesetDir(tmpDir);
+		writePkgJson(tmpDir, { name: "@x/a", version: "1.0.0" });
+		const result = await runCreate(
+			[{ name: "@x/a", path: tmpDir }],
+			new Set(["@x/a"]),
+			[],
+			[{ dependency: "fsevents", from: "^2.3.2", to: "^2.3.3", type: "optionalDependency", package: "@x/a" }],
+		);
+		expect(result).toHaveLength(1);
+		const files = readChangesets(tmpDir);
+		expect(files[0].content).toContain("| optionalDependency |");
 	});
 
 	it("does NOT write a changeset for non-versionable package even with trigger", async () => {
