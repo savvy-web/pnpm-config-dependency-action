@@ -13,7 +13,9 @@
  *     single current table on re-fire (the dedup the whole adoption is for);
  *  3. a catalog-only bump (manifest specifier unchanged) still surfaces a row
  *     with concrete versions (upstream catalog-aware diffing);
- *  4. a non-versionable package is gated out.
+ *  4. a non-versionable package is gated out;
+ *  5. markdown-significant characters in a cell survive the table writer
+ *     verbatim — the regression canary for the `\~` corruption.
  *
  * The exhaustive gating matrix (silk vs vanilla mode, publish targets, ignore,
  * versionPrivate) lives in `@savvy-web/silk-effects`' own DepsRegen tests; here
@@ -182,6 +184,47 @@ describe("changeset emission integration (DepsRegenDefault)", () => {
 		expect(files[0].content).toContain("effect");
 		expect(files[0].content).toContain("3.0.0");
 		expect(files[0].content).toContain("3.2.0");
+	});
+
+	// Regression canary. The emitted table used to run through a bare
+	// remark-gfm/remark-stringify pipeline, which escapes anything that could open
+	// a markdown construct: `~` (GFM strikethrough) became `\~` and `_` (emphasis)
+	// became `\_`. That shipped — spencerbeggs/runtime-resolver's changeset at
+	// commit 5110424 carried `\~0.2.0` / `\~0.2.1` and had to be hand-fixed. The
+	// existing scenarios above all use plain `N.N.N` specifiers and stayed green
+	// throughout, which is exactly why this reached production; the assertion that
+	// matters is the absence of a backslash, not the presence of the versions.
+	it("tilde specifiers and underscored names survive the table writer unescaped", async () => {
+		const deps = (semver: string, underscored: string) => ({
+			"@effected/semver": semver,
+			some_pkg: underscored,
+		});
+		setupRepo(root, {
+			workspaceYaml: WS_LEAF,
+			leaf: {
+				name: "@scope/leaf",
+				version: "0.1.0",
+				private: false,
+				dependencies: deps("~0.2.0", "1.0.0"),
+			},
+		});
+		writeJson(join(root, "packages", "leaf", "package.json"), {
+			name: "@scope/leaf",
+			version: "0.1.0",
+			private: false,
+			dependencies: deps("~0.2.1", "2.0.0"),
+		});
+
+		const result = await run(root);
+		expect(result).toHaveLength(1);
+		const [{ content }] = emitted(root);
+
+		// The corruption, stated directly: no cell may carry a backslash escape.
+		expect(content).not.toContain("\\");
+		// ...and the values round-trip verbatim.
+		expect(content).toContain("~0.2.0");
+		expect(content).toContain("~0.2.1");
+		expect(content).toContain("some_pkg");
 	});
 
 	it("non-versionable package (private, no publish target) is gated out", async () => {

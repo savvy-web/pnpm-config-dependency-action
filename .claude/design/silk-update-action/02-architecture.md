@@ -3,8 +3,8 @@ status: current
 module: silk-update-action
 category: architecture
 created: 2026-02-20
-updated: 2026-07-21
-last-synced: 2026-07-21
+updated: 2026-07-24
+last-synced: 2026-07-24
 completeness: 95
 related:
   - ./_index.md
@@ -451,6 +451,8 @@ const appLayer = makeAppLayer(dryRun, { runtimeLive });
 - The per-run `changes` / `regularUpdates` / `peerUpdates` are **no longer
   inputs** to the changeset step — DepsRegen derives content from the git diff.
   They still drive the PR / commit / summary reporting via `allUpdates`.
+- DepsRegen resolves each side's specifiers through `@effected/workspaces`' importer-scoped `WorkspaceStateSnapshot.resolveIn`, so a `catalog:` specifier backed only by a config-dependency pnpmfile hook — present in neither `pnpm-workspace.yaml` nor the lockfile's `catalogs:` block — still resolves to a concrete version on both sides and a real movement emits a row rather than comparing two identical raw `catalog:<name>` strings.
+- Table cells are written literally (only `|` and `\` are escaped), so `~`-prefixed specifiers and underscored package names round-trip verbatim into the changeset.
 - **Gating lives upstream in DepsRegen** ("versionable-minus-ignored":
   publishable OR `privatePackages.version`, minus the changeset `ignore` list).
   The action no longer carries its own ignore gate, versionable cascade or

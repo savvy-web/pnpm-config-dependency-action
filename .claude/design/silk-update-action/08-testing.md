@@ -3,8 +3,8 @@ status: current
 module: silk-update-action
 category: architecture
 created: 2026-02-20
-updated: 2026-07-21
-last-synced: 2026-07-21
+updated: 2026-07-24
+last-synced: 2026-07-24
 completeness: 95
 related:
   - ./_index.md
@@ -117,21 +117,18 @@ mocks `@actions/core`.
 
 ## Coverage
 
-**What the gate actually enforces.** `vitest.config.ts` sets **aggregate**
-(whole-run) minimums of `{ lines: 80, functions: 80, branches: 75, statements:
-80 }` — the same numbers `AgentPlugin.COVERAGE_LEVELS.strict.thresholds` used to
-resolve to. It is **not** a per-file gate and not 100%. `exclude: []` — nothing is
-excluded (the former `src/services/pnpm-upgrade.ts` exclusion is gone, along
-with that module).
+**What the gate actually enforces.** `vitest.config.ts` takes its coverage
+configuration from `AgentPlugin.COVERAGE_LEVELS.strict` — `coverageTargets`
+passed to the plugin, `.thresholds` on `test.coverage`. Those are **aggregate**
+(whole-run) minimums: **not** a per-file gate and not 100%. `exclude: []` —
+nothing is excluded (the former `src/services/pnpm-upgrade.ts` exclusion is
+gone, along with that module).
 
-**Temporary plain config (Effect v4 migration).** The config **no longer loads
-`@vitest-agent/plugin`**: the latest `@vitest-agent/plugin@1.1.9` is an Effect
-v3 package (importing `AgentPlugin` transitively loads a v3-only
-`SqliteClient` that calls the removed `Context.GenericTag` at config-eval and
-crashes the whole run — v3 and v4 cannot coexist). The migration swaps in a
-plain `defineConfig` that keeps the identical aggregate coverage gate; restore
-the AgentPlugin config once a v4-line `@vitest-agent/plugin` ships. (The package
-is still listed in `devDependencies` pending that release.)
+**Plugin config.** The config is an async factory that loads the v4-line
+`@vitest-agent/plugin`: `AgentPlugin.discover()` supplies `projects` and `tags`,
+and `AgentPlugin({...})` is registered in `plugins` alongside the console
+routing. (The Effect-v4 migration briefly dropped the plugin because the
+then-current release was an Effect-v3 package; the v4-line release restored it.)
 
 **The trap.** Because the gate is aggregate, an entire module can have zero test
 execution while the suite stays green — the rest of the codebase carries the
@@ -161,18 +158,8 @@ const discoveryLayer = WorkspaceDiscovery.layer().pipe(
 - `lockfile-compare.int.test.ts` — Exercises `compareLockfiles` against
   paired `pnpm-lock.before.yaml` / `pnpm-lock.after.yaml` fixtures
   covering catalog and importer change shapes.
-- `changeset-emission.int.test.ts` — Drives the action's `Changesets` service
-  through the **real** silk `Changesets.DepsRegenDefault` layer (the same one
-  `makeAppLayer` wires) against a throwaway git repo. Because DepsRegen reads
-  git history (`PointInTimeWorkspace.at`) and the working tree, each scenario
-  commits a base state on `main`, mutates the worktree, then regenerates against
-  `base = "main"`. It pins, from the consumer side: a publishable package emits
-  a changeset through the default layer; accumulated pure-dependency changesets
-  consolidate to one current table on re-fire; a catalog-only bump still
-  surfaces a row with concrete versions; and a non-versionable package is gated
-  out. The exhaustive gating matrix (silk vs vanilla mode, publish targets,
-  ignore, `versionPrivate`) lives in `@savvy-web/silk-effects` — this suite is
-  the upstream-drift canary for the wiring, consolidation and catalog-awareness.
+- `changeset-emission.int.test.ts` — Drives the action's `Changesets` service through the **real** silk `Changesets.DepsRegenDefault` layer (the same one `makeAppLayer` wires) against a throwaway git repo. Because DepsRegen reads git history (`PointInTimeWorkspace.at`) and the working tree, each scenario commits a base state on `main`, mutates the worktree, then regenerates against `base = "main"`. It pins, from the consumer side: a publishable package emits a changeset through the default layer; accumulated pure-dependency changesets consolidate to one current table on re-fire; a catalog-only bump still surfaces a row with concrete versions; a non-versionable package is gated out; and markdown-significant characters in a cell survive the table writer verbatim. The exhaustive gating matrix (silk vs vanilla mode, publish targets, ignore, `versionPrivate`) lives in `@savvy-web/silk-effects` — this suite is the upstream-drift canary for the wiring, consolidation and catalog-awareness.
+  - The escaping scenario earns a note of its own: it uses a `~`-prefixed specifier and an underscored package name, and its load-bearing assertion is that no cell contains a backslash. The other four scenarios all use plain `N.N.N` specifiers and unremarkable names, so they stayed green while a `~0.2.0` specifier was being written into changesets as `\~0.2.0`. It is a concrete instance of the coverage trap above: a path whose inputs cannot distinguish correct from corrupt output is unexercised in the only sense that matters, however green the suite is.
 - `runtime-upgrade.int.test.ts` — Runs `RuntimeUpgrade.upgrade` against the
   real `*Resolver.layerOffline` layers from `@effected/runtimes` (no network)
   over a temp `package.json`. Acts as an upstream-drift canary for the bundled snapshot:

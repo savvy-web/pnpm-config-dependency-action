@@ -43,10 +43,10 @@
 		"@effected/npm": "^0.3.1",
 		"@effected/runtimes": "^0.1.5",
 		"@effected/semver": "^0.2.1",
-		"@effected/workspaces": "^0.6.2",
+		"@effected/workspaces": "^0.7.0",
 		"@effected/yaml": "^0.5.1",
 		"@savvy-web/github-action-effects": "^3.0.5",
-		"@savvy-web/silk-effects": "^4.2.4",
+		"@savvy-web/silk-effects": "^4.2.5",
 		"effect": "catalog:effect"
 	},
 	"devDependencies": {
