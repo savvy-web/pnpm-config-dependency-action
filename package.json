@@ -39,20 +39,20 @@
 	},
 	"dependencies": {
 		"@effect/platform-node": "catalog:effect",
-		"@effected/lockfiles": "^0.1.10",
-		"@effected/npm": "^0.3.1",
-		"@effected/runtimes": "^0.1.5",
+		"@effected/lockfiles": "^0.2.0",
+		"@effected/npm": "^0.4.0",
+		"@effected/runtimes": "^0.2.0",
 		"@effected/semver": "^0.2.1",
-		"@effected/workspaces": "^0.7.0",
-		"@effected/yaml": "^0.5.1",
-		"@savvy-web/github-action-effects": "^3.0.5",
-		"@savvy-web/silk-effects": "^4.2.5",
+		"@effected/workspaces": "^0.8.0",
+		"@effected/yaml": "^0.6.0",
+		"@savvy-web/github-action-effects": "^3.1.0",
+		"@savvy-web/silk-effects": "^4.2.6",
 		"effect": "catalog:effect"
 	},
 	"devDependencies": {
-		"@savvy-web/github-action-builder": "^2.0.5",
-		"@savvy-web/silk": "^3.2.1",
-		"@vitest-agent/plugin": "^2.0.7"
+		"@savvy-web/github-action-builder": "^2.0.6",
+		"@savvy-web/silk": "^3.2.3",
+		"@vitest-agent/plugin": "^2.0.9"
 	},
 	"packageManager": "pnpm@11.17.0+sha512.cca3cea332ad254bb84145f966d19f4879615210346fc92c79a047f23a0d7b3cca3c3792f0076ba1f1831d277efbcf0a9119b31a9a60eca7fb3d6231f331ef72",
 	"engines": {
