@@ -1,19 +1,20 @@
-import type { PullRequestError } from "@savvy-web/github-action-effects";
-import { PullRequestTest } from "@savvy-web/github-action-effects";
+import { GitHubError, PullRequest, Repo, RepoRef } from "@effected/github";
 import { Cause, Effect, Layer, References } from "effect";
 import { describe, expect, it } from "vitest";
 import type { CatalogDelta } from "../schemas/domain.js";
-import { pnpmUpgradeUpdate } from "../utils/fixtures.test.js";
+import type { PullRequestTestState } from "../utils/fixtures.test.js";
+import { emptyPullRequestState, pnpmUpgradeUpdate, pullRequestTestLayer } from "../utils/fixtures.test.js";
 import { Report, ReportLive } from "./report.js";
+
+/** Every resource method resolves `Repo` per call, so tests provide one. */
+const repoLayer = Repo.layer(RepoRef.make({ owner: "test", repo: "repo" }));
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Test Helpers
 // ══════════════════════════════════════════════════════════════════════════════
 
-const makeReportLayer = (state: ReturnType<typeof PullRequestTest.empty>) => {
-	const prLayer = PullRequestTest.layer(state);
-	return ReportLive.pipe(Layer.provide(prLayer));
-};
+const makeReportLayer = (state: PullRequestTestState) =>
+	Layer.merge(ReportLive.pipe(Layer.provide(pullRequestTestLayer(state))), repoLayer);
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Tests
@@ -21,7 +22,7 @@ const makeReportLayer = (state: ReturnType<typeof PullRequestTest.empty>) => {
 
 describe("createOrUpdatePR", () => {
 	it("creates new PR when none exists", async () => {
-		const state = PullRequestTest.empty();
+		const state = emptyPullRequestState();
 		state.nextNumber = 42;
 		const layer = makeReportLayer(state);
 
@@ -37,7 +38,7 @@ describe("createOrUpdatePR", () => {
 	});
 
 	it("titles the PR from the run contents", async () => {
-		const state = PullRequestTest.empty();
+		const state = emptyPullRequestState();
 		state.nextNumber = 7;
 		const layer = makeReportLayer(state);
 
@@ -58,7 +59,7 @@ describe("createOrUpdatePR", () => {
 	});
 
 	it("refreshes the title of a reused PR to match the new contents", async () => {
-		const state = PullRequestTest.empty();
+		const state = emptyPullRequestState();
 		state.prs.push({
 			number: 10,
 			url: "https://github.com/test/pull/10",
@@ -69,9 +70,6 @@ describe("createOrUpdatePR", () => {
 			base: "main",
 			draft: false,
 			merged: false,
-			labels: [],
-			reviewers: [],
-			teamReviewers: [],
 			autoMerge: undefined,
 			body: "old body",
 		});
@@ -94,7 +92,7 @@ describe("createOrUpdatePR", () => {
 	});
 
 	it("updates existing PR when found", async () => {
-		const state = PullRequestTest.empty();
+		const state = emptyPullRequestState();
 		state.prs.push({
 			number: 10,
 			url: "https://github.com/test/pull/10",
@@ -105,9 +103,6 @@ describe("createOrUpdatePR", () => {
 			base: "main",
 			draft: false,
 			merged: false,
-			labels: [],
-			reviewers: [],
-			teamReviewers: [],
 			autoMerge: undefined,
 			body: "old body",
 		});
@@ -125,7 +120,7 @@ describe("createOrUpdatePR", () => {
 	});
 
 	it("returns nodeId from created PR", async () => {
-		const state = PullRequestTest.empty();
+		const state = emptyPullRequestState();
 		state.nextNumber = 42;
 		const layer = makeReportLayer(state);
 
@@ -141,7 +136,7 @@ describe("createOrUpdatePR", () => {
 	});
 
 	it("returns nodeId from existing PR", async () => {
-		const state = PullRequestTest.empty();
+		const state = emptyPullRequestState();
 		state.prs.push({
 			number: 10,
 			url: "https://github.com/test/pull/10",
@@ -152,9 +147,6 @@ describe("createOrUpdatePR", () => {
 			base: "main",
 			draft: false,
 			merged: false,
-			labels: [],
-			reviewers: [],
-			teamReviewers: [],
 			autoMerge: undefined,
 			body: "old body",
 		});
@@ -171,7 +163,7 @@ describe("createOrUpdatePR", () => {
 	});
 
 	it("passes autoMerge to getOrCreate", async () => {
-		const state = PullRequestTest.empty();
+		const state = emptyPullRequestState();
 		state.nextNumber = 50;
 		const layer = makeReportLayer(state);
 
@@ -189,7 +181,7 @@ describe("createOrUpdatePR", () => {
 	});
 
 	it("logs created PR number when successful", async () => {
-		const state = PullRequestTest.empty();
+		const state = emptyPullRequestState();
 		state.nextNumber = 99;
 		const layer = makeReportLayer(state);
 
@@ -204,34 +196,20 @@ describe("createOrUpdatePR", () => {
 		expect(result.created).toBe(true);
 	});
 
-	it("returns PullRequestError in error channel on failure", async () => {
-		// Force failure by making getOrCreate throw - use a layer that fails
-		const failingPrLayer = Layer.succeed((await import("@savvy-web/github-action-effects")).PullRequest, {
-			get: () => Effect.fail({ _tag: "PullRequestError", operation: "get", reason: "fail" } as PullRequestError),
-			list: () => Effect.fail({ _tag: "PullRequestError", operation: "list", reason: "fail" } as PullRequestError),
-			create: () => Effect.fail({ _tag: "PullRequestError", operation: "create", reason: "fail" } as PullRequestError),
-			update: () => Effect.fail({ _tag: "PullRequestError", operation: "update", reason: "fail" } as PullRequestError),
-			getOrCreate: () =>
-				Effect.fail({
-					_tag: "PullRequestError",
-					operation: "getOrCreate",
-					reason: "API rate limit exceeded",
-				} as PullRequestError),
-			merge: () => Effect.fail({ _tag: "PullRequestError", operation: "merge", reason: "fail" } as PullRequestError),
-			addLabels: () =>
-				Effect.fail({
-					_tag: "PullRequestError",
-					operation: "addLabels",
-					reason: "fail",
-				} as PullRequestError),
-			requestReviewers: () =>
-				Effect.fail({
-					_tag: "PullRequestError",
-					operation: "requestReviewers",
-					reason: "fail",
-				} as PullRequestError),
-		} as unknown as typeof import("@savvy-web/github-action-effects")["PullRequest"]["Service"]);
-		const layer = ReportLive.pipe(Layer.provide(failingPrLayer));
+	it("returns GitHubError in error channel on failure", async () => {
+		// Only `upsert` needs stubbing: every other member of the double dies
+		// naming itself, which proves createOrUpdatePR touches nothing else.
+		const failingPrLayer = PullRequest.layerTest({
+			upsert: () =>
+				Effect.fail(
+					new GitHubError({
+						kind: "rateLimited",
+						operation: "pulls.upsert",
+						reason: "API rate limit exceeded",
+					}),
+				),
+		});
+		const layer = Layer.merge(ReportLive.pipe(Layer.provide(failingPrLayer)), repoLayer);
 
 		const exit = await Effect.runPromiseExit(
 			Effect.gen(function* () {
@@ -241,19 +219,21 @@ describe("createOrUpdatePR", () => {
 		);
 
 		expect(exit._tag).toBe("Failure");
-		// The error should be a PullRequestError, not a sentinel value
+		// The error propagates as a GitHubError, not a sentinel value. `_tag` is
+		// "GitHubError" for every failure now, so `kind` is what discriminates.
 		if (exit._tag === "Failure") {
 			const failure = Cause.findErrorOption(exit.cause);
 			expect(failure._tag).toBe("Some");
 			if (failure._tag === "Some") {
-				expect(failure.value._tag).toBe("PullRequestError");
-				expect(failure.value.operation).toBe("getOrCreate");
-				expect(failure.value.reason).toBe("API rate limit exceeded");
+				const error = failure.value as GitHubError;
+				expect(error._tag).toBe("GitHubError");
+				expect(error.kind).toBe("rateLimited");
+				expect(error.operation).toBe("pulls.upsert");
 			}
 		}
 	});
 	it("passes base to getOrCreate", async () => {
-		const state = PullRequestTest.empty();
+		const state = emptyPullRequestState();
 		state.nextNumber = 7;
 		const layer = makeReportLayer(state);
 
@@ -268,7 +248,7 @@ describe("createOrUpdatePR", () => {
 	});
 
 	it("passes deltas into the rendered PR body", async () => {
-		const state = PullRequestTest.empty();
+		const state = emptyPullRequestState();
 		state.nextNumber = 11;
 		const layer = makeReportLayer(state);
 
@@ -290,7 +270,7 @@ describe("createOrUpdatePR", () => {
 
 describe("generateCommitMessage", () => {
 	it("uses the varied subject and lists each update in the body", async () => {
-		const state = PullRequestTest.empty();
+		const state = emptyPullRequestState();
 		const layer = makeReportLayer(state);
 
 		const msg = await Effect.runPromise(
@@ -312,7 +292,7 @@ describe("generateCommitMessage", () => {
 	});
 
 	it("falls back to a generic subject when there are no updates", async () => {
-		const state = PullRequestTest.empty();
+		const state = emptyPullRequestState();
 		const layer = makeReportLayer(state);
 
 		const msg = await Effect.runPromise(
@@ -328,7 +308,7 @@ describe("generateCommitMessage", () => {
 
 describe("generatePRBody", () => {
 	it("includes pnpm upgrade in root workspace table", async () => {
-		const state = PullRequestTest.empty();
+		const state = emptyPullRequestState();
 		const layer = makeReportLayer(state);
 
 		const updates = [
@@ -351,7 +331,7 @@ describe("generatePRBody", () => {
 	});
 
 	it("includes only pnpm upgrade when no other updates", async () => {
-		const state = PullRequestTest.empty();
+		const state = emptyPullRequestState();
 		const layer = makeReportLayer(state);
 
 		const body = await Effect.runPromise(
@@ -366,7 +346,7 @@ describe("generatePRBody", () => {
 	});
 
 	it("renders a Catalog Changes section grouped by catalog, excluding kept deltas", async () => {
-		const state = PullRequestTest.empty();
+		const state = emptyPullRequestState();
 		const layer = makeReportLayer(state);
 
 		const deltas: ReadonlyArray<CatalogDelta> = [
@@ -397,7 +377,7 @@ describe("generatePRBody", () => {
 	});
 
 	it("omits the Catalog Changes section entirely when every delta is kept", async () => {
-		const state = PullRequestTest.empty();
+		const state = emptyPullRequestState();
 		const layer = makeReportLayer(state);
 
 		const deltas: ReadonlyArray<CatalogDelta> = [
@@ -415,7 +395,7 @@ describe("generatePRBody", () => {
 	});
 
 	it("produces byte-for-byte the same body whether deltas is omitted or an empty array", async () => {
-		const state = PullRequestTest.empty();
+		const state = emptyPullRequestState();
 		const layer = makeReportLayer(state);
 
 		const updates = [pnpmUpgradeUpdate];
@@ -433,7 +413,7 @@ describe("generatePRBody", () => {
 
 describe("generateSummary", () => {
 	it("renders a Catalog Changes section grouped by catalog, excluding kept deltas", async () => {
-		const state = PullRequestTest.empty();
+		const state = emptyPullRequestState();
 		const layer = makeReportLayer(state);
 
 		const deltas: ReadonlyArray<CatalogDelta> = [
@@ -455,7 +435,7 @@ describe("generateSummary", () => {
 	});
 
 	it("produces byte-for-byte the same summary whether deltas is omitted or an empty array", async () => {
-		const state = PullRequestTest.empty();
+		const state = emptyPullRequestState();
 		const layer = makeReportLayer(state);
 
 		const updates = [pnpmUpgradeUpdate];
@@ -474,7 +454,7 @@ describe("generateSummary", () => {
 	});
 
 	it("threads deltas into the dry-run PR body preview", async () => {
-		const state = PullRequestTest.empty();
+		const state = emptyPullRequestState();
 		const layer = makeReportLayer(state);
 
 		const deltas: ReadonlyArray<CatalogDelta> = [

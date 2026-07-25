@@ -1,4 +1,3 @@
-import { PullRequestTest } from "@savvy-web/github-action-effects";
 import { Effect, Layer } from "effect";
 import { describe, expect, it } from "vitest";
 import { Report, ReportLive } from "./services/report.js";
@@ -6,9 +5,11 @@ import {
 	configUpdate,
 	configUpdateNew,
 	configUpdates,
+	emptyPullRequestState,
 	mixedUpdates,
 	packageChangeset,
 	pullRequest,
+	pullRequestTestLayer,
 	regularUpdate,
 	regularUpdateGlob,
 	regularUpdates,
@@ -20,8 +21,8 @@ import { cleanVersion, npmUrl } from "./utils/markdown.js";
  * Helper to run a Report service method.
  */
 const withReport = <A>(fn: (report: Effect.Success<typeof Report>) => A): Promise<A> => {
-	const state = PullRequestTest.empty();
-	const layer = ReportLive.pipe(Layer.provide(PullRequestTest.layer(state)));
+	const state = emptyPullRequestState();
+	const layer = ReportLive.pipe(Layer.provide(pullRequestTestLayer(state)));
 	return Effect.runPromise(
 		Effect.gen(function* () {
 			const report = yield* Report;

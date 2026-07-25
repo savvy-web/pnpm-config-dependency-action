@@ -1,62 +1,63 @@
 /**
  * Fixture tests for the post-action Effect program.
  *
- * Drives `post` against the in-memory test layers. The provisioned-token
- * scenarios run `GitHubToken.provision` first against a shared `ActionState`
- * to populate the token envelope `dispose` reads back.
+ * `post` revokes the installation token `pre` provisioned, reading it back out
+ * of the shared `ActionState`. Provisioning here goes through the real
+ * `GitHubToken.provision` so the envelope `post` reads is the one the real
+ * lifecycle writes, not a hand-placed fixture.
  */
 
-import { GitHubToken } from "@savvy-web/github-action-effects";
-import type {
-	ActionOutputs,
-	ActionState,
-	ActionStateTestState,
-	GitHubApp,
-	GitHubAppTestState,
-} from "@savvy-web/github-action-effects/testing";
-import { ActionOutputsTest, ActionStateTest, GitHubAppTest } from "@savvy-web/github-action-effects/testing";
-import { ConfigProvider, Effect, Layer, Redacted } from "effect";
+import type { GitHubApp } from "@effected/github";
+import type { ActionOutputs, ActionState } from "@effected/github-actions";
+import { GitHubToken } from "@effected/github-actions";
+import { Effect, Layer, Redacted } from "effect";
 import { describe, expect, it } from "vitest";
 import { post } from "./post.js";
+import type { ActionStateRecording, GitHubAppRecording } from "./utils/action-doubles.test.js";
+import {
+	actionOutputsTestLayer,
+	actionStateTestLayer,
+	emptyActionOutputs,
+	emptyActionState,
+	emptyGitHubApp,
+	gitHubAppTestLayer,
+} from "./utils/action-doubles.test.js";
 
 interface Fixtures {
-	stateState: ActionStateTestState;
-	appState: GitHubAppTestState;
-	layer: Layer.Layer<ActionState | GitHubApp | ActionOutputs>;
+	stateState: ActionStateRecording;
+	appState: GitHubAppRecording;
+	layer: Layer.Layer<ActionOutputs | ActionState | GitHubApp>;
 }
 
 const makeFixtures = (): Fixtures => {
-	const stateState = ActionStateTest.empty();
-	const appState = GitHubAppTest.empty();
+	const stateState = emptyActionState();
+	const appState = emptyGitHubApp();
 	// provision masks the minted token via ActionOutputs.setSecret, so the
 	// shared layer must satisfy ActionOutputs as well.
 	const layer = Layer.mergeAll(
-		ActionStateTest.layer(stateState),
-		GitHubAppTest.layer(appState),
-		ActionOutputsTest.layer(ActionOutputsTest.empty()),
+		actionStateTestLayer(stateState),
+		gitHubAppTestLayer(appState),
+		actionOutputsTestLayer(emptyActionOutputs()),
 	);
 	return { stateState, appState, layer };
 };
 
 /** Provision a token into the shared ActionState, simulating the pre phase. */
 const provisionToken = (fixtures: Fixtures): Promise<void> =>
-	GitHubToken.provision({ clientId: "test-client-id", privateKey: "test-private-key" }).pipe(
+	GitHubToken.provision({ appId: "test-client-id", privateKey: Redacted.make("test-private-key") }).pipe(
 		Effect.provide(fixtures.layer),
 		Effect.asVoid,
 		Effect.runPromise,
 	);
 
-const runPost = (fixtures: Fixtures): Promise<void> => {
-	const config = ConfigProvider.fromUnknown({});
-	return post.pipe(Effect.provide(fixtures.layer), Effect.provide(ConfigProvider.layer(config)), Effect.runPromise);
-};
+const runPost = (fixtures: Fixtures): Promise<void> => post.pipe(Effect.provide(fixtures.layer), Effect.runPromise);
 
 describe("post", () => {
 	it("revokes the installation token provisioned by pre", async () => {
 		const fixtures = makeFixtures();
 		await provisionToken(fixtures);
 		await runPost(fixtures);
-		expect(fixtures.appState.revokeCalls.map(Redacted.value)).toContain("ghs_test_token_123");
+		expect(fixtures.appState.revokeCalls).toContain("ghs_test_token");
 	});
 
 	it("completes cleanly when no token was provisioned", async () => {
@@ -71,6 +72,6 @@ describe("post", () => {
 		await provisionToken(fixtures);
 		// The duration-log path runs without throwing; revocation still happens.
 		await runPost(fixtures);
-		expect(fixtures.appState.revokeCalls.map(Redacted.value)).toContain("ghs_test_token_123");
+		expect(fixtures.appState.revokeCalls).toContain("ghs_test_token");
 	});
 });

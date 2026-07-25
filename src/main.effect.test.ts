@@ -1,30 +1,21 @@
-import type { CommandRunnerError, CommandRunnerShape } from "@savvy-web/github-action-effects";
-import { CommandRunner, CommandRunnerTest } from "@savvy-web/github-action-effects";
-import { Effect, Layer, References } from "effect";
+import { Effect, References } from "effect";
 import { describe, expect, it } from "vitest";
 import { runCommands } from "./program.js";
+import type { ScriptedResponse } from "./utils/spawner.test.js";
+import { scriptedSpawner } from "./utils/spawner.test.js";
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Test Helpers
 // ══════════════════════════════════════════════════════════════════════════════
 
-const makeTestRunner = (
-	overrides: Partial<{
-		exec: CommandRunnerShape["exec"];
-		execCapture: CommandRunnerShape["execCapture"];
-		execJson: CommandRunnerShape["execJson"];
-		execLines: CommandRunnerShape["execLines"];
-	}> = {},
-): Layer.Layer<CommandRunner> => {
-	const service: CommandRunnerShape = {
-		exec: () => Effect.succeed(0),
-		execCapture: () => Effect.succeed({ exitCode: 0, stdout: "", stderr: "" }),
-		execJson: () => Effect.succeed(null as never),
-		execLines: () => Effect.succeed([]),
-		...overrides,
-	};
-	return Layer.succeed(CommandRunner, service);
-};
+/**
+ * runCommands shells out as `sh -c "<command>"`, so the scripted key is the
+ * whole line. A non-zero exit is a RESULT for Run.collect, not a failure, which
+ * is why the failure cases below script an exit code rather than a spawn error.
+ */
+const shLine = (command: string) => `sh -c ${command}`;
+
+const failing = (stderr: string): ScriptedResponse => ({ exitCode: 1, stdout: "", stderr });
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Tests
@@ -32,52 +23,36 @@ const makeTestRunner = (
 
 describe("runCommands", () => {
 	it("returns empty result for empty commands", async () => {
-		const layer = CommandRunnerTest.empty();
+		const spawner = scriptedSpawner();
 		const result = await Effect.runPromise(
-			runCommands([]).pipe(Effect.provide(layer), Effect.provideService(References.MinimumLogLevel, "None")),
+			runCommands([]).pipe(Effect.provide(spawner.layer), Effect.provideService(References.MinimumLogLevel, "None")),
 		);
 		expect(result.successful).toEqual([]);
 		expect(result.failed).toEqual([]);
 	});
 
 	it("runs each command sequentially", async () => {
-		const commandOrder: string[] = [];
-
-		const layer = makeTestRunner({
-			execCapture: (_cmd: string, args?: ReadonlyArray<string>) => {
-				// The command is passed via sh -c, so args[1] is the actual command
-				const actualCmd = args?.[1] ?? "";
-				commandOrder.push(actualCmd as string);
-				return Effect.succeed({ exitCode: 0, stdout: "", stderr: "" });
-			},
-		});
+		const spawner = scriptedSpawner();
 
 		const result = await Effect.runPromise(
 			runCommands(["pnpm lint:fix", "pnpm test"]).pipe(
-				Effect.provide(layer),
+				Effect.provide(spawner.layer),
 				Effect.provideService(References.MinimumLogLevel, "None"),
 			),
 		);
 
-		expect(commandOrder).toEqual(["pnpm lint:fix", "pnpm test"]);
+		// args[1] of `sh -c` is the actual command.
+		expect(spawner.calls.map((call) => call.args[1])).toEqual(["pnpm lint:fix", "pnpm test"]);
 		expect(result.successful).toEqual(["pnpm lint:fix", "pnpm test"]);
 		expect(result.failed).toEqual([]);
 	});
 
 	it("collects failed commands with error details", async () => {
-		const layer = makeTestRunner({
-			execCapture: () =>
-				Effect.fail({
-					_tag: "CommandRunnerError",
-					command: "sh",
-					exitCode: 1,
-					reason: "lint errors",
-				} as unknown as CommandRunnerError),
-		});
+		const spawner = scriptedSpawner(new Map([[shLine("pnpm lint:fix"), failing("lint errors")]]));
 
 		const result = await Effect.runPromise(
 			runCommands(["pnpm lint:fix"]).pipe(
-				Effect.provide(layer),
+				Effect.provide(spawner.layer),
 				Effect.provideService(References.MinimumLogLevel, "None"),
 			),
 		);
@@ -89,24 +64,11 @@ describe("runCommands", () => {
 	});
 
 	it("continues after failure (all commands run)", async () => {
-		const layer = makeTestRunner({
-			execCapture: (_cmd: string, args?: ReadonlyArray<string>) => {
-				const actualCmd = args?.[1] ?? "";
-				if (actualCmd === "pnpm test") {
-					return Effect.fail({
-						_tag: "CommandRunnerError",
-						command: "sh",
-						exitCode: 1,
-						reason: "test fail",
-					} as unknown as CommandRunnerError);
-				}
-				return Effect.succeed({ exitCode: 0, stdout: "", stderr: "" });
-			},
-		});
+		const spawner = scriptedSpawner(new Map([[shLine("pnpm test"), failing("test fail")]]));
 
 		const result = await Effect.runPromise(
 			runCommands(["pnpm lint", "pnpm test", "pnpm build"]).pipe(
-				Effect.provide(layer),
+				Effect.provide(spawner.layer),
 				Effect.provideService(References.MinimumLogLevel, "None"),
 			),
 		);

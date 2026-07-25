@@ -2,26 +2,29 @@
  * BranchManager service for branch management and commit operations.
  *
  * Handles creating, resetting, and switching branches for dependency updates.
- * Uses library services (GitBranch, GitCommit, CommandRunner) from
- * `@savvy-web/github-action-effects`.
+ * Uses `GitBranch` / `GitCommit` from `@effected/github` for the API half and
+ * `@effected/commands`' `Run` for the local git half.
+ *
+ * `Repo` stays in each method's `R` rather than being captured when the layer
+ * is built — that is what keeps `Repo.provide(ref)` meaningful for a caller
+ * targeting a different repository.
  *
  * @module services/branch
  */
 
 import { readFileSync } from "node:fs";
-import type {
-	CommandRunnerError,
-	CommandRunnerShape,
-	FileChange,
-	GitBranchError,
-	GitBranchShape,
-	GitCommitError,
-	GitCommitShape,
-} from "@savvy-web/github-action-effects";
-import { ActionInputError, CommandRunner, GitBranch, GitCommit } from "@savvy-web/github-action-effects";
+import type { CommandOutputError } from "@effected/commands";
+import { CommandFailedError, Run } from "@effected/commands";
+import type { FileChange, GitBranchShape, GitCommitShape, GitHubError, Repo } from "@effected/github";
+import { FileContent, FileDeletion, GitBranch, GitCommit } from "@effected/github";
 import { Context, Effect, Layer } from "effect";
+import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
+import { InvalidInputError } from "../errors/errors.js";
 import type { BranchResult } from "../schemas/domain.js";
+
+/** Every failure a local git invocation in this module can produce. */
+type GitRunError = CommandFailedError | CommandOutputError;
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Service Interface
@@ -33,15 +36,15 @@ export class BranchManager extends Context.Service<
 		readonly manage: (
 			branchName: string,
 			defaultBranch?: string,
-		) => Effect.Effect<BranchResult, GitBranchError | CommandRunnerError>;
+		) => Effect.Effect<BranchResult, GitHubError | GitRunError, Repo>;
 		readonly commitChanges: (
 			message: string,
 			branchName: string,
-		) => Effect.Effect<void, GitCommitError | CommandRunnerError>;
+		) => Effect.Effect<void, GitHubError | GitRunError, Repo>;
 		readonly validateBranches: (
 			source: string,
 			target: string,
-		) => Effect.Effect<void, GitBranchError | ActionInputError>;
+		) => Effect.Effect<void, GitHubError | InvalidInputError, Repo>;
 		/**
 		 * Ensure `base` has enough local git history for the changeset diff.
 		 *
@@ -51,7 +54,7 @@ export class BranchManager extends Context.Service<
 		 * satisfies both. This is the safety net for shallower checkouts: it probes
 		 * first and only fetches/deepens when the merge-base is missing.
 		 */
-		readonly ensureBaseHistory: (base: string) => Effect.Effect<void, CommandRunnerError>;
+		readonly ensureBaseHistory: (base: string) => Effect.Effect<void, GitRunError>;
 	}
 >()("BranchManager") {}
 
@@ -64,15 +67,54 @@ export const BranchManagerLive = Layer.effect(
 	Effect.gen(function* () {
 		const branch = yield* GitBranch;
 		const commit = yield* GitCommit;
-		const cmd = yield* CommandRunner;
+		// The spawner is ambient infrastructure, so resolving it once here is
+		// safe. `Repo` deliberately is NOT resolved here — see the module note.
+		const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+		const withSpawner = <A, E, R>(effect: Effect.Effect<A, E, R | ChildProcessSpawner.ChildProcessSpawner>) =>
+			effect.pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner)) as Effect.Effect<
+				A,
+				E,
+				Exclude<R, ChildProcessSpawner.ChildProcessSpawner>
+			>;
+
 		return {
-			manage: (branchName, defaultBranch = "main") => manageBranchImpl(branch, cmd, branchName, defaultBranch),
-			commitChanges: (message, branchName) => commitChangesImpl(commit, cmd, message, branchName),
+			manage: (branchName, defaultBranch = "main") => withSpawner(manageBranchImpl(branch, branchName, defaultBranch)),
+			commitChanges: (message, branchName) => withSpawner(commitChangesImpl(commit, message, branchName)),
 			validateBranches: (source, target) => validateBranchesImpl(branch, source, target),
-			ensureBaseHistory: (base) => ensureBaseHistoryImpl(cmd, base),
+			ensureBaseHistory: (base) => withSpawner(ensureBaseHistoryImpl(base)),
 		};
 	}),
 );
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Local git helpers
+// ══════════════════════════════════════════════════════════════════════════════
+
+/** Run a git command, failing on a non-zero exit (the old `exec` contract). */
+const git = (
+	...args: ReadonlyArray<string>
+): Effect.Effect<string, GitRunError, ChildProcessSpawner.ChildProcessSpawner> =>
+	Run.text(ChildProcess.make("git", [...args]));
+
+/**
+ * Run a git command and return stdout VERBATIM, failing on a non-zero exit.
+ *
+ * `Run.text` trims, which silently corrupts `git status --porcelain`: its
+ * two-character status field is column-aligned, so a leading space (" M path")
+ * is load-bearing and trimming the first line shifts every subsequent
+ * `substring` index by one.
+ */
+const gitRaw = (
+	...args: ReadonlyArray<string>
+): Effect.Effect<string, GitRunError, ChildProcessSpawner.ChildProcessSpawner> =>
+	Effect.gen(function* () {
+		const command = ChildProcess.make("git", [...args]);
+		const output = yield* Run.collect(command);
+		if (!output.succeeded) {
+			return yield* Effect.fail(CommandFailedError.nonZero(command, output));
+		}
+		return output.stdout;
+	});
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Implementation
@@ -86,64 +128,35 @@ export const BranchManagerLive = Layer.effect(
  */
 const manageBranchImpl = (
 	branch: GitBranchShape,
-	cmd: CommandRunnerShape,
 	branchName: string,
 	defaultBranch: string,
-): Effect.Effect<BranchResult, GitBranchError | CommandRunnerError> =>
+): Effect.Effect<BranchResult, GitHubError | GitRunError, Repo | ChildProcessSpawner.ChildProcessSpawner> =>
 	Effect.gen(function* () {
 		yield* Effect.logInfo(`Managing branch: ${branchName}`);
 
-		// Check if branch exists
-		const exists = yield* branch.exists(branchName);
-
-		if (!exists) {
-			// Create new branch from default branch
-			yield* Effect.logInfo(`Branch ${branchName} does not exist, creating from ${defaultBranch}`);
-
-			const baseSha = yield* branch.getSha(defaultBranch);
-			yield* Effect.logDebug(`Base SHA for ${defaultBranch}: ${baseSha}`);
-			yield* branch.create(branchName, baseSha);
-
-			// Fetch and checkout the new branch, tracking the remote
-			yield* cmd.exec("git", ["fetch", "origin"]);
-			yield* cmd.exec("git", ["checkout", "-B", branchName, `origin/${branchName}`]);
-
-			yield* Effect.logInfo(`Created and checked out branch ${branchName}`);
-
-			return {
-				branch: branchName,
-				created: true,
-				upToDate: true,
-				baseRef: defaultBranch,
-			};
-		}
-
-		// Branch exists - delete and recreate from default branch
-		yield* Effect.logInfo(`Branch ${branchName} exists, resetting to ${defaultBranch}`);
-
-		// Get the SHA of the default branch (via API, no local fetch needed)
-		const baseSha = yield* branch.getSha(defaultBranch);
+		// Get the SHA of the default branch (via API, no local fetch needed).
+		const baseSha = yield* branch.sha(defaultBranch);
 		yield* Effect.logDebug(`Base SHA for ${defaultBranch}: ${baseSha}`);
 
-		// Delete the remote branch and recreate it from the source branch
-		yield* branch.delete(branchName).pipe(
-			Effect.catch((error) =>
-				Effect.gen(function* () {
-					yield* Effect.logWarning(`Failed to delete branch: ${error.reason}`);
-				}),
-			),
-		);
+		// `upsert` collapses the old exists/delete/create dance: it creates the
+		// branch when absent and force-resets it to `baseSha` when present,
+		// reporting which happened. The delete-and-recreate this replaces had the
+		// same net effect but raced against anything reading the ref in between.
+		const outcome = yield* branch.upsert(branchName, baseSha);
 
-		// Create the branch fresh from the source branch
-		yield* branch.create(branchName, baseSha);
-		yield* cmd.exec("git", ["fetch", "origin"]);
-		yield* cmd.exec("git", ["checkout", "-B", branchName, `origin/${branchName}`]);
+		// Fetch and checkout the branch, tracking the remote.
+		yield* git("fetch", "origin");
+		yield* git("checkout", "-B", branchName, `origin/${branchName}`);
 
-		yield* Effect.logInfo(`Reset branch ${branchName} to ${defaultBranch}`);
+		if (outcome === "created") {
+			yield* Effect.logInfo(`Created and checked out branch ${branchName} from ${defaultBranch}`);
+		} else {
+			yield* Effect.logInfo(`Reset branch ${branchName} to ${defaultBranch}`);
+		}
 
 		return {
 			branch: branchName,
-			created: false,
+			created: outcome === "created",
 			upToDate: true,
 			baseRef: defaultBranch,
 		};
@@ -151,23 +164,23 @@ const manageBranchImpl = (
 
 /**
  * Validate that the source and target branches exist before any branch
- * mutation. Fails fast with `ActionInputError` so a bad ref never triggers the
- * destructive delete-and-recreate. When `target === source`, the source check
- * already covers it, so the second existence check is skipped.
+ * mutation. Fails fast with `InvalidInputError` so a bad ref never triggers the
+ * destructive reset. When `target === source`, the source check already covers
+ * it, so the second existence check is skipped.
  */
 const validateBranchesImpl = (
 	branch: GitBranchShape,
 	source: string,
 	target: string,
-): Effect.Effect<void, GitBranchError | ActionInputError> =>
+): Effect.Effect<void, GitHubError | InvalidInputError, Repo> =>
 	Effect.gen(function* () {
 		const sourceExists = yield* branch.exists(source);
 		if (!sourceExists) {
 			return yield* Effect.fail(
-				new ActionInputError({
-					inputName: "source-branch",
+				new InvalidInputError({
+					field: "source-branch",
 					reason: `Source branch "${source}" does not exist`,
-					rawValue: source,
+					value: source,
 				}),
 			);
 		}
@@ -176,10 +189,10 @@ const validateBranchesImpl = (
 			const targetExists = yield* branch.exists(target);
 			if (!targetExists) {
 				return yield* Effect.fail(
-					new ActionInputError({
-						inputName: "target-branch",
+					new InvalidInputError({
+						field: "target-branch",
 						reason: `Target branch "${target}" does not exist`,
-						rawValue: target,
+						value: target,
 					}),
 				);
 			}
@@ -197,10 +210,9 @@ const validateBranchesImpl = (
  */
 const commitChangesImpl = (
 	commit: GitCommitShape,
-	cmd: CommandRunnerShape,
 	message: string,
 	branchName: string,
-): Effect.Effect<void, GitCommitError | CommandRunnerError> =>
+): Effect.Effect<void, GitHubError | GitRunError, Repo | ChildProcessSpawner.ChildProcessSpawner> =>
 	Effect.gen(function* () {
 		// Check if there are changes to commit.
 		//
@@ -209,8 +221,8 @@ const commitChangesImpl = (
 		// is not mistaken for a committable change. We commit file content via the
 		// GitHub API at mode 100644, so a mode-only change produces an empty
 		// tree-diff — committing it would create an empty commit and a spurious PR.
-		const statusResult = yield* cmd.execCapture("git", ["-c", "core.fileMode=false", "status", "--porcelain"]);
-		const lines = statusResult.stdout.split("\n").filter((l) => l.trim().length > 0);
+		const statusOutput = yield* gitRaw("-c", "core.fileMode=false", "status", "--porcelain");
+		const lines = statusOutput.split("\n").filter((l) => l.trim().length > 0);
 
 		if (lines.length === 0) {
 			yield* Effect.logInfo("No changes to commit");
@@ -228,15 +240,16 @@ const commitChangesImpl = (
 			const filePath = line.substring(3);
 
 			if (status === "D") {
-				// Deleted file
-				fileChanges.push({ path: filePath, sha: null });
+				// Deleted file. The kit models a deletion as its own tagged member
+				// rather than a `sha: null` sentinel.
+				fileChanges.push(FileDeletion.make({ path: filePath }));
 				yield* Effect.logDebug(`Deleting file: ${filePath}`);
 			} else {
 				// Added or modified file — read content
 				const absolutePath = filePath.startsWith("/") ? filePath : `${cwd}/${filePath}`;
 				try {
 					const content = readFileSync(absolutePath, "utf-8");
-					fileChanges.push({ path: filePath, content });
+					fileChanges.push(FileContent.make({ path: filePath, content }));
 				} catch {
 					yield* Effect.logWarning(`Could not read file: ${filePath}, skipping`);
 				}
@@ -251,27 +264,24 @@ const commitChangesImpl = (
 		yield* Effect.logDebug(`File changes: ${fileChanges.length}`);
 
 		// Commit all files in one API call
-		const commitSha = yield* commit.commitFiles(branchName, message, fileChanges);
+		const commitSha = yield* commit.commitFiles({ branch: branchName, message, changes: fileChanges });
 		yield* Effect.logInfo(`Created commit: ${commitSha}`);
 
 		// Sync local working tree with the remote commit.
 		// Use reset --hard because checkout refuses to overwrite dirty/untracked files
 		// that were just committed via the GitHub API.
-		yield* cmd.exec("git", ["fetch", "origin", branchName]);
-		yield* cmd.exec("git", ["reset", "--hard", `origin/${branchName}`]);
+		yield* git("fetch", "origin", branchName);
+		yield* git("reset", "--hard", `origin/${branchName}`);
 	});
 
 /** True when `git merge-base <base> HEAD` resolves (ref exists AND a common ancestor is present). */
-const hasMergeBase = (cmd: CommandRunnerShape, base: string): Effect.Effect<boolean, never> =>
-	cmd.execCapture("git", ["merge-base", base, "HEAD"]).pipe(
-		Effect.as(true),
-		Effect.catch(() => Effect.succeed(false)),
-	);
+const hasMergeBase = (base: string): Effect.Effect<boolean, never, ChildProcessSpawner.ChildProcessSpawner> =>
+	Run.succeeds(ChildProcess.make("git", ["merge-base", base, "HEAD"]));
 
 /** True when the repository is a shallow clone (history truncated). */
-const isShallowRepo = (cmd: CommandRunnerShape): Effect.Effect<boolean, never> =>
-	cmd.execCapture("git", ["rev-parse", "--is-shallow-repository"]).pipe(
-		Effect.map((r) => r.stdout.trim() === "true"),
+const isShallowRepo = (): Effect.Effect<boolean, never, ChildProcessSpawner.ChildProcessSpawner> =>
+	git("rev-parse", "--is-shallow-repository").pipe(
+		Effect.map((out) => out.trim() === "true"),
 		Effect.catch(() => Effect.succeed(false)),
 	);
 
@@ -286,9 +296,11 @@ const isShallowRepo = (cmd: CommandRunnerShape): Effect.Effect<boolean, never> =
  * (DepsRegen will still surface a precise error if the diff genuinely can't be
  * computed).
  */
-const ensureBaseHistoryImpl = (cmd: CommandRunnerShape, base: string): Effect.Effect<void, CommandRunnerError> =>
+const ensureBaseHistoryImpl = (
+	base: string,
+): Effect.Effect<void, GitRunError, ChildProcessSpawner.ChildProcessSpawner> =>
 	Effect.gen(function* () {
-		if (yield* hasMergeBase(cmd, base)) {
+		if (yield* hasMergeBase(base)) {
 			yield* Effect.logDebug(`Base history for "${base}" already present; no fetch needed`);
 			return;
 		}
@@ -297,13 +309,13 @@ const ensureBaseHistoryImpl = (cmd: CommandRunnerShape, base: string): Effect.Ef
 
 		// Ensure the remote-tracking ref exists, deepen a shallow clone, then
 		// materialize a local ref so `git merge-base <base> HEAD` resolves by name.
-		yield* cmd.exec("git", ["fetch", "origin", `+refs/heads/${base}:refs/remotes/origin/${base}`]).pipe(Effect.ignore);
-		if (yield* isShallowRepo(cmd)) {
-			yield* cmd.exec("git", ["fetch", "--unshallow", "origin"]).pipe(Effect.ignore);
+		yield* git("fetch", "origin", `+refs/heads/${base}:refs/remotes/origin/${base}`).pipe(Effect.ignore);
+		if (yield* isShallowRepo()) {
+			yield* git("fetch", "--unshallow", "origin").pipe(Effect.ignore);
 		}
-		yield* cmd.exec("git", ["branch", "-f", base, `refs/remotes/origin/${base}`]).pipe(Effect.ignore);
+		yield* git("branch", "-f", base, `refs/remotes/origin/${base}`).pipe(Effect.ignore);
 
-		if (!(yield* hasMergeBase(cmd, base))) {
+		if (!(yield* hasMergeBase(base))) {
 			yield* Effect.logWarning(
 				`Could not establish a merge-base between "${base}" and HEAD. The changeset step diffs against ` +
 					`this branch — check out with fetch-depth: 0 (and ensure "${base}" is fetched).`,

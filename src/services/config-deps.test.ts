@@ -3,10 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ReleaseAgeGate } from "@effected/npm";
 import { Yaml } from "@effected/yaml";
-import { NpmRegistryTest } from "@savvy-web/github-action-effects";
 import { Effect, Layer, References } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { parseConfigEntry } from "../utils/deps.js";
+import { seededRegistry } from "../utils/fixtures.test.js";
 import { ConfigDeps, ConfigDepsLive } from "./config-deps.js";
 import { ReleaseAge, ReleaseAgeNoop } from "./release-age.js";
 
@@ -14,50 +14,12 @@ import { ReleaseAge, ReleaseAgeNoop } from "./release-age.js";
 // Test Helpers
 // ══════════════════════════════════════════════════════════════════════════════
 
-const makeRegistryState = (
-	packages: Record<string, { version: string; integrity?: string; versions?: string[] }>,
-): Map<
-	string,
-	{
-		versions: string[];
-		latest: string;
-		distTags: Record<string, string>;
-		integrity?: string;
-		tarball?: string;
-	}
-> => {
-	const map = new Map<
-		string,
-		{
-			versions: string[];
-			latest: string;
-			distTags: Record<string, string>;
-			integrity?: string;
-			tarball?: string;
-		}
-	>();
-	for (const [name, info] of Object.entries(packages)) {
-		// `versions` (ascending) controls range resolution; `version` is the
-		// dist-tag latest. Default to a single-version registry when not given.
-		const versions = info.versions ?? [info.version];
-		map.set(name, {
-			versions,
-			latest: info.version,
-			distTags: { latest: info.version },
-			...(info.integrity != null && { integrity: info.integrity }),
-		});
-	}
-	return map;
-};
-
 const runWithService = <A, E>(
 	fn: (service: Effect.Success<typeof ConfigDeps>) => Effect.Effect<A, E>,
 	packages?: Record<string, { version: string; integrity?: string; versions?: string[] }>,
 	releaseAge: Layer.Layer<ReleaseAge> = ReleaseAgeNoop,
 ) => {
-	const registryLayer = packages
-		? NpmRegistryTest.layer({ packages: makeRegistryState(packages) })
-		: NpmRegistryTest.empty();
+	const registryLayer = packages ? seededRegistry(packages) : seededRegistry({});
 	const layer = ConfigDepsLive.pipe(Layer.provide(Layer.merge(registryLayer, releaseAge)));
 	return Effect.runPromise(
 		Effect.gen(function* () {

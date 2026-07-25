@@ -10,10 +10,10 @@
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import type { NpmRegistryShape } from "@effected/npm";
+import { NpmRegistry } from "@effected/npm";
 import type { WorkspaceDiscoveryShape } from "@effected/workspaces";
 import { WorkspaceDiscovery } from "@effected/workspaces";
-import type { NpmRegistryShape } from "@savvy-web/github-action-effects";
-import { NpmRegistry } from "@savvy-web/github-action-effects";
 import { Context, Effect, Layer } from "effect";
 
 import { FileSystemError } from "../errors/errors.js";
@@ -67,7 +67,7 @@ export const RegularDepsLive = Layer.effect(
  * package never aborts the whole batch.
  */
 const queryVersions = (packageName: string, registry: NpmRegistryShape): Effect.Effect<ReadonlyArray<string>> =>
-	registry.getVersions(packageName).pipe(Effect.catch(() => Effect.succeed([] as ReadonlyArray<string>)));
+	registry.versions(packageName).pipe(Effect.catch(() => Effect.succeed([] as ReadonlyArray<string>)));
 
 /**
  * Writable dependency sections, in priority order. peerDependencies are

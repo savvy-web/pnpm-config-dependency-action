@@ -31,13 +31,13 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NodeServices } from "@effect/platform-node";
+import { CheckRun } from "@effected/github";
+import { ActionOutputs } from "@effected/github-actions";
 import type { WorkspacePackage } from "@effected/workspaces";
 import { PackageManagerDetector, WorkspaceDiscovery, WorkspaceRoot } from "@effected/workspaces";
-import { ActionInputError, CommandRunner } from "@savvy-web/github-action-effects";
-import type { ActionOutputsTestState, CheckRunTestState } from "@savvy-web/github-action-effects/testing";
-import { ActionOutputsTest, CheckRunTest, NpmRegistryTest } from "@savvy-web/github-action-effects/testing";
 import { Cause, Effect, Exit, Layer, Logger, Option, References } from "effect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { InvalidInputError } from "./errors/errors.js";
 import type { makeAppLayer } from "./layers/app.js";
 import type { InnerProgramInputs } from "./program.js";
 import { innerProgram } from "./program.js";
@@ -50,6 +50,8 @@ import { PackageManagerUpgrade, PackageManagerUpgradeLive } from "./services/pac
 import { RegularDeps } from "./services/regular-deps.js";
 import { Report } from "./services/report.js";
 import { RuntimeUpgrade } from "./services/runtime-upgrade.js";
+import { seededRegistry } from "./utils/fixtures.test.js";
+import { scriptedSpawner } from "./utils/spawner.test.js";
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Fixtures
@@ -147,8 +149,6 @@ const findLine = (level: string | null, ...fragments: string[]): LogLine | undef
 // Service fakes
 // ══════════════════════════════════════════════════════════════════════════════
 
-type CommandRunnerShape = Effect.Success<typeof CommandRunner>;
-
 /** Records the calls each faked service received, so a dispatch can be proven. */
 interface Spies {
 	readonly configDeps: ReturnType<typeof vi.fn>;
@@ -158,9 +158,8 @@ interface Spies {
 	readonly changesetsCreate: ReturnType<typeof vi.fn>;
 	readonly commitChanges: ReturnType<typeof vi.fn>;
 	readonly createOrUpdatePR: ReturnType<typeof vi.fn>;
-	readonly exec: ReturnType<typeof vi.fn>;
-	/** Every `exec` invocation as a flat command line, e.g. `pnpm install --frozen-lockfile=false`. */
-	readonly execLines: string[];
+	/** Every spawned command as a flat line, e.g. `pnpm install --frozen-lockfile=false`. */
+	readonly execLines: ReadonlyArray<{ readonly line: string; readonly cwd: string | undefined }>;
 }
 
 interface HarnessOptions {
@@ -171,9 +170,11 @@ interface HarnessOptions {
 	/** `git status --porcelain` output — non-empty means "the tree changed". */
 	readonly gitStatus?: string;
 	/** Registry contents for the real `PackageManagerUpgradeLive`. */
-	readonly registry?: Map<string, { versions: string[]; latest: string; distTags: Record<string, string> }>;
+	readonly registry?: Record<string, { version: string; versions?: ReadonlyArray<string> }>;
 	/** Replace the real package-manager upgrade with a fake returning this outcome. */
 	readonly packageManagerUpgrade?: Effect.Success<typeof PackageManagerUpgrade>["upgrade"];
+	/** Extra scripted command results, keyed by full command line. */
+	readonly commands?: ReadonlyMap<string, { exitCode: number; stdout: string; stderr: string }>;
 }
 
 const update = (dependency: string, from: string, to: string): DependencyUpdateResult => ({
@@ -191,14 +192,27 @@ const update = (dependency: string, from: string, to: string): DependencyUpdateR
  * package-manager detection is genuine while everything downstream is observable.
  */
 const makeHarness = (options: HarnessOptions = {}) => {
-	const outputsState: ActionOutputsTestState = ActionOutputsTest.empty();
-	const checkRunState: CheckRunTestState = CheckRunTest.empty();
+	const outputs = new Map<string, string>();
+	/** Check runs created, and the verdict each was concluded with. */
+	const checkRunState = {
+		runs: [] as Array<{
+			name: string;
+			status: string;
+			conclusion: string | undefined;
+			/** The output an explicit `conclude` supplied, if any. */
+			output: { title?: string; summary?: string } | undefined;
+		}>,
+	};
 
-	const execLines: string[] = [];
-	const exec = vi.fn((command: string, args: ReadonlyArray<string> = []) => {
-		execLines.push([command, ...args].join(" "));
-		return Effect.succeed(0);
-	});
+	// `git status --porcelain` is the only command whose OUTPUT the program
+	// reads; everything else is asserted by which command line ran.
+	const spawner = scriptedSpawner(
+		new Map([
+			["git -c core.fileMode=false status --porcelain", { exitCode: 0, stdout: options.gitStatus ?? "", stderr: "" }],
+			...(options.commands ?? new Map()),
+		]),
+	);
+	const execLines = spawner.calls;
 
 	const spies: Spies = {
 		configDeps: vi.fn(() => Effect.succeed(options.configUpdates ?? [])),
@@ -210,15 +224,7 @@ const makeHarness = (options: HarnessOptions = {}) => {
 		createOrUpdatePR: vi.fn(() =>
 			Effect.succeed({ number: 1, url: "https://github.com/o/r/pull/1", created: true, nodeId: "PR_1" }),
 		),
-		exec,
 		execLines,
-	};
-
-	const commandRunner: CommandRunnerShape = {
-		exec: exec as unknown as CommandRunnerShape["exec"],
-		execCapture: () => Effect.succeed({ exitCode: 0, stdout: options.gitStatus ?? "", stderr: "" }),
-		execJson: () => Effect.succeed(null as never),
-		execLines: () => Effect.succeed([]),
 	};
 
 	const discovery = Layer.succeed(WorkspaceDiscovery, {
@@ -237,7 +243,7 @@ const makeHarness = (options: HarnessOptions = {}) => {
 		WorkspaceRoot.layer.pipe(Layer.provide(NodeServices.layer)),
 	).pipe(Layer.provide(NodeServices.layer));
 
-	const npmRegistry = NpmRegistryTest.layer({ packages: options.registry ?? new Map() });
+	const npmRegistry = seededRegistry(options.registry ?? {});
 
 	// The package-manager upgrade is REAL unless a test explicitly fakes the
 	// outcome: the acceptance-signal guard must resolve the range against an
@@ -247,9 +253,45 @@ const makeHarness = (options: HarnessOptions = {}) => {
 		: PackageManagerUpgradeLive.pipe(Layer.provide(npmRegistry));
 
 	const layer = Layer.mergeAll(
-		ActionOutputsTest.layer(outputsState),
-		CheckRunTest.layer(checkRunState),
-		Layer.succeed(CommandRunner, commandRunner),
+		ActionOutputs.layerTest({
+			set: (name: string, value: string) =>
+				Effect.suspend(() => {
+					outputs.set(name, value);
+					return Effect.void;
+				}),
+			summary: () => Effect.void,
+		}),
+		// withCheckRun concludes on EVERY exit path now, defaulting to
+		// success/failure, and a verdict recorded via `conclude` wins.
+		CheckRun.layerTest({
+			withCheckRun: (name, _headSha, use) =>
+				Effect.gen(function* () {
+					const run = {
+						name,
+						status: "in_progress",
+						conclusion: undefined as string | undefined,
+						output: undefined as { title?: string; summary?: string } | undefined,
+					};
+					checkRunState.runs.push(run);
+					const conclude = (conclusion: string, output?: { title?: string; summary?: string }) =>
+						Effect.sync(() => {
+							run.conclusion = conclusion;
+							run.output = output;
+							run.status = "completed";
+						});
+					return yield* use(1, conclude as never).pipe(
+						Effect.onExit((exit) =>
+							Effect.sync(() => {
+								if (run.conclusion === undefined) {
+									run.conclusion = exit._tag === "Success" ? "success" : "failure";
+									run.status = "completed";
+								}
+							}),
+						),
+					);
+				}) as never,
+		}),
+		spawner.layer,
 		discovery,
 		detection,
 		packageManagerUpgrade,
@@ -284,8 +326,9 @@ const makeHarness = (options: HarnessOptions = {}) => {
 
 	return {
 		spies,
-		outputsState,
+		outputs,
 		checkRunState,
+		spawner,
 		layer: layer as unknown as ReturnType<typeof makeAppLayer>,
 	};
 };
@@ -387,8 +430,7 @@ describe("innerProgram — config-dependency dispatch", () => {
 
 describe("innerProgram — package-manager upgrade acceptance signal", () => {
 	/** bun's real release list — nothing here satisfies a pnpm-shaped "^11.0.0". */
-	const bunRegistry = () =>
-		new Map([["bun", { versions: ["1.3.12", "1.3.13", "1.3.14"], latest: "1.3.14", distTags: { latest: "1.3.14" } }]]);
+	const bunRegistry = () => ({ bun: { version: "1.3.14", versions: ["1.3.12", "1.3.13", "1.3.14"] } });
 
 	it("WARNS, naming the package manager and the range, when nothing satisfies it (pnpm range in a bun repo)", async () => {
 		writeFixture("bun");
@@ -491,8 +533,8 @@ describe("innerProgram — install gate", () => {
 		const exit = await runInner(harness, baseInputs({ dependencies: ["effect"] }));
 
 		expect(Exit.isSuccess(exit)).toBe(true);
-		expect(harness.spies.execLines).toContain("pnpm clean --lockfile");
-		expect(harness.spies.execLines).toContain("pnpm install --frozen-lockfile=false");
+		expect(harness.spies.execLines.map((call) => call.line)).toContain("pnpm clean --lockfile");
+		expect(harness.spies.execLines.map((call) => call.line)).toContain("pnpm install --frozen-lockfile=false");
 		expect(findLine("Info", "Step: install — pnpm clean --lockfile")).toBeDefined();
 	});
 
@@ -503,7 +545,7 @@ describe("innerProgram — install gate", () => {
 		const exit = await runInner(harness, baseInputs({ dependencies: ["effect"] }));
 
 		expect(Exit.isSuccess(exit)).toBe(true);
-		expect(harness.spies.execLines).toContain("bun install --force");
+		expect(harness.spies.execLines.map((call) => call.line)).toContain("bun install --force");
 		expect(harness.spies.execLines).not.toContain("pnpm install --frozen-lockfile=false");
 	});
 
@@ -514,7 +556,7 @@ describe("innerProgram — install gate", () => {
 		const exit = await runInner(harness, baseInputs({ dependencies: ["effect"] }));
 
 		expect(Exit.isSuccess(exit)).toBe(true);
-		expect(harness.spies.execLines.some((line) => line.startsWith("pnpm install"))).toBe(false);
+		expect(harness.spies.execLines.some((call) => call.line.startsWith("pnpm install"))).toBe(false);
 		expect(findLine("Info", "Step: install — SKIPPED", "nothing to install")).toBeDefined();
 	});
 });
@@ -649,7 +691,9 @@ describe("innerProgram — workspace root threading", () => {
 		// install ran anchored at the root rather than at the cwd.
 		const formatted = readFileSync(join(root, "pnpm-workspace.yaml"), "utf-8");
 		expect(formatted.indexOf("alpha")).toBeLessThan(formatted.indexOf("zeta"));
-		expect(harness.spies.exec).toHaveBeenCalledWith("pnpm", ["install", "--frozen-lockfile=false"], { cwd: realRoot });
+		const install = harness.spies.execLines.find((call) => call.line === "pnpm install --frozen-lockfile=false");
+		expect(install).toBeDefined();
+		expect(install?.cwd).toBe(realRoot);
 	});
 
 	it("passes the detected workspace root to the changeset step as the diff cwd", async () => {
@@ -681,7 +725,7 @@ describe("innerProgram — workspace root threading", () => {
 // ══════════════════════════════════════════════════════════════════════════════
 
 describe("innerProgram — unsupported workspace", () => {
-	it("fails with ActionInputError from INSIDE the check run, so the failure is visible in the UI", async () => {
+	it("fails with InvalidInputError from INSIDE the check run, so the failure is visible in the UI", async () => {
 		writeFixture("yarn");
 		const harness = makeHarness();
 
@@ -689,8 +733,8 @@ describe("innerProgram — unsupported workspace", () => {
 
 		expect(Exit.isFailure(exit)).toBe(true);
 		const failure = Exit.isFailure(exit) ? Option.getOrNull(Cause.findErrorOption(exit.cause)) : null;
-		expect(failure).toBeInstanceOf(ActionInputError);
-		expect((failure as ActionInputError).reason).toContain("does not support");
+		expect(failure).toBeInstanceOf(InvalidInputError);
+		expect((failure as InvalidInputError).reason).toContain("does not support");
 
 		// The check run was created BEFORE detection ran — detection lives inside
 		// withCheckRun precisely so this failure is reported in the GitHub UI rather
@@ -704,5 +748,35 @@ describe("innerProgram — unsupported workspace", () => {
 		expect(harness.spies.regularDeps).not.toHaveBeenCalled();
 		expect(harness.spies.commitChanges).not.toHaveBeenCalled();
 		expect(harness.spies.execLines).toEqual([]);
+	});
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Custom commands
+// ══════════════════════════════════════════════════════════════════════════════
+
+describe("innerProgram — custom commands", () => {
+	it("concludes the check run as failure and exits early when a `run` command fails", async () => {
+		// Regression guard for the withCheckRun migration.
+		writeFixture("pnpm");
+		const harness = makeHarness({
+			configUpdates: [update("effect", "3.0.0", "3.1.0")],
+			gitStatus: " M package.json\n",
+			commands: new Map([["sh -c pnpm lint", { exitCode: 1, stdout: "", stderr: "lint exploded" }]]),
+		});
+
+		const exit = await runInner(harness, baseInputs({ dependencies: ["effect"], run: ["pnpm lint"] }));
+
+		// The run FAILS (it does not exit early), so the bracket would conclude
+		// "failure" on its own. What the explicit `conclude` adds is the OUTPUT —
+		// which is what names the failing command in the GitHub UI, and what a
+		// mutation dropping the call would silently lose.
+		expect(Exit.isFailure(exit)).toBe(true);
+		expect(harness.checkRunState.runs[0]?.conclusion).toBe("failure");
+		expect(harness.checkRunState.runs[0]?.output?.title).toBe("Custom Commands Failed");
+		expect(harness.checkRunState.runs[0]?.output?.summary).toContain("pnpm lint");
+		// No commit and no PR once a command failed.
+		expect(harness.spies.commitChanges).not.toHaveBeenCalled();
+		expect(harness.spies.createOrUpdatePR).not.toHaveBeenCalled();
 	});
 });

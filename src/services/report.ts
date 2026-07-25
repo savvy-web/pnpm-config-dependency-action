@@ -10,12 +10,13 @@
  * @module services/report
  */
 
-import type { PullRequestError, PullRequestShape } from "@savvy-web/github-action-effects";
-import { GithubMarkdown, PullRequest as PullRequestTag } from "@savvy-web/github-action-effects";
+import type { GitHubError, GitHubGraphQLError, PullRequestShape, Repo } from "@effected/github";
+import { PullRequest as PullRequestTag } from "@effected/github";
 import { Context, Effect, Layer } from "effect";
 
 import type { CatalogDelta, ChangesetFile, DependencyUpdateResult, PullRequestResult } from "../schemas/domain.js";
 import { buildUpdateSubject } from "../utils/commit-subject.js";
+import { GithubMarkdown } from "../utils/github-markdown.js";
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Service Interface
@@ -31,7 +32,7 @@ export class Report extends Context.Service<
 			changesets: ReadonlyArray<ChangesetFile>,
 			autoMerge?: "merge" | "squash" | "rebase",
 			deltas?: ReadonlyArray<CatalogDelta>,
-		) => Effect.Effect<PullRequestResult, PullRequestError>;
+		) => Effect.Effect<PullRequestResult, GitHubError, Repo>;
 		readonly generatePRBody: (
 			updates: ReadonlyArray<DependencyUpdateResult>,
 			changesets: ReadonlyArray<ChangesetFile>,
@@ -73,7 +74,12 @@ export const ReportLive = Layer.effect(
 /**
  * Create or update the dependency update PR.
  *
- * Returns `PullRequestResult` on success, or `PullRequestError` in the error channel.
+ * Returns `PullRequestResult` on success, or `GitHubError` in the error channel.
+ *
+ * Auto-merge is a separate call in the kit (`setAutoMerge`, a GraphQL mutation)
+ * rather than a field on the create call. Its failure is deliberately swallowed
+ * to a warning: the repository may simply not have auto-merge enabled, and that
+ * must not fail a run whose PR was created successfully.
  */
 const createOrUpdatePRImpl = (
 	pr: PullRequestShape,
@@ -83,27 +89,32 @@ const createOrUpdatePRImpl = (
 	changesets: ReadonlyArray<ChangesetFile>,
 	autoMerge?: "merge" | "squash" | "rebase",
 	deltas?: ReadonlyArray<CatalogDelta>,
-): Effect.Effect<PullRequestResult, PullRequestError> =>
+): Effect.Effect<PullRequestResult, GitHubError, Repo> =>
 	Effect.gen(function* () {
 		const title = buildUpdateSubject(updates);
 		const body = generatePRBodyImpl(updates, changesets, deltas);
 
-		const result = yield* pr.getOrCreate({
-			head: branch,
-			base,
-			title,
-			body,
-			autoMerge: autoMerge || false,
-		});
+		const result = yield* pr.upsert({ head: branch, base, title, body });
+		const info = result.pullRequest;
 
 		const action = result.created ? "Created" : "Updated";
-		yield* Effect.logInfo(`${action} PR #${result.number}: ${result.url}`);
+		yield* Effect.logInfo(`${action} PR #${info.number}: ${info.url}`);
+
+		if (autoMerge) {
+			yield* pr
+				.setAutoMerge(info, autoMerge)
+				.pipe(
+					Effect.catch((error: GitHubGraphQLError) =>
+						Effect.logWarning(`Could not enable auto-merge on PR #${info.number}: ${error.message}`),
+					),
+				);
+		}
 
 		return {
-			number: result.number,
-			url: result.url,
+			number: info.number,
+			url: info.url,
 			created: result.created,
-			nodeId: result.nodeId,
+			nodeId: info.nodeId,
 		};
 	});
 

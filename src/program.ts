@@ -10,18 +10,16 @@
 
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import type { CommandFailedError, CommandOutputError } from "@effected/commands";
+import { Run } from "@effected/commands";
+import { CheckRun, CheckRunOutput } from "@effected/github";
+import { ActionEnvironment, ActionOutputs } from "@effected/github-actions";
 import { Range } from "@effected/semver";
 import { WorkspaceDiscovery } from "@effected/workspaces";
-import type { CommandRunnerError } from "@savvy-web/github-action-effects";
-import {
-	Action,
-	ActionEnvironment,
-	ActionInputError,
-	ActionOutputs,
-	CheckRun,
-	CommandRunner,
-} from "@savvy-web/github-action-effects";
 import { Config, Duration, Effect, References } from "effect";
+import type { ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcess } from "effect/unstable/process";
+import { InvalidInputError } from "./errors/errors.js";
 import { makeAppLayer } from "./layers/app.js";
 import type { CatalogDelta, ChangesetFile, DependencyUpdateResult, PullRequestResult } from "./schemas/domain.js";
 import { BranchManager } from "./services/branch.js";
@@ -57,23 +55,34 @@ export interface RunCommandsResult {
  * Commands are executed sequentially. All commands are attempted even if some fail,
  * but failures are collected and returned for the caller to handle.
  */
-export const runCommands = (commands: ReadonlyArray<string>): Effect.Effect<RunCommandsResult, never, CommandRunner> =>
+export const runCommands = (
+	commands: ReadonlyArray<string>,
+): Effect.Effect<RunCommandsResult, never, ChildProcessSpawner.ChildProcessSpawner> =>
 	Effect.gen(function* () {
-		const runner = yield* CommandRunner;
 		const successful: string[] = [];
 		const failed: Array<{ command: string; error: string; exitCode?: number | undefined }> = [];
 
 		for (const command of commands) {
 			yield* Effect.logInfo(`Running: ${command}`);
 
-			// Split command into executable and args for CommandRunner
-			const result = yield* runner.execCapture("sh", ["-c", command]).pipe(
-				Effect.map(() => ({ success: true as const })),
-				Effect.catch((error: CommandRunnerError) =>
+			// Run.collect treats a non-zero exit as a RESULT, so the failure branch
+			// is driven by the exit code rather than the error channel; the catch
+			// covers only a genuine spawn failure.
+			const result = yield* Run.collect(ChildProcess.make("sh", ["-c", command])).pipe(
+				Effect.map((output) =>
+					output.succeeded
+						? { success: true as const }
+						: {
+								success: false as const,
+								error: output.stderr.trim() || `Command exited ${output.exitCode}`,
+								exitCode: output.exitCode,
+							},
+				),
+				Effect.catch((error) =>
 					Effect.succeed({
 						success: false as const,
-						error: error.reason ?? "Unknown error",
-						exitCode: error.exitCode,
+						error: error.message,
+						exitCode: undefined as number | undefined,
 					}),
 				),
 			);
@@ -125,24 +134,26 @@ export const runCommands = (commands: ReadonlyArray<string>): Effect.Effect<RunC
 export const runInstall = (
 	pm: SupportedPm,
 	workspaceRoot: string = process.cwd(),
-): Effect.Effect<void, CommandRunnerError, CommandRunner> =>
+): Effect.Effect<void, CommandFailedError | CommandOutputError, ChildProcessSpawner.ChildProcessSpawner> =>
 	Effect.gen(function* () {
-		const runner = yield* CommandRunner;
-		const options = { cwd: workspaceRoot };
+		// Run.text fails typed on a non-zero exit, preserving the old `exec`
+		// contract that an install failure aborts the run.
+		const run = (executable: string, args: ReadonlyArray<string>) =>
+			Run.text(ChildProcess.make(executable, [...args]).pipe(ChildProcess.setCwd(workspaceRoot)));
 
 		switch (pm) {
 			case "pnpm":
-				yield* runner.exec("pnpm", ["clean", "--lockfile"], options);
-				yield* runner.exec("pnpm", ["install", "--frozen-lockfile=false"], options);
+				yield* run("pnpm", ["clean", "--lockfile"]);
+				yield* run("pnpm", ["install", "--frozen-lockfile=false"]);
 				return;
 			case "bun":
-				yield* runner.exec("bun", ["install", "--force"], options);
+				yield* run("bun", ["install", "--force"]);
 				return;
 			case "npm":
 				yield* Effect.sync(() => {
 					rmSync(join(workspaceRoot, "package-lock.json"), { force: true });
 				});
-				yield* runner.exec("npm", ["install"], options);
+				yield* run("npm", ["install"]);
 				return;
 		}
 	});
@@ -286,10 +297,10 @@ export const program = Effect.gen(function* () {
 			yield* Range.parse(value).pipe(
 				Effect.mapError(
 					(e) =>
-						new ActionInputError({
-							inputName,
+						new InvalidInputError({
+							field: inputName,
 							reason: `Invalid semver range: ${String(e)}`,
-							rawValue: value,
+							value,
 						}),
 				),
 			);
@@ -309,10 +320,10 @@ export const program = Effect.gen(function* () {
 		!anyRuntime
 	) {
 		yield* Effect.fail(
-			new ActionInputError({
-				inputName: "config-dependencies",
+			new InvalidInputError({
+				field: "config-dependencies",
 				reason: "At least one update type must be active",
-				rawValue: undefined,
+				value: undefined,
 			}),
 		);
 	}
@@ -321,10 +332,10 @@ export const program = Effect.gen(function* () {
 	const peerOverlap = peerLock.filter((p) => peerMinor.includes(p));
 	if (peerOverlap.length > 0) {
 		yield* Effect.fail(
-			new ActionInputError({
-				inputName: "peer-lock",
+			new InvalidInputError({
+				field: "peer-lock",
 				reason: `Packages appear in both peer-lock and peer-minor: ${peerOverlap.join(", ")}`,
-				rawValue: undefined,
+				value: undefined,
 			}),
 		);
 	}
@@ -338,8 +349,11 @@ export const program = Effect.gen(function* () {
 	}
 
 	// Resolve log level: normal (info) or debug when step debug logging is
-	// enabled on the runner (RUNNER_DEBUG=1 via ACTIONS_STEP_DEBUG).
-	const effectLogLevel = Action.resolveLogLevel("auto") === "debug" ? "Debug" : "Info";
+	// enabled on the runner (RUNNER_DEBUG=1 via ACTIONS_STEP_DEBUG). The kit has
+	// no Action.resolveLogLevel — ActionEnvironment.isDebug is the seam that
+	// reads the runner flag.
+	const env = yield* ActionEnvironment;
+	const effectLogLevel = (yield* env.isDebug) ? "Debug" : "Info";
 
 	yield* Effect.logDebug("Debug mode enabled - verbose logging active");
 	yield* Effect.logDebug(
@@ -360,8 +374,7 @@ export const program = Effect.gen(function* () {
 
 	// Read head SHA and run the main workflow. The GitHub App installation token
 	// was provisioned in the pre phase and is read back inside the app layer via
-	// GitHubToken.client(); no token plumbing happens here.
-	const env = yield* ActionEnvironment;
+	// GitHubToken.clientLayer(); no token plumbing happens here.
 	const github = yield* env.github;
 	const headSha = github.sha;
 
@@ -457,7 +470,7 @@ export const innerProgram = (
 			// Create check run for visibility
 			const checkRunName = dryRun ? "Dependency Updates (Dry Run)" : "Dependency Updates";
 
-			yield* checkRunService.withCheckRun(checkRunName, headSha, (checkRunId) =>
+			yield* checkRunService.withCheckRun(checkRunName, headSha, (_checkRunId, conclude) =>
 				Effect.provide(
 					Effect.gen(function* () {
 						// Detect the package manager once, up front: every dispatch below
@@ -795,10 +808,13 @@ export const innerProgram = (
 
 								const failureDetails = runCommandsResult.failed.map((f) => `- \`${f.command}\`: ${f.error}`).join("\n");
 
-								yield* checkRunService.complete(checkRunId, "failure", {
-									title: "Custom Commands Failed",
-									summary: `Custom commands failed:\n\n${failureDetails}`,
-								});
+								yield* conclude(
+									"failure",
+									CheckRunOutput.make({
+										title: "Custom Commands Failed",
+										summary: `Custom commands failed:\n\n${failureDetails}`,
+									}),
+								);
 
 								yield* outputs.set("has-changes", "false");
 								yield* outputs.set("updates-count", "0");
@@ -846,14 +862,10 @@ export const innerProgram = (
 						// (mode 100644), so treating them as changes would otherwise produce
 						// an empty commit and a spurious PR. This must stay consistent with
 						// BranchManager.commitChanges, which queries status the same way.
-						const runner = yield* CommandRunner;
-						const statusResult = yield* runner.execCapture("git", [
-							"-c",
-							"core.fileMode=false",
-							"status",
-							"--porcelain",
-						]);
-						const changedLines = statusResult.stdout.trim().length > 0 ? statusResult.stdout.trim().split("\n") : [];
+						const statusOut = yield* Run.text(
+							ChildProcess.make("git", ["-c", "core.fileMode=false", "status", "--porcelain"]),
+						);
+						const changedLines = statusOut.length > 0 ? statusOut.split("\n") : [];
 						const hasChanges = changedLines.length > 0;
 						yield* Effect.logDebug(`Git status has changes: ${hasChanges}`);
 
@@ -866,10 +878,13 @@ export const innerProgram = (
 								"Step: changes — SKIPPED: no changes detected; changesets, commit and pull request steps do not run",
 							);
 
-							yield* checkRunService.complete(checkRunId, "neutral", {
-								title: "No Updates",
-								summary: "No dependency updates available. All dependencies are up-to-date.",
-							});
+							yield* conclude(
+								"neutral",
+								CheckRunOutput.make({
+									title: "No Updates",
+									summary: "No dependency updates available. All dependencies are up-to-date.",
+								}),
+							);
 
 							yield* outputs.set("has-changes", "false");
 							yield* outputs.set("updates-count", "0");
@@ -965,10 +980,13 @@ export const innerProgram = (
 
 						// Update check run
 						const summaryText = report.generateSummary(allUpdates, changesetFiles, pr, dryRun, configDeltas);
-						yield* checkRunService.complete(checkRunId, "success", {
-							title: "Dependency Updates Complete",
-							summary: summaryText,
-						});
+						yield* conclude(
+							"success",
+							CheckRunOutput.make({
+								title: "Dependency Updates Complete",
+								summary: summaryText,
+							}),
+						);
 
 						// Set outputs
 						yield* outputs.set("has-changes", "true");

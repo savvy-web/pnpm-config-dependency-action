@@ -10,10 +10,10 @@
  */
 
 import { existsSync, writeFileSync } from "node:fs";
+import type { NpmRegistryShape, PublishedVersion } from "@effected/npm";
+import { NpmRegistry } from "@effected/npm";
 import { Yaml } from "@effected/yaml";
-import type { NpmRegistryShape } from "@savvy-web/github-action-effects";
-import { NpmRegistry } from "@savvy-web/github-action-effects";
-import { Context, Effect, Layer } from "effect";
+import { Context, Effect, Layer, Option } from "effect";
 
 import { FileSystemError } from "../errors/errors.js";
 import type { DependencyUpdateResult } from "../schemas/domain.js";
@@ -57,13 +57,13 @@ export const ConfigDepsLive = Layer.effect(
  * (rather than failing) when the registry query errors.
  */
 const queryVersions = (packageName: string, registry: NpmRegistryShape): Effect.Effect<ReadonlyArray<string>> =>
-	registry.getVersions(packageName).pipe(Effect.catch(() => Effect.succeed([] as ReadonlyArray<string>)));
+	registry.versions(packageName).pipe(Effect.catch(() => Effect.succeed([] as ReadonlyArray<string>)));
 
 /**
  * Query npm for the integrity hash of a specific package version.
  *
  * Returns the `sha512-...` integrity string, or `null` when the registry query
- * fails or the version has no published integrity.
+ * fails, the version is unpublished, or it has no published integrity.
  */
 const queryIntegrity = (
 	packageName: string,
@@ -71,21 +71,21 @@ const queryIntegrity = (
 	registry: NpmRegistryShape,
 ): Effect.Effect<string | null> =>
 	Effect.gen(function* () {
-		const info = yield* registry.getPackageInfo(packageName, version).pipe(
+		const info = yield* registry.version(packageName, version).pipe(
 			Effect.catch((error) =>
 				Effect.gen(function* () {
 					yield* Effect.logWarning(
-						`queryIntegrity: npm registry query failed for ${packageName}@${version}: ${JSON.stringify({ pkg: error.pkg, operation: error.operation, reason: error.reason })}`,
+						`queryIntegrity: npm registry query failed for ${packageName}@${version}: ${JSON.stringify({ pkg: error.package, kind: error.kind, registry: error.registry })}`,
 					);
-					return null;
+					return Option.none<PublishedVersion>();
 				}),
 			),
 		);
-		if (!info?.integrity) {
+		if (Option.isNone(info) || info.value.integrity === undefined) {
 			yield* Effect.logWarning(`queryIntegrity: no integrity for ${packageName}@${version}`);
 			return null;
 		}
-		return info.integrity;
+		return info.value.integrity;
 	});
 
 // ══════════════════════════════════════════════════════════════════════════════

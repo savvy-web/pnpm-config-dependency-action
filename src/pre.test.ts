@@ -1,57 +1,63 @@
 /**
  * Fixture tests for the pre-action Effect program.
  *
- * Drives `pre` against the in-memory `@savvy-web/github-action-effects` test
- * layers. `pre` calls `GitHubToken.provision` with required scopes, so the
- * minted test token's `permissions` must grant them or `provision` fails with
+ * Drives `pre` against in-memory doubles for the action runtime. `pre` calls
+ * `GitHubToken.provision` with required scopes, so the minted test token's
+ * `permissions` must grant them or `provision` fails with
  * `TokenPermissionError`.
  */
 
-import type {
-	ActionOutputs,
-	ActionState,
-	ActionStateTestState,
-	GitHubApp,
-	GitHubAppTestState,
-} from "@savvy-web/github-action-effects/testing";
-import { ActionOutputsTest, ActionStateTest, GitHubAppTest } from "@savvy-web/github-action-effects/testing";
-import { ConfigProvider, Effect, Layer } from "effect";
+import type { GitHubApp } from "@effected/github";
+import type { ActionEnvironment, ActionOutputs, ActionState } from "@effected/github-actions";
+import { ActionEnvironment as ActionEnvironmentTag, ActionInput } from "@effected/github-actions";
+import { Effect, Layer } from "effect";
 import { describe, expect, it } from "vitest";
 import { pre } from "./pre.js";
+import type { ActionOutputsRecording, ActionStateRecording, GitHubAppRecording } from "./utils/action-doubles.test.js";
+import {
+	actionOutputsTestLayer,
+	actionStateTestLayer,
+	emptyActionOutputs,
+	emptyActionState,
+	emptyGitHubApp,
+	gitHubAppTestLayer,
+} from "./utils/action-doubles.test.js";
 
 interface Fixtures {
-	stateState: ActionStateTestState;
-	appState: GitHubAppTestState;
-	layer: Layer.Layer<ActionOutputs | ActionState | GitHubApp>;
+	stateState: ActionStateRecording;
+	appState: GitHubAppRecording;
+	outputsState: ActionOutputsRecording;
+	layer: Layer.Layer<ActionOutputs | ActionState | GitHubApp | ActionEnvironment>;
 }
 
 const makeFixtures = (): Fixtures => {
-	const stateState = ActionStateTest.empty();
-	const base = GitHubAppTest.empty();
-	// The default test token grants no permissions; override so provision's
-	// scope verification (contents/pull_requests/checks: write) passes.
-	const appState: GitHubAppTestState = {
-		...base,
-		tokenToReturn: {
-			...base.tokenToReturn,
-			permissions: { contents: "write", pull_requests: "write", checks: "write" },
-		},
-	};
+	const stateState = emptyActionState();
+	const appState = emptyGitHubApp();
+	const outputsState = emptyActionOutputs();
 	const layer = Layer.mergeAll(
-		ActionOutputsTest.layer(ActionOutputsTest.empty()),
-		ActionStateTest.layer(stateState),
-		GitHubAppTest.layer(appState),
+		actionOutputsTestLayer(outputsState),
+		actionStateTestLayer(stateState),
+		gitHubAppTestLayer(appState),
+		// Seeds the twelve GITHUB_*/RUNNER_* variables; `pre` reads
+		// repositoryOwner from here to scope the installation lookup.
+		ActionEnvironmentTag.layerTest(),
 	);
-	return { stateState, appState, layer };
+	return { stateState, appState, outputsState, layer };
 };
 
-const runPre = (fixtures: Fixtures): Promise<void> => {
-	const config = ConfigProvider.fromUnknown({
-		"app-client-id": "test-client-id",
-		"app-private-key": "test-private-key",
-	});
-	return pre.pipe(Effect.provide(fixtures.layer), Effect.provide(ConfigProvider.layer(config)), Effect.runPromise);
-};
+const runPre = (fixtures: Fixtures): Promise<void> =>
+	pre.pipe(
+		Effect.provide(fixtures.layer),
+		// Inputs are Config values read through the ambient provider — never
+		// process.env — so they are injected as a reference override.
+		Effect.provide(
+			ActionInput.layer({
+				"INPUT_APP-CLIENT-ID": "test-client-id",
+				"INPUT_APP-PRIVATE-KEY": "test-private-key",
+			}),
+		),
+		Effect.runPromise,
+	);
 
 describe("pre", () => {
 	it("provisions an installation token", async () => {
@@ -70,5 +76,12 @@ describe("pre", () => {
 		expect(fixtures.stateState.entries.size).toBeGreaterThanOrEqual(2);
 		// The app-client-id input flowed through to provision's token mint.
 		expect(fixtures.appState.generateCalls[0]?.appId).toBe("test-client-id");
+	});
+
+	it("masks the minted token before it is persisted", async () => {
+		const fixtures = makeFixtures();
+		await runPre(fixtures);
+		// GITHUB_STATE is plaintext by protocol, so masking is the only defense.
+		expect(fixtures.outputsState.masked).toContain("ghs_test_token");
 	});
 });

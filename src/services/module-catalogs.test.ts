@@ -9,10 +9,13 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CommandRunner, CommandRunnerError, NpmRegistryTest } from "@savvy-web/github-action-effects";
+import { NodeServices } from "@effect/platform-node";
+import { DEFAULT_REGISTRY, NpmRegistry, RegistryReadError } from "@effected/npm";
 import { Effect, Layer, References } from "effect";
 import { HttpClient, HttpClientError, HttpClientResponse } from "effect/unstable/http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { seededRegistry } from "../utils/fixtures.test.js";
+import { scriptedSpawner } from "../utils/spawner.test.js";
 import { makeTarball } from "./__fixtures__/tarball.js";
 import { fetchModuleCatalogs, resolveEntryPoint } from "./module-catalogs.js";
 
@@ -73,42 +76,22 @@ const httpNotFoundStub = Layer.succeed(
 	),
 );
 
-const realRunner = Layer.succeed(CommandRunner, {
-	exec: (command: string, args: ReadonlyArray<string>) =>
-		Effect.sync(() => {
-			execFileSync(command, [...args]);
-		}),
-	execCapture: () => Effect.succeed({ stdout: "", stderr: "", exitCode: 0 }),
-} as never);
+// The extraction step shells out to a real `tar`, so these run against the
+// real platform spawner rather than a double — a fake cannot prove tar accepts
+// the arguments the service assembles.
+const realRunner = NodeServices.layer;
 
-const failingRunner = Layer.succeed(CommandRunner, {
-	exec: () =>
-		Effect.fail(
-			new CommandRunnerError({
-				command: "tar",
-				args: [],
-				exitCode: 1,
-				stderr: "not a gzip file",
-				reason: "tar failed",
-			}),
-		),
-	execCapture: () => Effect.succeed({ stdout: "", stderr: "", exitCode: 0 }),
-} as never);
+/** A spawner whose every command fails, for the extraction-failure path. */
+const failingRunner = scriptedSpawner(undefined, { exitCode: 1, stdout: "", stderr: "not a gzip file" }).layer;
 
 const registry = (tarball: string | undefined, integrity?: string) =>
-	NpmRegistryTest.layer({
-		packages: new Map([
-			[
-				"@fixture/plugin",
-				{
-					versions: ["1.0.0"],
-					latest: "1.0.0",
-					distTags: { latest: "1.0.0" },
-					...(tarball ? { tarball } : {}),
-					...(integrity ? { integrity } : {}),
-				},
-			],
-		]),
+	seededRegistry({
+		"@fixture/plugin": {
+			version: "1.0.0",
+			versions: ["1.0.0"],
+			...(tarball ? { tarball } : {}),
+			...(integrity ? { integrity } : {}),
+		},
 	});
 
 /** The registry's `sha512-<base64>` integrity string for a tarball's actual bytes. */
@@ -189,7 +172,16 @@ describe("fetchModuleCatalogs", () => {
 
 		const result = await Effect.runPromise(
 			fetchModuleCatalogs("@fixture/missing", "1.0.0").pipe(
-				Effect.provide(Layer.mergeAll(NpmRegistryTest.empty(), httpStub, realRunner)),
+				Effect.provide(
+					Layer.mergeAll(
+						NpmRegistry.layerTest({
+							version: (pkg: string) =>
+								Effect.fail(new RegistryReadError({ kind: "transport", package: pkg, registry: DEFAULT_REGISTRY })),
+						}),
+						httpStub,
+						realRunner,
+					),
+				),
 				Effect.provideService(References.MinimumLogLevel, "None"),
 			),
 		);

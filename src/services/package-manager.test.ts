@@ -3,9 +3,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NodeServices } from "@effect/platform-node";
 import { PackageManagerDetector, WorkspaceRoot } from "@effected/workspaces";
-import { ActionInputError } from "@savvy-web/github-action-effects";
 import { Cause, Effect, Exit, Layer, Option, References } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { InvalidInputError } from "../errors/errors.js";
 import { detectPackageManager } from "./package-manager.js";
 
 let root: string;
@@ -67,7 +67,7 @@ describe("detectPackageManager", () => {
 		expect(result.pm).toBe("npm");
 	});
 
-	it("fails with ActionInputError on yarn", async () => {
+	it("fails with InvalidInputError on yarn", async () => {
 		writeFileSync(
 			join(root, "package.json"),
 			JSON.stringify({ name: "root", workspaces: ["."], packageManager: "yarn@4.10.0" }),
@@ -87,13 +87,13 @@ describe("detectPackageManager", () => {
 		}
 
 		const error = errorOption.value;
-		expect(error).toBeInstanceOf(ActionInputError);
-		if (error instanceof ActionInputError) {
+		expect(error).toBeInstanceOf(InvalidInputError);
+		if (error instanceof InvalidInputError) {
 			expect(error.reason).toContain("Detected yarn");
 		}
 	});
 
-	it("fails with ActionInputError when nothing is detectable", async () => {
+	it("fails with InvalidInputError when nothing is detectable", async () => {
 		const exit = await Effect.runPromiseExit(detect(root));
 
 		if (!Exit.isFailure(exit)) {
@@ -107,6 +107,6 @@ describe("detectPackageManager", () => {
 		}
 
 		const error = errorOption.value;
-		expect(error).toBeInstanceOf(ActionInputError);
+		expect(error).toBeInstanceOf(InvalidInputError);
 	});
 });

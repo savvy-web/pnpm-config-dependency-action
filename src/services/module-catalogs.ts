@@ -23,10 +23,13 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { CommandRunnerShape } from "@savvy-web/github-action-effects";
-import { CommandRunner, NpmRegistry } from "@savvy-web/github-action-effects";
-import { Effect } from "effect";
+import { Run } from "@effected/commands";
+import type { PublishedVersion } from "@effected/npm";
+import { NpmRegistry } from "@effected/npm";
+import { Effect, Option } from "effect";
 import { HttpClient } from "effect/unstable/http";
+import type { ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcess } from "effect/unstable/process";
 import type { CatalogMap } from "../utils/catalogs.js";
 import { normalizeCatalogs } from "../utils/catalogs.js";
 
@@ -168,8 +171,7 @@ const readCatalogsFromTarball = (
 	integrity: string | undefined,
 	dir: string,
 	http: HttpClient.HttpClient,
-	runner: CommandRunnerShape,
-): Effect.Effect<CatalogMap | null> =>
+): Effect.Effect<CatalogMap | null, never, ChildProcessSpawner.ChildProcessSpawner> =>
 	Effect.gen(function* () {
 		const response = yield* http.get(tarballUrl).pipe(Effect.catch(() => Effect.succeed(null)));
 
@@ -230,10 +232,9 @@ const readCatalogsFromTarball = (
 			return null;
 		}
 
-		const extracted = yield* runner.exec("tar", ["-xzf", tarballPath, "-C", dir]).pipe(
-			Effect.as(true),
-			Effect.catch(() => Effect.succeed(false)),
-		);
+		// Run.succeeds collapses a non-zero exit AND a spawn failure to `false`,
+		// which is exactly this best-effort pipeline's contract.
+		const extracted = yield* Run.succeeds(ChildProcess.make("tar", ["-xzf", tarballPath, "-C", dir]));
 
 		if (!extracted) {
 			yield* Effect.logWarning(`fetchModuleCatalogs: failed to extract tarball for ${pkg}@${version}, skipping`);
@@ -284,11 +285,18 @@ const readCatalogsFromTarball = (
 export const fetchModuleCatalogs = (
 	pkg: string,
 	version: string,
-): Effect.Effect<CatalogMap | null, never, NpmRegistry | HttpClient.HttpClient | CommandRunner> =>
+): Effect.Effect<
+	CatalogMap | null,
+	never,
+	NpmRegistry | HttpClient.HttpClient | ChildProcessSpawner.ChildProcessSpawner
+> =>
 	Effect.gen(function* () {
 		const registry = yield* NpmRegistry;
 
-		const info = yield* registry.getPackageInfo(pkg, version).pipe(Effect.catch(() => Effect.succeed(undefined)));
+		const found = yield* registry
+			.version(pkg, version)
+			.pipe(Effect.catch(() => Effect.succeed(Option.none<PublishedVersion>())));
+		const info = Option.getOrUndefined(found);
 
 		if (info?.tarball === undefined) {
 			yield* Effect.logWarning(`fetchModuleCatalogs: ${pkg}@${version} has no published tarball URL, skipping`);
@@ -296,7 +304,6 @@ export const fetchModuleCatalogs = (
 		}
 
 		const http = yield* HttpClient.HttpClient;
-		const runner = yield* CommandRunner;
 
 		const dir = yield* Effect.try({
 			try: () => mkdtempSync(join(tmpdir(), "silk-cfgdep-")),
@@ -313,7 +320,7 @@ export const fetchModuleCatalogs = (
 			return null;
 		}
 
-		return yield* readCatalogsFromTarball(pkg, version, info.tarball, info.integrity, dir, http, runner).pipe(
+		return yield* readCatalogsFromTarball(pkg, version, info.tarball, info.integrity, dir, http).pipe(
 			Effect.ensuring(Effect.sync(() => rmSync(dir, { recursive: true, force: true }))),
 		);
 	});

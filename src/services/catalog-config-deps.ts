@@ -26,11 +26,11 @@
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { NpmRegistry } from "@effected/npm";
 import { LockfileReader } from "@effected/workspaces";
-import type { CommandRunner } from "@savvy-web/github-action-effects";
-import { NpmRegistry } from "@savvy-web/github-action-effects";
 import { Context, Effect, Layer, Option } from "effect";
 import type { HttpClient } from "effect/unstable/http";
+import type { ChildProcessSpawner } from "effect/unstable/process";
 
 import { FileSystemError } from "../errors/errors.js";
 import type { CatalogDelta, DependencyUpdateResult } from "../schemas/domain.js";
@@ -64,15 +64,17 @@ export class CatalogConfigDeps extends Context.Service<
 export const CatalogConfigDepsLive: Layer.Layer<
 	CatalogConfigDeps,
 	never,
-	NpmRegistry | LockfileReader | HttpClient.HttpClient | CommandRunner
+	NpmRegistry | LockfileReader | HttpClient.HttpClient | ChildProcessSpawner.ChildProcessSpawner
 > = Layer.effect(
 	CatalogConfigDeps,
 	Effect.gen(function* () {
 		// The implementation yields `fetchModuleCatalogs`, which carries its own
-		// requirements (NpmRegistry, HttpClient, CommandRunner). Capturing the
+		// requirements (NpmRegistry, HttpClient, ChildProcessSpawner). Capturing the
 		// context here and re-providing it keeps the service method's R = never
 		// without threading each service through by hand.
-		const context = yield* Effect.context<NpmRegistry | LockfileReader | HttpClient.HttpClient | CommandRunner>();
+		const context = yield* Effect.context<
+			NpmRegistry | LockfileReader | HttpClient.HttpClient | ChildProcessSpawner.ChildProcessSpawner
+		>();
 		return {
 			update: (deps, workspaceRoot = process.cwd()) => updateImpl(deps, workspaceRoot).pipe(Effect.provide(context)),
 		};
@@ -268,7 +270,11 @@ const processDep = (
 	manifest: Manifest,
 	catalogs: CatalogMap,
 	owned: CatalogMap,
-): Effect.Effect<DepOutcome, never, NpmRegistry | LockfileReader | HttpClient.HttpClient | CommandRunner> =>
+): Effect.Effect<
+	DepOutcome,
+	never,
+	NpmRegistry | LockfileReader | HttpClient.HttpClient | ChildProcessSpawner.ChildProcessSpawner
+> =>
 	Effect.gen(function* () {
 		const located = findDependency(manifest, name);
 		if (located === null) {
@@ -288,7 +294,7 @@ const processDep = (
 
 		const registry = yield* NpmRegistry;
 		const versions = yield* registry
-			.getVersions(name)
+			.versions(name)
 			.pipe(Effect.catch(() => Effect.succeed([] as ReadonlyArray<string>)));
 
 		if (versions.length === 0) {
@@ -367,7 +373,7 @@ const updateImpl = (
 ): Effect.Effect<
 	CatalogConfigDepsResult,
 	FileSystemError,
-	NpmRegistry | LockfileReader | HttpClient.HttpClient | CommandRunner
+	NpmRegistry | LockfileReader | HttpClient.HttpClient | ChildProcessSpawner.ChildProcessSpawner
 > =>
 	Effect.gen(function* () {
 		if (deps.length === 0) return { updates: [], deltas: [] };

@@ -1,9 +1,10 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { NpmRegistry, NpmRegistryError, NpmRegistryTest } from "@savvy-web/github-action-effects";
+import { DEFAULT_REGISTRY, NpmRegistry, RegistryReadError } from "@effected/npm";
 import { Effect, Layer, References } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { seededRegistry } from "../utils/fixtures.test.js";
 import { PackageManagerUpgrade, PackageManagerUpgradeLive } from "./package-manager-upgrade.js";
 
 // A real sha512 integrity so corepackHashFromIntegrity produces a hash.
@@ -12,26 +13,10 @@ const FAKE_INTEGRITY =
 
 let root: string;
 
-const registry = NpmRegistryTest.layer({
-	packages: new Map([
-		[
-			"pnpm",
-			{
-				versions: ["11.12.0", "11.13.0"],
-				latest: "11.13.0",
-				distTags: { latest: "11.13.0" },
-				integrity: FAKE_INTEGRITY,
-			},
-		],
-		[
-			"bun",
-			{ versions: ["1.3.14", "1.3.16"], latest: "1.3.16", distTags: { latest: "1.3.16" }, integrity: FAKE_INTEGRITY },
-		],
-		[
-			"npm",
-			{ versions: ["10.8.0", "10.9.0"], latest: "10.9.0", distTags: { latest: "10.9.0" }, integrity: FAKE_INTEGRITY },
-		],
-	]),
+const registry = seededRegistry({
+	pnpm: { version: "11.13.0", versions: ["11.12.0", "11.13.0"], integrity: FAKE_INTEGRITY },
+	bun: { version: "1.3.16", versions: ["1.3.14", "1.3.16"], integrity: FAKE_INTEGRITY },
+	npm: { version: "10.9.0", versions: ["10.8.0", "10.9.0"], integrity: FAKE_INTEGRITY },
 });
 
 const runWith = <A>(
@@ -357,10 +342,8 @@ describe("PackageManagerUpgrade", () => {
 	it("writes bare version (no hash) for a corepack-managed pm when integrity is unavailable", async () => {
 		writePkg({ name: "root", packageManager: "pnpm@11.12.0" });
 
-		const noIntegrityRegistry = NpmRegistryTest.layer({
-			packages: new Map([
-				["pnpm", { versions: ["11.12.0", "11.13.0"], latest: "11.13.0", distTags: { latest: "11.13.0" } }],
-			]),
+		const noIntegrityRegistry = seededRegistry({
+			pnpm: { version: "11.13.0", versions: ["11.12.0", "11.13.0"] },
 		});
 
 		const result = await runWith((s) => s.upgrade("true", "pnpm", root), noIntegrityRegistry);
@@ -382,8 +365,8 @@ describe("PackageManagerUpgrade", () => {
 				const base = yield* NpmRegistry;
 				return {
 					...base,
-					getPackageInfo: (pkg: string) =>
-						Effect.fail(new NpmRegistryError({ pkg, operation: "view" as const, reason: "boom" })),
+					version: (pkg: string) =>
+						Effect.fail(new RegistryReadError({ kind: "transport", package: pkg, registry: DEFAULT_REGISTRY })),
 				};
 			}),
 		).pipe(Layer.provide(registry));
@@ -398,19 +381,19 @@ describe("PackageManagerUpgrade", () => {
 		expect(pkg.packageManager).toBe("pnpm@11.13.0");
 	});
 
-	it("never queries getPackageInfo for a non-corepack-managed pm (bun)", async () => {
+	it("never queries the registry for a version of a non-corepack-managed pm (bun)", async () => {
 		writePkg({ name: "root", packageManager: "bun@1.3.14" });
 
-		let getPackageInfoCalls = 0;
+		let versionQueries = 0;
 		const countingRegistry = Layer.effect(
 			NpmRegistry,
 			Effect.gen(function* () {
 				const base = yield* NpmRegistry;
 				return {
 					...base,
-					getPackageInfo: (pkg: string, version?: string, options?: { readonly registry?: string }) => {
-						getPackageInfoCalls++;
-						return base.getPackageInfo(pkg, version, options);
+					version: (pkg: string, version: string, target?: Parameters<typeof base.version>[2]) => {
+						versionQueries++;
+						return base.version(pkg, version, target);
 					},
 				};
 			}),
@@ -422,7 +405,7 @@ describe("PackageManagerUpgrade", () => {
 		if (result.applied) {
 			expect(result.to).toBe("1.3.16");
 		}
-		expect(getPackageInfoCalls).toBe(0);
+		expect(versionQueries).toBe(0);
 	});
 
 	it("parses an existing hash-pinned packageManager reference", async () => {
@@ -475,7 +458,14 @@ describe("PackageManagerUpgrade", () => {
 	it("maps a registry versions-query failure to FileSystemError", async () => {
 		writePkg({ name: "root", packageManager: "pnpm@11.12.0" });
 
-		const result = await runEither((s) => s.upgrade("true", "pnpm", root), NpmRegistryTest.empty());
+		// A FAILING query, not an empty registry: an empty one is a successful
+		// "no such package" answer and takes the unsatisfiable path instead.
+		const failingVersions = NpmRegistry.layerTest({
+			versions: (pkg: string) =>
+				Effect.fail(new RegistryReadError({ kind: "transport", package: pkg, registry: DEFAULT_REGISTRY })),
+		});
+
+		const result = await runEither((s) => s.upgrade("true", "pnpm", root), failingVersions);
 
 		expect(result._tag).toBe("Failure");
 		if (result._tag === "Failure") {

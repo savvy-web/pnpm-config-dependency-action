@@ -2,8 +2,8 @@
  * Tests for CatalogConfigDeps.
  *
  * The fetch path is exercised end to end: real gzipped tarballs on disk, a
- * `tar` extraction through a real `CommandRunner`, and a real dynamic import of
- * the extracted entry module. Only the network (`HttpClient`), the registry
+ * `tar` extraction through the real platform spawner, and a real dynamic import
+ * of the extracted entry module. Only the network (`HttpClient`), the registry
  * (`NpmRegistry`) and the lockfile (`LockfileReader`) are stubbed.
  *
  * @module services/catalog-config-deps.test
@@ -13,11 +13,12 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { NodeServices } from "@effect/platform-node";
 import { LockfileReadError, LockfileReader } from "@effected/workspaces";
-import { CommandRunner, NpmRegistry, NpmRegistryError } from "@savvy-web/github-action-effects";
 import { Effect, Exit, Layer, Option, References } from "effect";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { seededRegistry } from "../utils/fixtures.test.js";
 import { makeTarball } from "./__fixtures__/tarball.js";
 import { CatalogConfigDeps, CatalogConfigDepsLive } from "./catalog-config-deps.js";
 
@@ -74,48 +75,32 @@ const httpStub = Layer.succeed(
 	}),
 );
 
-const realRunner = Layer.succeed(CommandRunner, {
-	exec: (command: string, args: ReadonlyArray<string>) =>
-		Effect.sync(() => {
-			execFileSync(command, [...args]);
-		}),
-	execCapture: () => Effect.succeed({ stdout: "", stderr: "", exitCode: 0 }),
-} as never);
+// The extraction shells out to a real `tar`, so this is the real platform
+// spawner rather than a double.
+const realRunner = NodeServices.layer;
 
 /**
- * A registry stub with a per-version tarball URL.
+ * A registry with a per-version tarball URL.
  *
- * The library's `NpmRegistryTest` layer carries one tarball URL per package, not
- * per version (`getPackageInfo` returns the package entry's `tarball` whatever
- * version it is asked for), so it cannot serve the base and next versions of the
- * same package as two different tarballs — which is the whole point of the
- * three-way merge. Hence a hand-rolled stub here.
+ * The kit's seed is keyed by `(registry, name, version)`, so the base and next
+ * versions of one package serve two different tarballs — which is the whole
+ * point of the three-way merge. The predecessor's double carried one tarball
+ * per package regardless of the version asked for, which is why this file used
+ * to hand-roll a `Layer.succeed(NpmRegistry, …)` here.
  */
 const registry = (packages: Record<string, ReadonlyArray<string>>) =>
-	Layer.succeed(NpmRegistry, {
-		getVersions: (pkg: string) => {
-			const versions = packages[pkg];
-			return versions === undefined
-				? Effect.fail(new NpmRegistryError({ pkg, operation: "versions", reason: "not found" }))
-				: Effect.succeed(versions);
-		},
-		getPackageInfo: (pkg: string, version?: string) => {
-			const versions = packages[pkg];
-			if (versions === undefined) {
-				return Effect.fail(new NpmRegistryError({ pkg, operation: "view", reason: "not found" }));
-			}
-			const resolved = version ?? versions[versions.length - 1];
-			return Effect.succeed({
-				name: pkg,
-				version: resolved,
-				distTags: {},
-				tarball: tarballUrl(pkg, resolved),
-			});
-		},
-		getLatestVersion: () => Effect.die("not used"),
-		getDistTags: () => Effect.die("not used"),
-		getPublishedIntegrity: () => Effect.succeed(Option.none()),
-	} as never);
+	seededRegistry(
+		Object.fromEntries(
+			Object.entries(packages).map(([pkg, versions]) => [
+				pkg,
+				{
+					version: versions[versions.length - 1] ?? "0.0.0",
+					versions,
+					perVersion: Object.fromEntries(versions.map((v) => [v, { tarball: tarballUrl(pkg, v) }])),
+				},
+			]),
+		),
+	);
 
 /**
  * The versions the lockfile says are installed — the merge bases, keyed by
@@ -438,7 +423,12 @@ describe("CatalogConfigDeps", () => {
 			devDependencies: { [PKG]: "^0.23.0" },
 		});
 
-		const result = await run([PKG], ["1.0.0"], null);
+		// 0.23.0 is listed as published (with no tarball built, so the fetch 404s)
+		// because the seeded registry only serves versions it actually knows —
+		// unlike the hand-rolled stub this replaces, which fabricated a tarball URL
+		// for any version asked for, including unpublished ones. `next` still
+		// resolves to 1.0.0: the widened `>=0.23.0 <2.0.0` range prefers it.
+		const result = await run([PKG], ["0.23.0", "1.0.0"], null);
 
 		expect(readPkg().devDependencies[PKG]).toBe("^1.0.0");
 		expect(readPkg().catalogs.silk.effect).toBe("^3.21.4");

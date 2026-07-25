@@ -1,61 +1,86 @@
-import type { CommandResponse, GitBranchTestState } from "@savvy-web/github-action-effects";
-import {
-	CommandRunnerTest,
-	GitBranch,
-	GitBranchError,
-	GitBranchTest,
-	GitCommitTest,
-} from "@savvy-web/github-action-effects";
+import type { FileChange, Repo } from "@effected/github";
+import { GitBranch, GitCommit, GitHubError, RepoRef, Repo as RepoTag } from "@effected/github";
 import { Effect, Layer, References, Result } from "effect";
 import { describe, expect, it } from "vitest";
+import type { ScriptedResponse } from "../utils/spawner.test.js";
+import { scriptedSpawner } from "../utils/spawner.test.js";
 import { BranchManager, BranchManagerLive } from "./branch.js";
 
-/**
- * Create a GitBranch test layer with optional initial branches.
- */
-const makeTestBranchLayer = (
-	branches?: Map<string, string>,
-): { state: GitBranchTestState; layer: Layer.Layer<GitBranch> } => {
-	const state = GitBranchTest.empty();
-	if (branches) {
-		for (const [name, sha] of branches) {
-			state.branches.set(name, sha);
-		}
-	}
-	return { state, layer: GitBranchTest.layer(state) };
-};
+/** Every resource method resolves `Repo` per call, so tests provide one. */
+const repoLayer = RepoTag.layer(RepoRef.make({ owner: "test", repo: "repo" }));
+
+interface BranchState {
+	branches: Map<string, string>;
+}
 
 /**
- * Create a CommandRunner test layer with optional command responses.
+ * A `GitBranch` double over an in-memory ref map.
+ *
+ * Only the members `BranchManager` reaches are stubbed — `sha`, `exists` and
+ * `upsert`. Any other member dies naming itself, which is what proves the
+ * service touches nothing else.
  */
-const makeTestCommandLayer = (responses?: ReadonlyMap<string, CommandResponse>) => {
-	if (responses) {
-		return CommandRunnerTest.layer(responses);
-	}
-	return CommandRunnerTest.empty();
-};
+const branchDouble = (state: BranchState, overrides: Parameters<typeof GitBranch.layerTest>[0] = {}) =>
+	GitBranch.layerTest({
+		sha: (name) => {
+			const sha = state.branches.get(name);
+			return sha === undefined
+				? Effect.fail(new GitHubError({ kind: "notFound", operation: "git.getRef", reason: "Branch not found" }))
+				: Effect.succeed(sha);
+		},
+		exists: (name) => Effect.succeed(state.branches.has(name)),
+		upsert: (name, sha) =>
+			Effect.sync(() => {
+				const existed = state.branches.has(name);
+				state.branches.set(name, sha);
+				return existed ? ("reset" as const) : ("created" as const);
+			}),
+		...overrides,
+	});
+
+interface RecordedCommit {
+	branch: string;
+	message: string;
+	changes: ReadonlyArray<FileChange>;
+}
+
+interface CommitState {
+	commits: Array<RecordedCommit>;
+}
+
+/** A `GitCommit` double recording what `commitFiles` was asked to write. */
+const commitDouble = (state: CommitState) =>
+	GitCommit.layerTest({
+		commitFiles: ({ branch, message, changes }) =>
+			Effect.sync(() => {
+				state.commits.push({ branch, message, changes });
+				return `commit-sha-${state.commits.length}`;
+			}),
+	});
 
 /**
  * Run an effect that uses BranchManager with test layers.
  */
 const runWithBranchManager = <A, E>(
-	effect: Effect.Effect<A, E, BranchManager>,
+	effect: Effect.Effect<A, E, BranchManager | Repo>,
 	branches?: Map<string, string>,
-	responses?: ReadonlyMap<string, CommandResponse>,
+	responses?: ReadonlyMap<string, ScriptedResponse>,
 ) => {
-	const { state, layer: branchLayer } = makeTestBranchLayer(branches);
-	const cmdLayer = makeTestCommandLayer(responses);
-	const commitState = GitCommitTest.empty();
-	const commitLayer = GitCommitTest.layer(commitState);
+	const state: BranchState = { branches: new Map(branches ?? []) };
+	const commitState: CommitState = { commits: [] };
+	const spawner = scriptedSpawner(responses);
 
-	const serviceLayer = BranchManagerLive.pipe(Layer.provide(Layer.mergeAll(branchLayer, commitLayer, cmdLayer)));
+	const serviceLayer = BranchManagerLive.pipe(
+		Layer.provide(Layer.mergeAll(branchDouble(state), commitDouble(commitState), spawner.layer)),
+	);
 
 	return {
 		state,
 		commitState,
+		spawner,
 		result: Effect.runPromise(
 			Effect.result(effect).pipe(
-				Effect.provide(serviceLayer),
+				Effect.provide(Layer.merge(serviceLayer, repoLayer)),
 				Effect.provideService(References.MinimumLogLevel, "None"),
 			),
 		),
@@ -111,46 +136,20 @@ describe("BranchManager.manage", () => {
 		expect(state.branches.get("pnpm/config")).toBe("main-sha-456");
 	});
 
-	it("continues even if delete branch fails", async () => {
-		const branchState: GitBranchTestState = {
-			branches: new Map([
-				["main", "main-sha"],
-				["pnpm/config", "old-sha"],
-			]),
-		};
-		const branchLayer = Layer.succeed(GitBranch, {
-			create: (name, sha) =>
-				Effect.sync(() => {
-					branchState.branches.set(name, sha);
-				}),
-			exists: (name) => Effect.succeed(branchState.branches.has(name)),
-			delete: () =>
-				Effect.fail(
-					new GitBranchError({
-						branch: "pnpm/config",
-						operation: "delete",
-						reason: "Not found",
-					}),
-				),
-			getSha: (name) => {
-				const sha = branchState.branches.get(name);
-				if (sha) return Effect.succeed(sha);
-				return Effect.fail(
-					new GitBranchError({
-						branch: name,
-						operation: "get",
-						reason: "Branch not found",
-					}),
-				);
-			},
-			reset: (_name, _sha) => Effect.void,
+	it("propagates a failure from upsert", async () => {
+		// The old delete-and-recreate had a tolerated delete failure; upsert has
+		// no separate delete step, so the failure that remains is upsert's own and
+		// it must NOT be swallowed — a branch that could not be reset means the
+		// run would push onto stale state.
+		const state = { branches: new Map([["main", "main-sha"]]) };
+		const failingBranch = branchDouble(state, {
+			upsert: () =>
+				Effect.fail(new GitHubError({ kind: "rejected", operation: "git.updateRef", reason: "protected branch" })),
 		});
-
-		const cmdLayer = CommandRunnerTest.empty();
-		const commitState = GitCommitTest.empty();
-		const commitLayer = GitCommitTest.layer(commitState);
-
-		const serviceLayer = BranchManagerLive.pipe(Layer.provide(Layer.mergeAll(branchLayer, commitLayer, cmdLayer)));
+		const spawner = scriptedSpawner();
+		const serviceLayer = BranchManagerLive.pipe(
+			Layer.provide(Layer.mergeAll(failingBranch, commitDouble({ commits: [] }), spawner.layer)),
+		);
 
 		const either = await Effect.runPromise(
 			Effect.result(
@@ -158,10 +157,16 @@ describe("BranchManager.manage", () => {
 					const manager = yield* BranchManager;
 					return yield* manager.manage("pnpm/config", "main");
 				}),
-			).pipe(Effect.provide(serviceLayer), Effect.provideService(References.MinimumLogLevel, "None")),
+			).pipe(
+				Effect.provide(Layer.merge(serviceLayer, repoLayer)),
+				Effect.provideService(References.MinimumLogLevel, "None"),
+			),
 		);
 
-		expect(Result.isSuccess(either)).toBe(true);
+		expect(Result.isFailure(either)).toBe(true);
+		if (Result.isFailure(either)) {
+			expect((either.failure as GitHubError).kind).toBe("rejected");
+		}
 	});
 
 	it("defaults to 'main' when no default branch specified", async () => {
@@ -185,7 +190,7 @@ describe("BranchManager.manage", () => {
 
 describe("BranchManager.commitChanges", () => {
 	it("returns early when there are no changes", async () => {
-		const responses = new Map<string, CommandResponse>([
+		const responses = new Map<string, ScriptedResponse>([
 			["git -c core.fileMode=false status --porcelain", { exitCode: 0, stdout: "", stderr: "" }],
 		]);
 
@@ -206,7 +211,7 @@ describe("BranchManager.commitChanges", () => {
 	});
 
 	it("commits changed files via GitHub API", async () => {
-		const responses = new Map<string, CommandResponse>([
+		const responses = new Map<string, ScriptedResponse>([
 			[
 				"git -c core.fileMode=false status --porcelain",
 				{
@@ -231,19 +236,18 @@ describe("BranchManager.commitChanges", () => {
 		const either = await result;
 
 		expect(Result.isSuccess(either)).toBe(true);
-		// A tree and commit should have been created via commitFiles
-		expect(commitState.trees.length).toBeGreaterThanOrEqual(1);
+		// commitFiles is a single call in the kit: tree, commit and ref update all
+		// happen behind it, so the assertion is on what it was asked to write.
 		expect(commitState.commits).toHaveLength(1);
 		expect(commitState.commits[0].message).toBe("chore: update deps");
-		// commitFiles uses `parent-of-<branch>` as parent in test state
-		expect(commitState.commits[0].parentShas).toEqual(["parent-of-pnpm/config"]);
-		// Ref should have been updated (commitFiles records the branch name directly)
-		expect(commitState.refUpdates).toHaveLength(1);
-		expect(commitState.refUpdates[0].ref).toBe("pnpm/config");
+		expect(commitState.commits[0].branch).toBe("pnpm/config");
+		expect(commitState.commits[0].changes).toEqual([
+			{ _tag: "FileContent", path: "package.json", content: expect.any(String) },
+		]);
 	});
 
 	it("handles deleted files with sha: null", async () => {
-		const responses = new Map<string, CommandResponse>([
+		const responses = new Map<string, ScriptedResponse>([
 			[
 				"git -c core.fileMode=false status --porcelain",
 				{
@@ -268,14 +272,13 @@ describe("BranchManager.commitChanges", () => {
 		const either = await result;
 
 		expect(Result.isSuccess(either)).toBe(true);
-		// Should have created a tree with the deletion entry
-		expect(commitState.trees).toHaveLength(1);
-		expect(commitState.trees[0].entries).toEqual([{ path: "deleted-file.ts", mode: "100644", sha: null }]);
+		// A deletion is its own tagged member now, not a `sha: null` sentinel.
 		expect(commitState.commits).toHaveLength(1);
+		expect(commitState.commits[0].changes).toEqual([{ _tag: "FileDeletion", path: "deleted-file.ts" }]);
 	});
 
 	it("skips unreadable files gracefully", async () => {
-		const responses = new Map<string, CommandResponse>([
+		const responses = new Map<string, ScriptedResponse>([
 			[
 				"git -c core.fileMode=false status --porcelain",
 				{
@@ -310,7 +313,7 @@ describe("BranchManager.commitChanges", () => {
 		// 100644 yields an empty tree-diff — an empty commit + spurious PR.
 		// commitChanges must query status with core.fileMode=false so a mode-only
 		// dirty tree is treated as no change.
-		const responses = new Map<string, CommandResponse>([
+		const responses = new Map<string, ScriptedResponse>([
 			// Mode-sensitive status (the buggy path) would surface a real, readable
 			// file as modified purely because of an executable-bit flip.
 			["git status --porcelain", { exitCode: 0, stdout: " M package.json\n", stderr: "" }],
@@ -335,7 +338,6 @@ describe("BranchManager.commitChanges", () => {
 		expect(Result.isSuccess(either)).toBe(true);
 		// No commit should be created from a mode-only change.
 		expect(commitState.commits).toHaveLength(0);
-		expect(commitState.trees).toHaveLength(0);
 	});
 });
 
@@ -367,7 +369,7 @@ describe("BranchManager.validateBranches", () => {
 		expect(Result.isSuccess(await result)).toBe(true);
 	});
 
-	it("fails with ActionInputError when source branch is missing", async () => {
+	it("fails with InvalidInputError when source branch is missing", async () => {
 		const branches = new Map([["main", "main-sha"]]);
 		const { result } = runWithBranchManager(
 			Effect.gen(function* () {
@@ -379,12 +381,12 @@ describe("BranchManager.validateBranches", () => {
 		const either = await result;
 		expect(Result.isFailure(either)).toBe(true);
 		if (Result.isFailure(either)) {
-			expect(either.failure._tag).toBe("ActionInputError");
-			expect((either.failure as { inputName: string }).inputName).toBe("source-branch");
+			expect(either.failure._tag).toBe("InvalidInputError");
+			expect((either.failure as { field: string }).field).toBe("source-branch");
 		}
 	});
 
-	it("fails with ActionInputError when target branch is missing", async () => {
+	it("fails with InvalidInputError when target branch is missing", async () => {
 		const branches = new Map([["dev", "dev-sha"]]);
 		const { result } = runWithBranchManager(
 			Effect.gen(function* () {
@@ -396,8 +398,8 @@ describe("BranchManager.validateBranches", () => {
 		const either = await result;
 		expect(Result.isFailure(either)).toBe(true);
 		if (Result.isFailure(either)) {
-			expect(either.failure._tag).toBe("ActionInputError");
-			expect((either.failure as { inputName: string }).inputName).toBe("target-branch");
+			expect(either.failure._tag).toBe("InvalidInputError");
+			expect((either.failure as { field: string }).field).toBe("target-branch");
 		}
 	});
 });
@@ -406,7 +408,7 @@ describe("BranchManager.ensureBaseHistory", () => {
 	it("is a no-op when the merge-base already resolves (no fetch)", async () => {
 		// merge-base succeeds → the base history is present, so no fetch commands
 		// need be mapped; an unmapped fetch would surface if the code fetched anyway.
-		const responses = new Map<string, CommandResponse>([
+		const responses = new Map<string, ScriptedResponse>([
 			["git merge-base main HEAD", { exitCode: 0, stdout: "abc123\n", stderr: "" }],
 		]);
 		const { result } = runWithBranchManager(
@@ -423,7 +425,7 @@ describe("BranchManager.ensureBaseHistory", () => {
 	it("fetches and deepens, then succeeds (warns) when the base is unavailable", async () => {
 		// merge-base never resolves → the fallback fetch/unshallow/branch path runs
 		// and the effect still succeeds (best-effort, non-fatal — it warns).
-		const responses = new Map<string, CommandResponse>([
+		const responses = new Map<string, ScriptedResponse>([
 			["git merge-base main HEAD", { exitCode: 1, stdout: "", stderr: "no merge base" }],
 			["git fetch origin +refs/heads/main:refs/remotes/origin/main", { exitCode: 0, stdout: "", stderr: "" }],
 			["git rev-parse --is-shallow-repository", { exitCode: 0, stdout: "true\n", stderr: "" }],

@@ -4,10 +4,10 @@ import { join } from "node:path";
 import { ReleaseAgeGate } from "@effected/npm";
 import type { WorkspacePackage } from "@effected/workspaces";
 import { WorkspaceDiscovery, WorkspaceDiscoveryError } from "@effected/workspaces";
-import { NpmRegistryTest } from "@savvy-web/github-action-effects";
 import { Effect, Layer, References } from "effect";
 import { describe, expect, it } from "vitest";
 import { matchesPattern, parseSpecifier } from "../utils/deps.js";
+import { seededRegistry } from "../utils/fixtures.test.js";
 import { RegularDeps, RegularDepsLive } from "./regular-deps.js";
 import { ReleaseAge, ReleaseAgeNoop } from "./release-age.js";
 
@@ -23,38 +23,6 @@ const writePackageJson = (dir: string, content: Record<string, unknown>) => {
 
 const readPackageJson = (dir: string) => {
 	return JSON.parse(readFileSync(join(dir, "package.json"), "utf-8"));
-};
-
-const makeRegistryState = (
-	packages: Record<string, string | string[]>,
-): Map<
-	string,
-	{
-		versions: string[];
-		latest: string;
-		distTags: Record<string, string>;
-	}
-> => {
-	const map = new Map<
-		string,
-		{
-			versions: string[];
-			latest: string;
-			distTags: Record<string, string>;
-		}
-	>();
-	for (const [name, spec] of Object.entries(packages)) {
-		const versions = Array.isArray(spec) ? spec : [spec];
-		// Treat the highest-listed version as the dist-tag `latest`. Tests pass
-		// versions in ascending order, so the last entry is the newest.
-		const latest = versions[versions.length - 1];
-		map.set(name, {
-			versions,
-			latest,
-			distTags: { latest },
-		});
-	}
-	return map;
 };
 
 /**
@@ -101,9 +69,19 @@ const runWithService = <A, E>(
 	workspacesLayer?: Layer.Layer<WorkspaceDiscovery>,
 	releaseAge: Layer.Layer<ReleaseAge> = ReleaseAgeNoop,
 ) => {
+	// These suites describe a package as a bare version or a version list; the
+	// shared seeder takes the richer per-version shape.
 	const registryLayer = packages
-		? NpmRegistryTest.layer({ packages: makeRegistryState(packages) })
-		: NpmRegistryTest.empty();
+		? seededRegistry(
+				Object.fromEntries(
+					Object.entries(packages).map(([name, value]) =>
+						typeof value === "string"
+							? [name, { version: value }]
+							: [name, { version: value[value.length - 1] ?? "0.0.0", versions: value }],
+					),
+				),
+			)
+		: seededRegistry({});
 	const wsLayer = workspacesLayer ?? mockWorkspaces([]);
 	const layer = RegularDepsLive.pipe(Layer.provide(Layer.mergeAll(registryLayer, wsLayer, releaseAge)));
 	return Effect.runPromise(
