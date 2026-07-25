@@ -3,8 +3,8 @@ status: current
 module: silk-update-action
 category: architecture
 created: 2026-02-20
-updated: 2026-07-21
-last-synced: 2026-07-21
+updated: 2026-07-24
+last-synced: 2026-07-24
 completeness: 95
 related:
   - ./_index.md
@@ -389,6 +389,8 @@ baseline) — the anchor for DepsRegen's `merge-base(base) → worktree` diff.
   `privatePackages.version`, minus the changeset `ignore` list), applied
   inside DepsRegen. The action no longer re-implements the ignore gate,
   versionable cascade or trigger/informational classification.
+- Specifiers on both sides of the diff resolve through `@effected/workspaces`' importer-scoped `WorkspaceStateSnapshot.resolveIn`, so a `catalog:` specifier whose catalog comes from a config-dependency pnpmfile hook (in neither `pnpm-workspace.yaml` nor the lockfile's `catalogs:` block) still yields a concrete version per side and a real movement emits a row. The workspace-wide `resolve` abstains when importers disagree on a version, so it cannot be used here.
+- Cell text is emitted literally (only `|` and `\` escaped), so `~` specifiers and underscored package names reach the changeset unescaped.
 - `plan` refreshes workspace discovery before its snapshots and gating reads (silk-effects; `@effected/workspaces`' `worktree()` also refreshes), so the diff sees manifests edited earlier in the same run. Without this the memoized discovery cache served pre-update manifests, the worktree snapshot equaled the merge-base snapshot and the step silently wrote 0 changesets.
 
 **Exported helper:**
