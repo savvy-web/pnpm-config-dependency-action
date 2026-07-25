@@ -24,6 +24,7 @@
 		"build:prod": "github-action-builder build && node scripts/assert-native-dynamic-import.mjs",
 		"ci:build": "CI=\"true\" turbo run build:prod --log-order=grouped --output-logs=full --log-prefix=none",
 		"ci:test": "CI=\"true\" vitest run --coverage",
+		"claude": "claude --plugin-dir=../../spencerbeggs/effected/plugin",
 		"lint": "biome check --max-diagnostics=none",
 		"lint:fix": "biome check --write --max-diagnostics=none",
 		"lint:fix:unsafe": "biome check --write --unsafe --max-diagnostics=none",
