@@ -13,7 +13,7 @@ import { join } from "node:path";
 import type { CommandFailedError, CommandOutputError } from "@effected/commands";
 import { Run } from "@effected/commands";
 import { CheckRun, CheckRunOutput } from "@effected/github";
-import { ActionEnvironment, ActionOutputs } from "@effected/github-actions";
+import { ActionEnvironment, ActionInput, ActionOutputs } from "@effected/github-actions";
 import { Range } from "@effected/semver";
 import { WorkspaceDiscovery } from "@effected/workspaces";
 import { Config, Duration, Effect, References } from "effect";
@@ -248,34 +248,46 @@ const formatCatalogCountsCompact = (counts: CatalogActionCounts): string => {
  * pre/post phases — provisioned via `GitHubToken.provision` in `pre.ts` and
  * read here through the app layer's `GitHubToken.client()`.
  */
-/* v8 ignore start -- input parsing + real layer wiring; exercised end-to-end on the runner, not in-process */
-export const program = Effect.gen(function* () {
-	// Parse inputs via Config API
-	yield* Effect.logInfo("Starting Silk Update Action");
-
-	const branch = yield* Config.string("branch").pipe(Config.withDefault("pnpm/config-deps"));
-	const sourceBranch = yield* Config.string("source-branch").pipe(Config.withDefault("main"));
-	const rawTargetBranch = yield* Config.string("target-branch").pipe(Config.withDefault(""));
+/**
+ * Read and validate every action input.
+ *
+ * Split out of {@link program} so the input layer is reachable in-process: it
+ * is the ONLY part of the program that can be exercised without the real
+ * GitHub/layer wiring, and leaving it inline is what let a provider regression
+ * ship green (see `program.inputs.test.ts`).
+ *
+ * Every read goes through `ActionInput`, never bare `Config`. `ActionInput`
+ * derives the runner's mangled variable name (`dependencies` → `INPUT_DEPENDENCIES`)
+ * and treats an empty string as absent; a bare `Config.string("dependencies")`
+ * looks up the literal name `dependencies`, finds nothing under the runner's
+ * environment and silently takes its `withDefault`. That failure is invisible:
+ * every input resolves to its default and the action reports each step as
+ * "not configured" while the workflow plainly configured it.
+ */
+export const readInputs = Effect.gen(function* () {
+	const branch = yield* ActionInput.string("branch").pipe(Config.withDefault("pnpm/config-deps"));
+	const sourceBranch = yield* ActionInput.string("source-branch").pipe(Config.withDefault("main"));
+	const rawTargetBranch = yield* ActionInput.string("target-branch").pipe(Config.withDefault(""));
 	const targetBranch = resolveTargetBranch(rawTargetBranch, sourceBranch);
-	const rawConfigDeps = yield* Config.string("config-dependencies").pipe(Config.withDefault(""));
+	const rawConfigDeps = yield* ActionInput.string("config-dependencies").pipe(Config.withDefault(""));
 	const configDependencies = parseMultiValueInput(rawConfigDeps);
-	const rawDeps = yield* Config.string("dependencies").pipe(Config.withDefault(""));
+	const rawDeps = yield* ActionInput.string("dependencies").pipe(Config.withDefault(""));
 	const dependencies = parseMultiValueInput(rawDeps);
-	const rawPeerLock = yield* Config.string("peer-lock").pipe(Config.withDefault(""));
+	const rawPeerLock = yield* ActionInput.string("peer-lock").pipe(Config.withDefault(""));
 	const peerLock = parseMultiValueInput(rawPeerLock);
-	const rawPeerMinor = yield* Config.string("peer-minor").pipe(Config.withDefault(""));
+	const rawPeerMinor = yield* ActionInput.string("peer-minor").pipe(Config.withDefault(""));
 	const peerMinor = parseMultiValueInput(rawPeerMinor);
-	const rawRun = yield* Config.string("run").pipe(Config.withDefault(""));
+	const rawRun = yield* ActionInput.string("run").pipe(Config.withDefault(""));
 	const run = parseMultiValueInput(rawRun);
-	const upgradePackageManager = yield* Config.string("upgrade-package-manager").pipe(Config.withDefault("true"));
-	const changesets = yield* Config.boolean("changesets").pipe(Config.withDefault(true));
-	const autoMerge = yield* Config.string("auto-merge").pipe(Config.withDefault(""));
-	const dryRun = yield* Config.boolean("dry-run").pipe(Config.withDefault(false));
-	const timeout = yield* Config.int("timeout").pipe(Config.withDefault(180));
-	const rawRuntimeNode = yield* Config.string("upgrade-runtime-node").pipe(Config.withDefault("false"));
-	const rawRuntimeDeno = yield* Config.string("upgrade-runtime-deno").pipe(Config.withDefault("false"));
-	const rawRuntimeBun = yield* Config.string("upgrade-runtime-bun").pipe(Config.withDefault("false"));
-	const runtimeData = yield* Config.string("runtime-data").pipe(Config.withDefault("offline"));
+	const upgradePackageManager = yield* ActionInput.string("upgrade-package-manager").pipe(Config.withDefault("true"));
+	const changesets = yield* ActionInput.boolean("changesets").pipe(Config.withDefault(true));
+	const autoMerge = yield* ActionInput.string("auto-merge").pipe(Config.withDefault(""));
+	const dryRun = yield* ActionInput.boolean("dry-run").pipe(Config.withDefault(false));
+	const timeout = yield* ActionInput.integer("timeout").pipe(Config.withDefault(180));
+	const rawRuntimeNode = yield* ActionInput.string("upgrade-runtime-node").pipe(Config.withDefault("false"));
+	const rawRuntimeDeno = yield* ActionInput.string("upgrade-runtime-deno").pipe(Config.withDefault("false"));
+	const rawRuntimeBun = yield* ActionInput.string("upgrade-runtime-bun").pipe(Config.withDefault("false"));
+	const runtimeData = yield* ActionInput.string("runtime-data").pipe(Config.withDefault("offline"));
 	if (runtimeData !== "offline" && runtimeData !== "live") {
 		yield* Effect.logWarning(`Unknown runtime-data value "${runtimeData}", defaulting to "offline"`);
 	}
@@ -348,6 +360,34 @@ export const program = Effect.gen(function* () {
 		}
 	}
 
+	return {
+		inputs: {
+			branch,
+			sourceBranch,
+			targetBranch,
+			"config-dependencies": configDependencies,
+			dependencies,
+			"peer-lock": peerLock,
+			"peer-minor": peerMinor,
+			"upgrade-package-manager": upgradePackageManager,
+			changesets,
+			"auto-merge": autoMerge as "" | "merge" | "squash" | "rebase",
+			run,
+			runtime: { node: rawRuntimeNode, deno: rawRuntimeDeno, bun: rawRuntimeBun },
+			runtimeData,
+		} satisfies InnerProgramInputs,
+		dryRun,
+		timeout,
+		runtimeLive,
+	};
+});
+
+/* v8 ignore start -- real layer wiring; exercised end-to-end on the runner, not in-process */
+export const program = Effect.gen(function* () {
+	yield* Effect.logInfo("Starting Silk Update Action");
+
+	const { inputs, dryRun, timeout, runtimeLive } = yield* readInputs;
+
 	// Resolve log level: normal (info) or debug when step debug logging is
 	// enabled on the runner (RUNNER_DEBUG=1 via ACTIONS_STEP_DEBUG). The kit has
 	// no Action.resolveLogLevel — ActionEnvironment.isDebug is the seam that
@@ -358,12 +398,12 @@ export const program = Effect.gen(function* () {
 	yield* Effect.logDebug("Debug mode enabled - verbose logging active");
 	yield* Effect.logDebug(
 		`Parsed inputs: ${JSON.stringify({
-			branch,
-			configDependencies,
-			dependencies,
-			peerLock,
-			peerMinor,
-			upgradePackageManager,
+			branch: inputs.branch,
+			configDependencies: inputs["config-dependencies"],
+			dependencies: inputs.dependencies,
+			peerLock: inputs["peer-lock"],
+			peerMinor: inputs["peer-minor"],
+			upgradePackageManager: inputs["upgrade-package-manager"],
 			dryRun,
 		})}`,
 	);
@@ -379,26 +419,7 @@ export const program = Effect.gen(function* () {
 	const headSha = github.sha;
 
 	const appLayer = makeAppLayer(dryRun, { runtimeLive });
-	yield* innerProgram(
-		{
-			branch,
-			sourceBranch,
-			targetBranch,
-			"config-dependencies": configDependencies,
-			dependencies,
-			"peer-lock": peerLock,
-			"peer-minor": peerMinor,
-			"upgrade-package-manager": upgradePackageManager,
-			changesets,
-			"auto-merge": autoMerge as "" | "merge" | "squash" | "rebase",
-			run,
-			runtime: { node: rawRuntimeNode, deno: rawRuntimeDeno, bun: rawRuntimeBun },
-			runtimeData,
-		},
-		dryRun,
-		headSha,
-		appLayer,
-	)
+	yield* innerProgram(inputs, dryRun, headSha, appLayer)
 		.pipe(Effect.provideService(References.MinimumLogLevel, effectLogLevel))
 		.pipe(
 			Effect.timeoutOrElse({
