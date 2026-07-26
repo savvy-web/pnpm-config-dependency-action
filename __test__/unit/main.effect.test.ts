@@ -1,5 +1,4 @@
 import type { ScriptResult } from "@effected/commands";
-import { ScriptedSpawner } from "@effected/commands";
 import { Effect, References } from "effect";
 import { describe, expect, it } from "vitest";
 import { runCommands } from "../../src/program.js";

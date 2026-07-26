@@ -1,5 +1,4 @@
 import type { ScriptResult } from "@effected/commands";
-import { ScriptedSpawner } from "@effected/commands";
 import type { FileChange, Repo } from "@effected/github";
 import { GitBranch, GitCommit, GitHubError, RepoRef, Repo as RepoTag } from "@effected/github";
 import { Effect, Layer, References, Result } from "effect";

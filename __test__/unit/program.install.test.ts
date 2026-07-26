@@ -1,8 +1,6 @@
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ScriptResult } from "@effected/commands";
-import { ScriptedSpawner } from "@effected/commands";
 import { Effect, References } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
 import { runInstall } from "../../src/program.js";

@@ -32,7 +32,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NodeServices } from "@effect/platform-node";
 import type { ScriptResult, SpawnRecord } from "@effected/commands";
-import { ScriptedSpawner } from "@effected/commands";
 import { CheckRun } from "@effected/github";
 import { ActionOutputs } from "@effected/github-actions";
 import type { WorkspacePackage } from "@effected/workspaces";

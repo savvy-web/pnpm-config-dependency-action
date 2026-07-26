@@ -4,14 +4,11 @@
  * @module services/module-catalogs.test
  */
 
-import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NodeServices } from "@effect/platform-node";
-import type { ScriptResult } from "@effected/commands";
-import { ScriptedSpawner } from "@effected/commands";
 import { DEFAULT_REGISTRY, NpmRegistry, RegistryReadError } from "@effected/npm";
 import { Effect, Layer, References } from "effect";
 import { HttpClient, HttpClientError, HttpClientResponse } from "effect/unstable/http";
