@@ -1,8 +1,18 @@
+import type { ScriptResult } from "@effected/commands";
+import { ScriptedSpawner } from "@effected/commands";
 import { Effect, References } from "effect";
 import { describe, expect, it } from "vitest";
 import { runCommands } from "../../src/program.js";
-import type { ScriptedResponse } from "../utils/spawner.js";
-import { scriptedSpawner } from "../utils/spawner.js";
+
+/**
+ * Script a spawner from a map keyed by full command line.
+ *
+ * Thin sugar over `@effected/commands`' `ScriptedSpawner` — the map style is
+ * how these suites already express their fixtures. The fixture itself is the
+ * kit's; this only adapts the lookup.
+ */
+const fromMap = (responses?: ReadonlyMap<string, ScriptResult>, fallback: ScriptResult = {}) =>
+	ScriptedSpawner.make((command, args) => responses?.get([command, ...args].join(" ")) ?? fallback);
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Test Helpers
@@ -15,7 +25,7 @@ import { scriptedSpawner } from "../utils/spawner.js";
  */
 const shLine = (command: string) => `sh -c ${command}`;
 
-const failing = (stderr: string): ScriptedResponse => ({ exitCode: 1, stdout: "", stderr });
+const failing = (stderr: string): ScriptResult => ({ exit: 1, stdout: "", stderr });
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Tests
@@ -23,7 +33,7 @@ const failing = (stderr: string): ScriptedResponse => ({ exitCode: 1, stdout: ""
 
 describe("runCommands", () => {
 	it("returns empty result for empty commands", async () => {
-		const spawner = scriptedSpawner();
+		const spawner = fromMap();
 		const result = await Effect.runPromise(
 			runCommands([]).pipe(Effect.provide(spawner.layer), Effect.provideService(References.MinimumLogLevel, "None")),
 		);
@@ -32,7 +42,7 @@ describe("runCommands", () => {
 	});
 
 	it("runs each command sequentially", async () => {
-		const spawner = scriptedSpawner();
+		const spawner = fromMap();
 
 		const result = await Effect.runPromise(
 			runCommands(["pnpm lint:fix", "pnpm test"]).pipe(
@@ -42,13 +52,13 @@ describe("runCommands", () => {
 		);
 
 		// args[1] of `sh -c` is the actual command.
-		expect(spawner.calls.map((call) => call.args[1])).toEqual(["pnpm lint:fix", "pnpm test"]);
+		expect(spawner.spawns.map((call) => call.args[1])).toEqual(["pnpm lint:fix", "pnpm test"]);
 		expect(result.successful).toEqual(["pnpm lint:fix", "pnpm test"]);
 		expect(result.failed).toEqual([]);
 	});
 
 	it("collects failed commands with error details", async () => {
-		const spawner = scriptedSpawner(new Map([[shLine("pnpm lint:fix"), failing("lint errors")]]));
+		const spawner = fromMap(new Map([[shLine("pnpm lint:fix"), failing("lint errors")]]));
 
 		const result = await Effect.runPromise(
 			runCommands(["pnpm lint:fix"]).pipe(
@@ -64,7 +74,7 @@ describe("runCommands", () => {
 	});
 
 	it("continues after failure (all commands run)", async () => {
-		const spawner = scriptedSpawner(new Map([[shLine("pnpm test"), failing("test fail")]]));
+		const spawner = fromMap(new Map([[shLine("pnpm test"), failing("test fail")]]));
 
 		const result = await Effect.runPromise(
 			runCommands(["pnpm lint", "pnpm test", "pnpm build"]).pipe(

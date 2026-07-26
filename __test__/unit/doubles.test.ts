@@ -13,45 +13,14 @@
 
 import { ActionState } from "@effected/github-actions";
 import { Effect, Option, Schema } from "effect";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { describe, expect, it } from "vitest";
 import { actionStateTestLayer, emptyActionState } from "../utils/action-doubles.js";
 import { configUpdate, regularUpdate } from "../utils/fixtures.js";
-import { scriptedSpawner } from "../utils/spawner.js";
 
 describe("fixtures", () => {
 	it("exports valid fixture types", () => {
 		expect(configUpdate.type).toBe("config");
 		expect(regularUpdate.type).toBe("devDependency");
-	});
-});
-
-describe("scriptedSpawner", () => {
-	it("answers a scripted command and records the call", async () => {
-		const spawner = scriptedSpawner(new Map([["git status", { exitCode: 0, stdout: " M a.ts\n", stderr: "" }]]));
-
-		const out = await Effect.runPromise(
-			Effect.gen(function* () {
-				const service = yield* ChildProcessSpawner.ChildProcessSpawner;
-				return yield* service.string(ChildProcess.make("git", ["status"]));
-			}).pipe(Effect.provide(spawner.layer)),
-		);
-
-		expect(out).toContain("M a.ts");
-		expect(spawner.calls[0]?.line).toBe("git status");
-	});
-
-	it("preserves leading whitespace, which porcelain parsing depends on", async () => {
-		const spawner = scriptedSpawner(new Map([["git status", { exitCode: 0, stdout: " M a.ts\n", stderr: "" }]]));
-
-		const out = await Effect.runPromise(
-			Effect.gen(function* () {
-				const service = yield* ChildProcessSpawner.ChildProcessSpawner;
-				return yield* service.string(ChildProcess.make("git", ["status"]));
-			}).pipe(Effect.provide(spawner.layer)),
-		);
-
-		expect(out.startsWith(" M")).toBe(true);
 	});
 });
 

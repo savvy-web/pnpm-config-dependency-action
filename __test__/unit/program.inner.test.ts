@@ -31,6 +31,8 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NodeServices } from "@effect/platform-node";
+import type { ScriptResult, SpawnRecord } from "@effected/commands";
+import { ScriptedSpawner } from "@effected/commands";
 import { CheckRun } from "@effected/github";
 import { ActionOutputs } from "@effected/github-actions";
 import type { WorkspacePackage } from "@effected/workspaces";
@@ -51,7 +53,16 @@ import { RegularDeps } from "../../src/services/regular-deps.js";
 import { Report } from "../../src/services/report.js";
 import { RuntimeUpgrade } from "../../src/services/runtime-upgrade.js";
 import { seededRegistry } from "../utils/fixtures.js";
-import { scriptedSpawner } from "../utils/spawner.js";
+
+/**
+ * Script a spawner from a map keyed by full command line.
+ *
+ * Thin sugar over `@effected/commands`' `ScriptedSpawner` — the map style is
+ * how these suites already express their fixtures. The fixture itself is the
+ * kit's; this only adapts the lookup.
+ */
+const fromMap = (responses?: ReadonlyMap<string, ScriptResult>, fallback: ScriptResult = {}) =>
+	ScriptedSpawner.make((command, args) => responses?.get([command, ...args].join(" ")) ?? fallback);
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Fixtures
@@ -159,7 +170,7 @@ interface Spies {
 	readonly commitChanges: ReturnType<typeof vi.fn>;
 	readonly createOrUpdatePR: ReturnType<typeof vi.fn>;
 	/** Every spawned command as a flat line, e.g. `pnpm install --frozen-lockfile=false`. */
-	readonly execLines: ReadonlyArray<{ readonly line: string; readonly cwd: string | undefined }>;
+	readonly execLines: ReadonlyArray<SpawnRecord>;
 }
 
 interface HarnessOptions {
@@ -174,7 +185,7 @@ interface HarnessOptions {
 	/** Replace the real package-manager upgrade with a fake returning this outcome. */
 	readonly packageManagerUpgrade?: Effect.Success<typeof PackageManagerUpgrade>["upgrade"];
 	/** Extra scripted command results, keyed by full command line. */
-	readonly commands?: ReadonlyMap<string, { exitCode: number; stdout: string; stderr: string }>;
+	readonly commands?: ReadonlyMap<string, ScriptResult>;
 }
 
 const update = (dependency: string, from: string, to: string): DependencyUpdateResult => ({
@@ -206,13 +217,13 @@ const makeHarness = (options: HarnessOptions = {}) => {
 
 	// `git status --porcelain` is the only command whose OUTPUT the program
 	// reads; everything else is asserted by which command line ran.
-	const spawner = scriptedSpawner(
+	const spawner = fromMap(
 		new Map([
-			["git -c core.fileMode=false status --porcelain", { exitCode: 0, stdout: options.gitStatus ?? "", stderr: "" }],
+			["git -c core.fileMode=false status --porcelain", { exit: 0, stdout: options.gitStatus ?? "", stderr: "" }],
 			...(options.commands ?? new Map()),
 		]),
 	);
-	const execLines = spawner.calls;
+	const execLines = spawner.spawns;
 
 	const spies: Spies = {
 		configDeps: vi.fn(() => Effect.succeed(options.configUpdates ?? [])),
@@ -533,8 +544,12 @@ describe("innerProgram — install gate", () => {
 		const exit = await runInner(harness, baseInputs({ dependencies: ["effect"] }));
 
 		expect(Exit.isSuccess(exit)).toBe(true);
-		expect(harness.spies.execLines.map((call) => call.line)).toContain("pnpm clean --lockfile");
-		expect(harness.spies.execLines.map((call) => call.line)).toContain("pnpm install --frozen-lockfile=false");
+		expect(harness.spies.execLines.map((call) => [call.command, ...call.args].join(" "))).toContain(
+			"pnpm clean --lockfile",
+		);
+		expect(harness.spies.execLines.map((call) => [call.command, ...call.args].join(" "))).toContain(
+			"pnpm install --frozen-lockfile=false",
+		);
 		expect(findLine("Info", "Step: install — pnpm clean --lockfile")).toBeDefined();
 	});
 
@@ -545,7 +560,9 @@ describe("innerProgram — install gate", () => {
 		const exit = await runInner(harness, baseInputs({ dependencies: ["effect"] }));
 
 		expect(Exit.isSuccess(exit)).toBe(true);
-		expect(harness.spies.execLines.map((call) => call.line)).toContain("bun install --force");
+		expect(harness.spies.execLines.map((call) => [call.command, ...call.args].join(" "))).toContain(
+			"bun install --force",
+		);
 		expect(harness.spies.execLines).not.toContain("pnpm install --frozen-lockfile=false");
 	});
 
@@ -556,7 +573,9 @@ describe("innerProgram — install gate", () => {
 		const exit = await runInner(harness, baseInputs({ dependencies: ["effect"] }));
 
 		expect(Exit.isSuccess(exit)).toBe(true);
-		expect(harness.spies.execLines.some((call) => call.line.startsWith("pnpm install"))).toBe(false);
+		expect(
+			harness.spies.execLines.some((call) => [call.command, ...call.args].join(" ").startsWith("pnpm install")),
+		).toBe(false);
 		expect(findLine("Info", "Step: install — SKIPPED", "nothing to install")).toBeDefined();
 	});
 });
@@ -691,7 +710,9 @@ describe("innerProgram — workspace root threading", () => {
 		// install ran anchored at the root rather than at the cwd.
 		const formatted = readFileSync(join(root, "pnpm-workspace.yaml"), "utf-8");
 		expect(formatted.indexOf("alpha")).toBeLessThan(formatted.indexOf("zeta"));
-		const install = harness.spies.execLines.find((call) => call.line === "pnpm install --frozen-lockfile=false");
+		const install = harness.spies.execLines.find(
+			(call) => [call.command, ...call.args].join(" ") === "pnpm install --frozen-lockfile=false",
+		);
 		expect(install).toBeDefined();
 		expect(install?.cwd).toBe(realRoot);
 	});
@@ -762,7 +783,7 @@ describe("innerProgram — custom commands", () => {
 		const harness = makeHarness({
 			configUpdates: [update("effect", "3.0.0", "3.1.0")],
 			gitStatus: " M package.json\n",
-			commands: new Map([["sh -c pnpm lint", { exitCode: 1, stdout: "", stderr: "lint exploded" }]]),
+			commands: new Map([["sh -c pnpm lint", { exit: 1, stdout: "", stderr: "lint exploded" }]]),
 		});
 
 		const exit = await runInner(harness, baseInputs({ dependencies: ["effect"], run: ["pnpm lint"] }));

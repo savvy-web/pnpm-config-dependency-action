@@ -39,7 +39,6 @@ import { RuntimeUpgrade } from "./services/runtime-upgrade.js";
 import { formatWorkspaceYaml, readWorkspaceYaml } from "./services/workspace-yaml.js";
 import { resolveTargetBranch } from "./utils/branch.js";
 import { matchesPattern } from "./utils/deps.js";
-import { parseMultiValueInput } from "./utils/input.js";
 
 /**
  * Result of running custom commands.
@@ -269,16 +268,13 @@ export const readInputs = Effect.gen(function* () {
 	const sourceBranch = yield* ActionInput.string("source-branch").pipe(Config.withDefault("main"));
 	const rawTargetBranch = yield* ActionInput.string("target-branch").pipe(Config.withDefault(""));
 	const targetBranch = resolveTargetBranch(rawTargetBranch, sourceBranch);
-	const rawConfigDeps = yield* ActionInput.string("config-dependencies").pipe(Config.withDefault(""));
-	const configDependencies = parseMultiValueInput(rawConfigDeps);
-	const rawDeps = yield* ActionInput.string("dependencies").pipe(Config.withDefault(""));
-	const dependencies = parseMultiValueInput(rawDeps);
-	const rawPeerLock = yield* ActionInput.string("peer-lock").pipe(Config.withDefault(""));
-	const peerLock = parseMultiValueInput(rawPeerLock);
-	const rawPeerMinor = yield* ActionInput.string("peer-minor").pipe(Config.withDefault(""));
-	const peerMinor = parseMultiValueInput(rawPeerMinor);
-	const rawRun = yield* ActionInput.string("run").pipe(Config.withDefault(""));
-	const run = parseMultiValueInput(rawRun);
+	const configDependencies = yield* ActionInput.list("config-dependencies").pipe(
+		Config.withDefault<ReadonlyArray<string>>([]),
+	);
+	const dependencies = yield* ActionInput.list("dependencies").pipe(Config.withDefault<ReadonlyArray<string>>([]));
+	const peerLock = yield* ActionInput.list("peer-lock").pipe(Config.withDefault<ReadonlyArray<string>>([]));
+	const peerMinor = yield* ActionInput.list("peer-minor").pipe(Config.withDefault<ReadonlyArray<string>>([]));
+	const run = yield* ActionInput.list("run").pipe(Config.withDefault<ReadonlyArray<string>>([]));
 	const upgradePackageManager = yield* ActionInput.string("upgrade-package-manager").pipe(Config.withDefault("false"));
 	const changesets = yield* ActionInput.boolean("changesets").pipe(Config.withDefault(true));
 	const autoMerge = yield* ActionInput.string("auto-merge").pipe(Config.withDefault(""));

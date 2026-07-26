@@ -1,10 +1,20 @@
+import type { ScriptResult } from "@effected/commands";
+import { ScriptedSpawner } from "@effected/commands";
 import type { FileChange, Repo } from "@effected/github";
 import { GitBranch, GitCommit, GitHubError, RepoRef, Repo as RepoTag } from "@effected/github";
 import { Effect, Layer, References, Result } from "effect";
 import { describe, expect, it } from "vitest";
 import { BranchManager, BranchManagerLive } from "../../../src/services/branch.js";
-import type { ScriptedResponse } from "../../utils/spawner.js";
-import { scriptedSpawner } from "../../utils/spawner.js";
+
+/**
+ * Script a spawner from a map keyed by full command line.
+ *
+ * Thin sugar over `@effected/commands`' `ScriptedSpawner` — the map style is
+ * how these suites already express their fixtures. The fixture itself is the
+ * kit's; this only adapts the lookup.
+ */
+const fromMap = (responses?: ReadonlyMap<string, ScriptResult>, fallback: ScriptResult = {}) =>
+	ScriptedSpawner.make((command, args) => responses?.get([command, ...args].join(" ")) ?? fallback);
 
 /** Every resource method resolves `Repo` per call, so tests provide one. */
 const repoLayer = RepoTag.layer(RepoRef.make({ owner: "test", repo: "repo" }));
@@ -64,11 +74,11 @@ const commitDouble = (state: CommitState) =>
 const runWithBranchManager = <A, E>(
 	effect: Effect.Effect<A, E, BranchManager | Repo>,
 	branches?: Map<string, string>,
-	responses?: ReadonlyMap<string, ScriptedResponse>,
+	responses?: ReadonlyMap<string, ScriptResult>,
 ) => {
 	const state: BranchState = { branches: new Map(branches ?? []) };
 	const commitState: CommitState = { commits: [] };
-	const spawner = scriptedSpawner(responses);
+	const spawner = fromMap(responses);
 
 	const serviceLayer = BranchManagerLive.pipe(
 		Layer.provide(Layer.mergeAll(branchDouble(state), commitDouble(commitState), spawner.layer)),
@@ -146,7 +156,7 @@ describe("BranchManager.manage", () => {
 			upsert: () =>
 				Effect.fail(new GitHubError({ kind: "rejected", operation: "git.updateRef", reason: "protected branch" })),
 		});
-		const spawner = scriptedSpawner();
+		const spawner = fromMap();
 		const serviceLayer = BranchManagerLive.pipe(
 			Layer.provide(Layer.mergeAll(failingBranch, commitDouble({ commits: [] }), spawner.layer)),
 		);
@@ -190,8 +200,8 @@ describe("BranchManager.manage", () => {
 
 describe("BranchManager.commitChanges", () => {
 	it("returns early when there are no changes", async () => {
-		const responses = new Map<string, ScriptedResponse>([
-			["git -c core.fileMode=false status --porcelain", { exitCode: 0, stdout: "", stderr: "" }],
+		const responses = new Map<string, ScriptResult>([
+			["git -c core.fileMode=false status --porcelain", { exit: 0, stdout: "", stderr: "" }],
 		]);
 
 		const { commitState, result } = runWithBranchManager(
@@ -211,17 +221,10 @@ describe("BranchManager.commitChanges", () => {
 	});
 
 	it("commits changed files via GitHub API", async () => {
-		const responses = new Map<string, ScriptedResponse>([
-			[
-				"git -c core.fileMode=false status --porcelain",
-				{
-					exitCode: 0,
-					stdout: " M package.json\n",
-					stderr: "",
-				},
-			],
-			["git fetch origin pnpm/config", { exitCode: 0, stdout: "", stderr: "" }],
-			["git reset --hard origin/pnpm/config", { exitCode: 0, stdout: "", stderr: "" }],
+		const responses = new Map<string, ScriptResult>([
+			["git -c core.fileMode=false status --porcelain", { exit: 0, stdout: " M package.json\n", stderr: "" }],
+			["git fetch origin pnpm/config", { exit: 0, stdout: "", stderr: "" }],
+			["git reset --hard origin/pnpm/config", { exit: 0, stdout: "", stderr: "" }],
 		]);
 
 		const { commitState, result } = runWithBranchManager(
@@ -247,17 +250,10 @@ describe("BranchManager.commitChanges", () => {
 	});
 
 	it("handles deleted files with sha: null", async () => {
-		const responses = new Map<string, ScriptedResponse>([
-			[
-				"git -c core.fileMode=false status --porcelain",
-				{
-					exitCode: 0,
-					stdout: "D  deleted-file.ts\n",
-					stderr: "",
-				},
-			],
-			["git fetch origin branch", { exitCode: 0, stdout: "", stderr: "" }],
-			["git reset --hard origin/branch", { exitCode: 0, stdout: "", stderr: "" }],
+		const responses = new Map<string, ScriptResult>([
+			["git -c core.fileMode=false status --porcelain", { exit: 0, stdout: "D  deleted-file.ts\n", stderr: "" }],
+			["git fetch origin branch", { exit: 0, stdout: "", stderr: "" }],
+			["git reset --hard origin/branch", { exit: 0, stdout: "", stderr: "" }],
 		]);
 
 		const { commitState, result } = runWithBranchManager(
@@ -278,15 +274,8 @@ describe("BranchManager.commitChanges", () => {
 	});
 
 	it("skips unreadable files gracefully", async () => {
-		const responses = new Map<string, ScriptedResponse>([
-			[
-				"git -c core.fileMode=false status --porcelain",
-				{
-					exitCode: 0,
-					stdout: "M  nonexistent-file.ts\n",
-					stderr: "",
-				},
-			],
+		const responses = new Map<string, ScriptResult>([
+			["git -c core.fileMode=false status --porcelain", { exit: 0, stdout: "M  nonexistent-file.ts\n", stderr: "" }],
 		]);
 
 		const { commitState, result } = runWithBranchManager(
@@ -313,15 +302,15 @@ describe("BranchManager.commitChanges", () => {
 		// 100644 yields an empty tree-diff — an empty commit + spurious PR.
 		// commitChanges must query status with core.fileMode=false so a mode-only
 		// dirty tree is treated as no change.
-		const responses = new Map<string, ScriptedResponse>([
+		const responses = new Map<string, ScriptResult>([
 			// Mode-sensitive status (the buggy path) would surface a real, readable
 			// file as modified purely because of an executable-bit flip.
-			["git status --porcelain", { exitCode: 0, stdout: " M package.json\n", stderr: "" }],
+			["git status --porcelain", { exit: 0, stdout: " M package.json\n", stderr: "" }],
 			// Mode-insensitive status (the correct path) reports nothing — the only
 			// working-tree difference was the chmod.
-			["git -c core.fileMode=false status --porcelain", { exitCode: 0, stdout: "", stderr: "" }],
-			["git fetch origin pnpm/config", { exitCode: 0, stdout: "", stderr: "" }],
-			["git reset --hard origin/pnpm/config", { exitCode: 0, stdout: "", stderr: "" }],
+			["git -c core.fileMode=false status --porcelain", { exit: 0, stdout: "", stderr: "" }],
+			["git fetch origin pnpm/config", { exit: 0, stdout: "", stderr: "" }],
+			["git reset --hard origin/pnpm/config", { exit: 0, stdout: "", stderr: "" }],
 		]);
 
 		const { commitState, result } = runWithBranchManager(
@@ -408,8 +397,8 @@ describe("BranchManager.ensureBaseHistory", () => {
 	it("is a no-op when the merge-base already resolves (no fetch)", async () => {
 		// merge-base succeeds → the base history is present, so no fetch commands
 		// need be mapped; an unmapped fetch would surface if the code fetched anyway.
-		const responses = new Map<string, ScriptedResponse>([
-			["git merge-base main HEAD", { exitCode: 0, stdout: "abc123\n", stderr: "" }],
+		const responses = new Map<string, ScriptResult>([
+			["git merge-base main HEAD", { exit: 0, stdout: "abc123\n", stderr: "" }],
 		]);
 		const { result } = runWithBranchManager(
 			Effect.gen(function* () {
@@ -425,12 +414,12 @@ describe("BranchManager.ensureBaseHistory", () => {
 	it("fetches and deepens, then succeeds (warns) when the base is unavailable", async () => {
 		// merge-base never resolves → the fallback fetch/unshallow/branch path runs
 		// and the effect still succeeds (best-effort, non-fatal — it warns).
-		const responses = new Map<string, ScriptedResponse>([
-			["git merge-base main HEAD", { exitCode: 1, stdout: "", stderr: "no merge base" }],
-			["git fetch origin +refs/heads/main:refs/remotes/origin/main", { exitCode: 0, stdout: "", stderr: "" }],
-			["git rev-parse --is-shallow-repository", { exitCode: 0, stdout: "true\n", stderr: "" }],
-			["git fetch --unshallow origin", { exitCode: 0, stdout: "", stderr: "" }],
-			["git branch -f main refs/remotes/origin/main", { exitCode: 0, stdout: "", stderr: "" }],
+		const responses = new Map<string, ScriptResult>([
+			["git merge-base main HEAD", { exit: 1, stdout: "", stderr: "no merge base" }],
+			["git fetch origin +refs/heads/main:refs/remotes/origin/main", { exit: 0, stdout: "", stderr: "" }],
+			["git rev-parse --is-shallow-repository", { exit: 0, stdout: "true\n", stderr: "" }],
+			["git fetch --unshallow origin", { exit: 0, stdout: "", stderr: "" }],
+			["git branch -f main refs/remotes/origin/main", { exit: 0, stdout: "", stderr: "" }],
 		]);
 		const { result } = runWithBranchManager(
 			Effect.gen(function* () {

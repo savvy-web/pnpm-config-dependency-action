@@ -150,3 +150,56 @@ describe("readInputs — validation", () => {
 		expect(Exit.isFailure(exit)).toBe(true);
 	});
 });
+
+describe("readInputs — multi-value input grammar", () => {
+	// These forms are THIS action's documented contract. `ActionInput.list`
+	// absorbed the grammar our local parseMultiValueInput used to implement, so
+	// the implementation is upstream now — but the contract is still ours, and a
+	// silent upstream change to any row below is a consumer-visible break.
+	it("accepts a JSON array", async () => {
+		const r = await readOrThrow({ dependencies: '["effect","vitest"]' });
+		expect(r.inputs.dependencies).toEqual(["effect", "vitest"]);
+	});
+
+	it("accepts dash bullets", async () => {
+		const r = await readOrThrow({ dependencies: "- effect\n- vitest" });
+		expect(r.inputs.dependencies).toEqual(["effect", "vitest"]);
+	});
+
+	it("accepts star bullets", async () => {
+		// Our local parser stripped `*` and NOT `-`; the kit strips both. This row
+		// is the one our old grammar had and the kit's earlier version did not.
+		const r = await readOrThrow({ dependencies: "* effect\n* vitest" });
+		expect(r.inputs.dependencies).toEqual(["effect", "vitest"]);
+	});
+
+	it("accepts comma-separated values", async () => {
+		const r = await readOrThrow({ dependencies: "effect, vitest" });
+		expect(r.inputs.dependencies).toEqual(["effect", "vitest"]);
+	});
+
+	it("drops whole-line # comments", async () => {
+		const r = await readOrThrow({ dependencies: "# pinned set\neffect\nvitest" });
+		expect(r.inputs.dependencies).toEqual(["effect", "vitest"]);
+	});
+
+	it("treats a bulleted #tag as a value, not a comment", async () => {
+		// The comment check runs BEFORE bullet stripping, so `- #tag` is a value.
+		const r = await readOrThrow({ dependencies: "- #tag\neffect" });
+		expect(r.inputs.dependencies).toEqual(["#tag", "effect"]);
+	});
+
+	it("reads an absent multi-value input as an empty list", async () => {
+		// list() FAILS on an absent (and on an empty-string) input, so the
+		// withDefault([]) pipe is load-bearing: without it every workflow that
+		// omits `run` or `peer-lock` would fail to parse its inputs at all.
+		const r = await readOrThrow({ dependencies: "effect" });
+		expect(r.inputs.run).toEqual([]);
+		expect(r.inputs["peer-lock"]).toEqual([]);
+	});
+
+	it("reads an explicitly empty multi-value input as an empty list", async () => {
+		const r = await readOrThrow({ dependencies: "effect", run: "" });
+		expect(r.inputs.run).toEqual([]);
+	});
+});

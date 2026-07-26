@@ -1,10 +1,21 @@
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { ScriptResult } from "@effected/commands";
+import { ScriptedSpawner } from "@effected/commands";
 import { Effect, References } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
 import { runInstall } from "../../src/program.js";
-import { scriptedSpawner } from "../utils/spawner.js";
+
+/**
+ * Script a spawner from a map keyed by full command line.
+ *
+ * Thin sugar over `@effected/commands`' `ScriptedSpawner` — the map style is
+ * how these suites already express their fixtures. The fixture itself is the
+ * kit's; this only adapts the lookup.
+ */
+const fromMap = (responses?: ReadonlyMap<string, ScriptResult>, fallback: ScriptResult = {}) =>
+	ScriptedSpawner.make((command, args) => responses?.get([command, ...args].join(" ")) ?? fallback);
 
 /**
  * Records the command lines runInstall spawns.
@@ -16,10 +27,10 @@ import { scriptedSpawner } from "../utils/spawner.js";
  * run, in what order.
  */
 const run = (pm: "pnpm" | "bun" | "npm") => {
-	const spawner = scriptedSpawner();
+	const spawner = fromMap();
 	return Effect.runPromise(
 		runInstall(pm).pipe(Effect.provide(spawner.layer), Effect.provideService(References.MinimumLogLevel, "None")),
-	).then(() => ({ exec: spawner.calls.map((call) => call.line) }));
+	).then(() => ({ exec: spawner.spawns.map((call) => [call.command, ...call.args].join(" ")) }));
 };
 
 /** Restored after any test that chdirs into a temp workspace. */
