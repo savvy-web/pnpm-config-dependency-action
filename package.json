@@ -55,7 +55,7 @@
 	"devDependencies": {
 		"@effect/vitest": "4.0.0-beta.101",
 		"@savvy-web/github-action-builder": "^2.1.0",
-		"@savvy-web/silk": "^3.2.4",
+		"@savvy-web/silk": "^3.2.5",
 		"@vitest-agent/plugin": "^2.0.9"
 	},
 	"packageManager": "pnpm@11.17.0+sha512.cca3cea332ad254bb84145f966d19f4879615210346fc92c79a047f23a0d7b3cca3c3792f0076ba1f1831d277efbcf0a9119b31a9a60eca7fb3d6231f331ef72",
