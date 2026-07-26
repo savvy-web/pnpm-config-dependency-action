@@ -101,7 +101,7 @@ describe("readInputs — defaults and absence", () => {
 
 		expect(result.inputs.branch).toBe("pnpm/config-deps");
 		expect(result.inputs.sourceBranch).toBe("main");
-		expect(result.inputs["upgrade-package-manager"]).toBe("true");
+		expect(result.inputs["upgrade-package-manager"]).toBe("false");
 		expect(result.dryRun).toBe(false);
 		expect(result.timeout).toBe(180);
 	});

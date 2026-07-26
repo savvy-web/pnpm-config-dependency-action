@@ -71,13 +71,14 @@ inputs:
       corepack-managed managers (pnpm, npm) are written as a hash-pinned
       version (e.g. pnpm@11.0.0+sha512.<hex>); bun is written as a bare version,
       because corepack does not manage bun.
-      Values: false (skip), true/auto (latest within the current major,
-      favoring the devEngines version), or a semver range (e.g. ^11) to move
-      to and add when no packageManager field exists. An explicit range must be
-      a range for the DETECTED package manager — a pnpm range in a bun repo
-      satisfies nothing and is skipped with a warning.
+      Values: false (skip — the default, matching the upgrade-runtime-*
+      inputs), true/auto (latest within the current major, favoring the
+      devEngines version), or a semver range (e.g. ^11) to move to and add
+      when no packageManager field exists. An explicit range must be a range
+      for the DETECTED package manager — a pnpm range in a bun repo satisfies
+      nothing and is skipped with a warning.
     required: false
-    default: "true"
+    default: "false"
   upgrade-runtime-node:
     description: |
       Upgrade the Node.js entry in devEngines.runtime. Only ever upgrades an
