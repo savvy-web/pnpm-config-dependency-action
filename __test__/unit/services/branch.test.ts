@@ -5,16 +5,7 @@ import { GitBranch, GitCommit, GitHubError, RepoRef, Repo as RepoTag } from "@ef
 import { Effect, Layer, References, Result } from "effect";
 import { describe, expect, it } from "vitest";
 import { BranchManager, BranchManagerLive } from "../../../src/services/branch.js";
-
-/**
- * Script a spawner from a map keyed by full command line.
- *
- * Thin sugar over `@effected/commands`' `ScriptedSpawner` — the map style is
- * how these suites already express their fixtures. The fixture itself is the
- * kit's; this only adapts the lookup.
- */
-const fromMap = (responses?: ReadonlyMap<string, ScriptResult>, fallback: ScriptResult = {}) =>
-	ScriptedSpawner.make((command, args) => responses?.get([command, ...args].join(" ")) ?? fallback);
+import { fromMap } from "../../utils/spawner.js";
 
 /** Every resource method resolves `Repo` per call, so tests provide one. */
 const repoLayer = RepoTag.layer(RepoRef.make({ owner: "test", repo: "repo" }));
@@ -249,7 +240,7 @@ describe("BranchManager.commitChanges", () => {
 		]);
 	});
 
-	it("handles deleted files with sha: null", async () => {
+	it("records a deletion as a FileDeletion member", async () => {
 		const responses = new Map<string, ScriptResult>([
 			["git -c core.fileMode=false status --porcelain", { exit: 0, stdout: "D  deleted-file.ts\n", stderr: "" }],
 			["git fetch origin branch", { exit: 0, stdout: "", stderr: "" }],
@@ -430,5 +421,33 @@ describe("BranchManager.ensureBaseHistory", () => {
 			responses,
 		);
 		expect(Result.isSuccess(await result)).toBe(true);
+	});
+});
+
+describe("BranchManager.manage — git plumbing", () => {
+	it("fetches the branch by explicit refspec, not a bare `git fetch origin`", async () => {
+		// A bare fetch honours the clone's configured refspec, which on a
+		// single-branch checkout (actions/checkout's default) covers only the
+		// checked-out branch — so origin/<branch> never materializes and the
+		// checkout below it fails. Live runs masked this with fetch-depth: 0.
+		//
+		// The spawner answers unscripted commands with a zero exit, so asserting
+		// only that `manage` SUCCEEDS proves nothing here; the assertion has to be
+		// on the argv actually spawned.
+		const branches = new Map([["main", "main-sha"]]);
+		const { spawner, result } = runWithBranchManager(
+			Effect.gen(function* () {
+				const manager = yield* BranchManager;
+				return yield* manager.manage("pnpm/config", "main");
+			}),
+			branches,
+		);
+
+		expect(Result.isSuccess(await result)).toBe(true);
+
+		const lines = spawner.spawns.map((call) => [call.command, ...call.args].join(" "));
+		expect(lines).toContain("git fetch origin +refs/heads/pnpm/config:refs/remotes/origin/pnpm/config");
+		expect(lines).not.toContain("git fetch origin");
+		expect(lines).toContain("git checkout -B pnpm/config origin/pnpm/config");
 	});
 });

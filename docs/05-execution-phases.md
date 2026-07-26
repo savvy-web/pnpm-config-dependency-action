@@ -7,6 +7,7 @@ The action runs as three phases — `pre`, `main` and `post` — declared in its
 - [Pre phase](#pre-phase)
 - [Main phase](#main-phase)
   - [Parse inputs](#parse-inputs)
+  - [Detect the package manager](#detect-the-package-manager)
   - [Branch management](#branch-management)
   - [Capture lockfile state (before)](#capture-lockfile-state-before)
   - [Upgrade the package manager](#upgrade-the-package-manager)
@@ -40,10 +41,19 @@ The main phase reads the token the pre phase provisioned and runs the dependency
 ### Parse inputs
 
 - Parses and validates all action inputs. An input that is present but malformed fails the run here, naming the input; an absent input takes its documented default
+- Validates the enumerated inputs against their accepted values — `upgrade-package-manager` and each `upgrade-runtime-*` against their keywords or a parseable semver range, `runtime-data` against `offline` and `live`. An unrecognized value fails rather than falling back
 - Validates that at least one update type is active — `config-dependencies`, `dependencies`, a non-`false` `upgrade-package-manager`, or an `upgrade-runtime-*` input. All of these default to off, so a workflow that configures none of them fails at this step
 - Validates that `peer-lock` and `peer-minor` do not list the same package
 - Warns if a `peer-lock` or `peer-minor` entry does not match any `dependencies` pattern
 - Creates a GitHub check run for status visibility in the UI
+
+### Detect the package manager
+
+- Resolves the workspace root and its package manager once, before any other step, and records both in the run context log
+- Detection reads the lockfile together with the root manifest. A repository that names a manager only in `devEngines.packageManager`, with no matching lockfile, is detected as npm
+- pnpm, bun and npm are supported. Yarn is rejected with an input error, as are workspaces with no resolvable root
+- Detection runs inside the check run, so an unsupported workspace fails visibly in the GitHub UI rather than exiting early with no status
+- Every step below dispatches on this one value, and every file read or written is anchored at the detected workspace root rather than the process working directory — the action can be invoked from a subdirectory
 
 ### Branch management
 
@@ -54,8 +64,9 @@ The main phase reads the token the pre phase provisioned and runs the dependency
 
 ### Capture lockfile state (before)
 
-- Reads the current `pnpm-lock.yaml`
+- Reads the lockfile the detected package manager writes — `pnpm-lock.yaml` for pnpm, `bun.lock` for bun, `package-lock.json` for npm — and parses all three into one normalized model
 - Stores the lockfile in memory for later comparison
+- A missing lockfile is logged and skipped rather than failing the run
 
 ### Upgrade the package manager
 
@@ -78,8 +89,11 @@ The main phase reads the token the pre phase provisioned and runs the dependency
 ### Update config dependencies
 
 - Iterates over each config dependency listed in the `config-dependencies` input
-- Resolves each config dependency within a conservative range derived from its current major (these entries are hash-pinned and carry no explicit range) and edits the `configDependencies` entry in `pnpm-workspace.yaml` in place
-- Editing in place avoids `pnpm add --config`, which would promote the dependency into a catalog
+- Resolves each config dependency within a conservative range derived from its current major (these entries are hash-pinned and carry no explicit range)
+- Where the resolved version is written dispatches on the detected package manager:
+  - **pnpm** — edits the `configDependencies` entry in `pnpm-workspace.yaml` in place. Editing in place avoids `pnpm add --config`, which would promote the dependency into a catalog
+  - **bun** — bun has no config-dependency mechanism, so the workflow is reproduced against catalogs: the config dependency's published `catalogs` export is three-way merged into the root `package.json` `catalog` and `catalogs` fields, using the version recorded in the lockfile as the merge base so a hand-written override is distinguishable from an entry a previous run wrote. The per-entry outcomes (added, updated, removed, kept) reach the PR body as a Catalog Changes table. Names owned by this path are excluded from the workspace-dependency step so one manifest entry is not bumped twice
+  - **npm** — skipped with a warning. npm implements no `catalog:` protocol, so there is nothing to merge into
 - Honors the workspace's pnpm release-age gate (`minimumReleaseAge`): candidate versions published inside the age window are held back, logged and picked up on a later run once they mature (see [Release-age gating](./02-configuration.md#release-age-gating))
 - Uses error accumulation: if one dependency fails to update, the others still proceed, and failures are logged as warnings
 
@@ -103,13 +117,18 @@ The main phase reads the token the pre phase provisioned and runs the dependency
 
 ### Regenerate lockfile and install
 
-- Runs only when there is a package-manager upgrade, config-dependency update, workspace-dependency update or peer-sync rewrite to process
-- Removes `pnpm-lock.yaml` and `node_modules` with `pnpm clean --lockfile` (requires pnpm 11+; a `clean` or `purge` script in the root `package.json` runs in place of the built-in), then runs `pnpm install --frozen-lockfile=false` to regenerate the lockfile from scratch — `--frozen-lockfile=false` opts out of CI's default refusal to write lockfile changes
-- Full regeneration re-runs resolution under the new pnpm version, config dependencies and ranges; advancing transitive versions within their declared ranges is expected, so a larger lockfile diff is intentional rather than noise
-- When the package manager was upgraded, this install also performs the corepack switch to the new pnpm version
+- Runs only when there is a package-manager upgrade, config-dependency update, workspace-dependency update or peer-sync rewrite to process; otherwise the step logs that there is nothing to install
+- The command dispatches on the detected package manager, and every command runs at the detected workspace root rather than the process working directory:
+  - **pnpm** — `pnpm clean --lockfile` removes `pnpm-lock.yaml` and `node_modules` (requires pnpm 11+; a `clean` or `purge` script in the root `package.json` runs in place of the built-in), then `pnpm install --frozen-lockfile=false` regenerates the lockfile. `--frozen-lockfile=false` opts out of CI's default refusal to write lockfile changes
+  - **bun** — `bun install --force`, which re-resolves every dependency against the registry instead of replaying the lockfile
+  - **npm** — `package-lock.json` is unlinked through Node rather than a shelled `rm` (which does not exist on a Windows runner), then `npm install` re-resolves. npm has no clean-and-resolve mode of its own: `npm ci` requires the lockfile to already be correct
+- The lockfile is regenerated rather than repaired because the action mutates all three inputs to resolution — the package manager version, its config, and the declared ranges — and a repair-only install never re-runs resolution under the changed inputs, so it can commit an inconsistent lockfile
+- Advancing transitive versions within their declared ranges is expected, so a larger lockfile diff is intentional rather than noise
+- When a corepack-managed package manager (pnpm, npm) was upgraded, this install also performs the corepack switch to the new version
 
 ### Format pnpm-workspace.yaml
 
+- Runs for pnpm workspaces only. Under bun and npm there is no `pnpm-workspace.yaml` to format, and the step is skipped with a logged reason naming the detected manager
 - Reads and parses `pnpm-workspace.yaml`
 - Sorts array values alphabetically (`packages`, `onlyBuiltDependencies`, `publicHoistPattern`)
 - Sorts top-level keys alphabetically with `packages` kept first
@@ -123,7 +142,7 @@ The main phase reads the token the pre phase provisioned and runs the dependency
 
 ### Capture lockfile state (after)
 
-- Reads the updated `pnpm-lock.yaml` after all dependency changes
+- Re-reads the same lockfile after all dependency changes, using the detected package manager's lockfile name
 - Stores the updated lockfile for comparison
 
 ### Detect changes

@@ -3,16 +3,7 @@ import { ScriptedSpawner } from "@effected/commands";
 import { Effect, References } from "effect";
 import { describe, expect, it } from "vitest";
 import { runCommands } from "../../src/program.js";
-
-/**
- * Script a spawner from a map keyed by full command line.
- *
- * Thin sugar over `@effected/commands`' `ScriptedSpawner` — the map style is
- * how these suites already express their fixtures. The fixture itself is the
- * kit's; this only adapts the lookup.
- */
-const fromMap = (responses?: ReadonlyMap<string, ScriptResult>, fallback: ScriptResult = {}) =>
-	ScriptedSpawner.make((command, args) => responses?.get([command, ...args].join(" ")) ?? fallback);
+import { fromMap } from "../utils/spawner.js";
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Test Helpers

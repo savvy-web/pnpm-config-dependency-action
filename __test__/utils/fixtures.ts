@@ -1,7 +1,7 @@
 /**
  * Shared test fixtures for unit tests.
  *
- * @module utils/fixtures.test
+ * @module utils/fixtures
  */
 
 import { PullRequest, PullRequestInfo } from "@effected/github";

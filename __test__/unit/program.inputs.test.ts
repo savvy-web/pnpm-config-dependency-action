@@ -74,11 +74,13 @@ describe("readInputs — runner-shaped environment", () => {
 		expect(result.dryRun).toBe(true);
 	});
 
-	it("reads a non-default upgrade-package-manager rather than the default 'true'", async () => {
-		// Defaulting here bumped pnpm in a repo that never asked for it.
-		const result = await readOrThrow({ dependencies: "effect", "upgrade-package-manager": "false" });
+	it("reads a non-default upgrade-package-manager", async () => {
+		// "false" IS the default now, so asserting it would pass even when the read
+		// resolves nothing — the vacuous shape this suite exists to catch. "auto"
+		// can only arrive from the workflow.
+		const result = await readOrThrow({ dependencies: "effect", "upgrade-package-manager": "auto" });
 
-		expect(result.inputs["upgrade-package-manager"]).toBe("false");
+		expect(result.inputs["upgrade-package-manager"]).toBe("auto");
 	});
 
 	it("reads changesets and timeout, which are typed rather than string inputs", async () => {
@@ -201,5 +203,36 @@ describe("readInputs — multi-value input grammar", () => {
 	it("reads an explicitly empty multi-value input as an empty list", async () => {
 		const r = await readOrThrow({ dependencies: "effect", run: "" });
 		expect(r.inputs.run).toEqual([]);
+	});
+});
+
+describe("readInputs — enumerated inputs", () => {
+	it("passes a valid auto-merge method through", async () => {
+		const r = await readOrThrow({ dependencies: "effect", "auto-merge": "squash" });
+		expect(r.inputs["auto-merge"]).toBe("squash");
+	});
+
+	it("treats an absent auto-merge as disabled", async () => {
+		const r = await readOrThrow({ dependencies: "effect" });
+		expect(r.inputs["auto-merge"]).toBe("");
+	});
+
+	it("fails on an unknown auto-merge method rather than casting it through", async () => {
+		// Previously an unchecked cast, so a typo reached the GraphQL mutation as
+		// an invalid enum instead of failing at input parsing.
+		const exit = await read({ dependencies: "effect", "auto-merge": "sqush" });
+		expect(Exit.isFailure(exit)).toBe(true);
+	});
+
+	it("reads runtime-data: live", async () => {
+		const r = await readOrThrow({ dependencies: "effect", "runtime-data": "live" });
+		expect(r.runtimeLive).toBe(true);
+	});
+
+	it("fails on an unknown runtime-data value rather than falling back to offline", async () => {
+		// Falling back silently resolved runtime versions from the bundled snapshot
+		// while the workflow had asked for live data.
+		const exit = await read({ dependencies: "effect", "runtime-data": "offline-ish" });
+		expect(Exit.isFailure(exit)).toBe(true);
 	});
 });

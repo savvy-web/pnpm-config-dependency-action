@@ -144,8 +144,12 @@ const manageBranchImpl = (
 		// same net effect but raced against anything reading the ref in between.
 		const outcome = yield* branch.upsert(branchName, baseSha);
 
-		// Fetch and checkout the branch, tracking the remote.
-		yield* git("fetch", "origin");
+		// Fetch the branch by EXPLICIT refspec, mirroring ensureBaseHistoryImpl. A
+		// bare `git fetch origin` honours the clone's configured refspec, which on a
+		// single-branch checkout (actions/checkout's default) covers only the
+		// checked-out branch — so origin/<branchName> is never materialized and the
+		// checkout below fails. Live runs masked this by using fetch-depth: 0.
+		yield* git("fetch", "origin", `+refs/heads/${branchName}:refs/remotes/origin/${branchName}`);
 		yield* git("checkout", "-B", branchName, `origin/${branchName}`);
 
 		if (outcome === "created") {

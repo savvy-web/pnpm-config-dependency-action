@@ -34,6 +34,7 @@ This also catches workflows written against an earlier version, where `upgrade-p
 - `dry-run` and `changesets` accept only the YAML 1.2 booleans: `true`, `True`, `TRUE`, `false`, `False`, `FALSE`. `yes`, `on` and `1` are rejected
 - `timeout` must be an integer number of seconds
 - `upgrade-package-manager` must be `false`, `true`, `auto` or a parseable semver range; each `upgrade-runtime-*` input must be `false`, `auto` or a parseable semver range
+- `runtime-data` must be `offline` or `live`. An unrecognized value fails rather than falling back to `offline`; the documented fallback to the bundled cache applies only when a `live` fetch fails at runtime
 - An input left out entirely still takes its default — only a present, unparseable value fails
 
 ## Authentication errors

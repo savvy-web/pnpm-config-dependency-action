@@ -17,7 +17,7 @@ Complete reference for all action inputs, outputs and usage patterns.
 
 ### Input value formats
 
-Every input is read and validated before any update runs. Omitting an input takes the default documented below, but supplying a value that cannot be parsed fails the run — a `dry-run` of `maybe`, a `timeout` of `soon`, or an `upgrade-runtime-node` of `not-a-range` each abort with an error naming the input, rather than silently falling back to the default.
+Every input is read and validated before any update runs. Omitting an input takes the default documented below, but supplying a value that cannot be parsed fails the run — a `dry-run` of `maybe`, a `timeout` of `soon`, a `runtime-data` of `cached`, or an `upgrade-runtime-node` of `not-a-range` each abort with an error naming the input, rather than silently falling back to the default.
 
 At least one update type must be active: `config-dependencies`, `dependencies`, a non-`false` `upgrade-package-manager`, or one of the `upgrade-runtime-*` inputs. Since every one of those defaults to off, a workflow that configures none of them fails with `At least one update type must be active`.
 
@@ -241,6 +241,8 @@ Data source used by the runtime version resolver. Default: `offline`.
   or authentication required
 - `live` — fetch the latest runtime data from the network, falling back to the
   bundled cache on failure
+
+These are the only accepted values. Any other value fails the run naming the input, rather than falling back to `offline`. The fallback described here applies to a `live` *fetch* that fails at runtime, not to an unrecognized input value.
 
 ```yaml
 runtime-data: live

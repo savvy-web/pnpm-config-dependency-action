@@ -277,15 +277,38 @@ export const readInputs = Effect.gen(function* () {
 	const run = yield* ActionInput.list("run").pipe(Config.withDefault<ReadonlyArray<string>>([]));
 	const upgradePackageManager = yield* ActionInput.string("upgrade-package-manager").pipe(Config.withDefault("false"));
 	const changesets = yield* ActionInput.boolean("changesets").pipe(Config.withDefault(true));
-	const autoMerge = yield* ActionInput.string("auto-merge").pipe(Config.withDefault(""));
+	const rawAutoMerge = yield* ActionInput.string("auto-merge").pipe(Config.withDefault(""));
+	// An empty value means "disabled"; anything else must name a real merge
+	// method. Validated rather than cast, so a typo fails loudly here instead of
+	// reaching the GraphQL mutation as an invalid enum.
+	const AUTO_MERGE_METHODS = ["", "merge", "squash", "rebase"] as const;
+	if (!(AUTO_MERGE_METHODS as ReadonlyArray<string>).includes(rawAutoMerge)) {
+		yield* Effect.fail(
+			new InvalidInputError({
+				field: "auto-merge",
+				reason: 'Expected "merge", "squash", "rebase", or an empty value to disable auto-merge',
+				value: rawAutoMerge,
+			}),
+		);
+	}
+	const autoMerge = rawAutoMerge as (typeof AUTO_MERGE_METHODS)[number];
 	const dryRun = yield* ActionInput.boolean("dry-run").pipe(Config.withDefault(false));
 	const timeout = yield* ActionInput.integer("timeout").pipe(Config.withDefault(180));
 	const rawRuntimeNode = yield* ActionInput.string("upgrade-runtime-node").pipe(Config.withDefault("false"));
 	const rawRuntimeDeno = yield* ActionInput.string("upgrade-runtime-deno").pipe(Config.withDefault("false"));
 	const rawRuntimeBun = yield* ActionInput.string("upgrade-runtime-bun").pipe(Config.withDefault("false"));
 	const runtimeData = yield* ActionInput.string("runtime-data").pipe(Config.withDefault("offline"));
+	// Fails rather than falling back: silently resolving runtime versions from the
+	// bundled snapshot when the workflow asked for live data is the same class of
+	// quiet wrong answer as an input that never arrived.
 	if (runtimeData !== "offline" && runtimeData !== "live") {
-		yield* Effect.logWarning(`Unknown runtime-data value "${runtimeData}", defaulting to "offline"`);
+		yield* Effect.fail(
+			new InvalidInputError({
+				field: "runtime-data",
+				reason: 'Expected "offline" or "live"',
+				value: runtimeData,
+			}),
+		);
 	}
 	const runtimeLive = runtimeData === "live";
 
@@ -367,7 +390,7 @@ export const readInputs = Effect.gen(function* () {
 			"peer-minor": peerMinor,
 			"upgrade-package-manager": upgradePackageManager,
 			changesets,
-			"auto-merge": autoMerge as "" | "merge" | "squash" | "rebase",
+			"auto-merge": autoMerge,
 			run,
 			runtime: { node: rawRuntimeNode, deno: rawRuntimeDeno, bun: rawRuntimeBun },
 			runtimeData,
@@ -879,10 +902,14 @@ export const innerProgram = (
 						// (mode 100644), so treating them as changes would otherwise produce
 						// an empty commit and a spurious PR. This must stay consistent with
 						// BranchManager.commitChanges, which queries status the same way.
-						const statusOut = yield* Run.text(
+						// Run.collect, not Run.text: text() trims, and --porcelain's status
+						// field is column-aligned, so trimming shifts every parse index. Only
+						// the line COUNT is read here, but the repo keeps one rule for
+						// porcelain output rather than a per-call-site judgement.
+						const statusOut = yield* Run.collect(
 							ChildProcess.make("git", ["-c", "core.fileMode=false", "status", "--porcelain"]),
 						);
-						const changedLines = statusOut.length > 0 ? statusOut.split("\n") : [];
+						const changedLines = statusOut.stdout.split("\n").filter((line) => line.length > 0);
 						const hasChanges = changedLines.length > 0;
 						yield* Effect.logDebug(`Git status has changes: ${hasChanges}`);
 

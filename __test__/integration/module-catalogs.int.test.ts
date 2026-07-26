@@ -16,19 +16,10 @@ import { DEFAULT_REGISTRY, NpmRegistry, RegistryReadError } from "@effected/npm"
 import { Effect, Layer, References } from "effect";
 import { HttpClient, HttpClientError, HttpClientResponse } from "effect/unstable/http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fetchModuleCatalogs, resolveEntryPoint } from "../../../src/services/module-catalogs.js";
-import { seededRegistry } from "../../utils/fixtures.js";
+import { fetchModuleCatalogs, resolveEntryPoint } from "../../src/services/module-catalogs.js";
+import { seededRegistry } from "../utils/fixtures.js";
+import { fromMap } from "../utils/spawner.js";
 import { makeTarball } from "./__fixtures__/tarball.js";
-
-/**
- * Script a spawner from a map keyed by full command line.
- *
- * Thin sugar over `@effected/commands`' `ScriptedSpawner` — the map style is
- * how these suites already express their fixtures. The fixture itself is the
- * kit's; this only adapts the lookup.
- */
-const fromMap = (responses?: ReadonlyMap<string, ScriptResult>, fallback: ScriptResult = {}) =>
-	ScriptedSpawner.make((command, args) => responses?.get([command, ...args].join(" ")) ?? fallback);
 
 // Toggleable failure switches for `node:fs`'s sync APIs, read by the
 // `vi.mock` factory below (hoisted above this file's imports, so the static

@@ -60,7 +60,7 @@ jobs:
 
 At least one update type must be active: `config-dependencies`, `dependencies`, a non-`false` `upgrade-package-manager`, or one of the `upgrade-runtime-*` inputs. A workflow that configures none of them fails with `At least one update type must be active`.
 
-Values are validated as they are read. An input whose value cannot be parsed — a non-boolean `dry-run`, a non-integer `timeout`, an `upgrade-*` value that is neither a keyword nor a semver range — fails the run rather than falling back to its default. Omitting an input still takes the documented default.
+Values are validated as they are read. An input whose value cannot be parsed — a non-boolean `dry-run`, a non-integer `timeout`, a `runtime-data` outside `offline`/`live`, an `upgrade-*` value that is neither a keyword nor a semver range — fails the run rather than falling back to its default. Omitting an input still takes the documented default.
 
 | Input | Required | Default | Description |
 | ------- | ---------- | --------- | ------------- |

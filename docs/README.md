@@ -13,7 +13,7 @@ User and developer documentation for the Silk Update Action.
 ### Architecture
 
 - [Architecture overview](./04-architecture.md) — The three phases and what the main update workflow does
-- [Execution phases](./05-execution-phases.md) — Detailed breakdown of the 14-step workflow
+- [Execution phases](./05-execution-phases.md) — Step-by-step breakdown of the main-phase workflow
 
 ### Reference
 

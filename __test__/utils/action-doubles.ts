@@ -6,7 +6,7 @@
  * `makeTest`/`layerTest` per service instead, with unstubbed members dying, so
  * the recording behavior those suites assert on lives here.
  *
- * @module utils/action-doubles.test
+ * @module utils/action-doubles
  */
 
 import type { InstallationToken } from "@effected/github";

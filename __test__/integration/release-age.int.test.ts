@@ -22,7 +22,7 @@ import {
 	getPublishTimes,
 	readInlineReleaseAge,
 	replayHookReleaseAge,
-} from "../../../src/services/release-age.js";
+} from "../../src/services/release-age.js";
 
 const runWith = <A, E, R>(effect: Effect.Effect<A, E, R>, layer: Layer.Layer<R>) =>
 	Effect.runPromise(

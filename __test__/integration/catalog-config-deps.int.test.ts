@@ -18,8 +18,8 @@ import { LockfileReadError, LockfileReader } from "@effected/workspaces";
 import { Effect, Exit, Layer, Option, References } from "effect";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { CatalogConfigDeps, CatalogConfigDepsLive } from "../../../src/services/catalog-config-deps.js";
-import { seededRegistry } from "../../utils/fixtures.js";
+import { CatalogConfigDeps, CatalogConfigDepsLive } from "../../src/services/catalog-config-deps.js";
+import { seededRegistry } from "../utils/fixtures.js";
 import { makeTarball } from "./__fixtures__/tarball.js";
 
 // Toggle for the final manifest write, so the FileSystemError path can be
