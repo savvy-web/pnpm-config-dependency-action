@@ -1,8 +1,8 @@
 ---
-"silk-update-action": major
+"silk-update-action": minor
 ---
 
-## Breaking Changes
+## Bug Fixes
 
 ### `upgrade-package-manager` now defaults to `"false"`
 
