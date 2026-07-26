@@ -1,8 +1,8 @@
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "@effect/vitest";
 import { Effect, References } from "effect";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { PnpmWorkspaceContent } from "../../../src/services/workspace-yaml.js";
 import { WorkspaceYaml, WorkspaceYamlLive, sortContent } from "../../../src/services/workspace-yaml.js";
@@ -105,14 +105,14 @@ describe("WorkspaceYaml.format", () => {
 		rmSync(tempDir, { recursive: true, force: true });
 	});
 
-	it("formats and sorts pnpm-workspace.yaml", async () => {
-		writeFileSync(
-			join(tempDir, "pnpm-workspace.yaml"),
-			`onlyBuiltDependencies:\n  - sharp\n  - argon2\npackages:\n  - "pkgs/*"\n  - "apps/*"\n`,
-		);
+	it.effect("formats and sorts pnpm-workspace.yaml", () =>
+		Effect.gen(function* () {
+			writeFileSync(
+				join(tempDir, "pnpm-workspace.yaml"),
+				`onlyBuiltDependencies:\n  - sharp\n  - argon2\npackages:\n  - "pkgs/*"\n  - "apps/*"\n`,
+			);
 
-		await Effect.runPromise(
-			Effect.gen(function* () {
+			yield* Effect.gen(function* () {
 				const ws = yield* WorkspaceYaml;
 				yield* ws.format(tempDir);
 				const result = yield* ws.read(tempDir);
@@ -122,94 +122,92 @@ describe("WorkspaceYaml.format", () => {
 				expect(keys[0]).toBe("packages");
 				expect(result?.packages).toEqual(["apps/*", "pkgs/*"]);
 				expect(result?.onlyBuiltDependencies).toEqual(["argon2", "sharp"]);
-			}).pipe(Effect.provide(WorkspaceYamlLive), Effect.provideService(References.MinimumLogLevel, "None")),
-		);
-	});
+			}).pipe(Effect.provide(WorkspaceYamlLive), Effect.provideService(References.MinimumLogLevel, "None"));
+		}),
+	);
 
-	it("emits scoped keys double-quoted, not single-quoted (regression)", async () => {
-		const filepath = join(tempDir, "pnpm-workspace.yaml");
-		// Pre-fix state: a scoped configDependency key written single-quoted.
-		writeFileSync(filepath, `packages:\n  - .\nconfigDependencies:\n  '@parcel/watcher': 2.0.0\n`);
+	it.effect("emits scoped keys double-quoted, not single-quoted (regression)", () =>
+		Effect.gen(function* () {
+			const filepath = join(tempDir, "pnpm-workspace.yaml");
+			// Pre-fix state: a scoped configDependency key written single-quoted.
+			writeFileSync(filepath, `packages:\n  - .\nconfigDependencies:\n  '@parcel/watcher': 2.0.0\n`);
 
-		await Effect.runPromise(
-			Effect.gen(function* () {
+			yield* Effect.gen(function* () {
 				const ws = yield* WorkspaceYaml;
 				yield* ws.format(tempDir);
-			}).pipe(Effect.provide(WorkspaceYamlLive), Effect.provideService(References.MinimumLogLevel, "None")),
-		);
+			}).pipe(Effect.provide(WorkspaceYamlLive), Effect.provideService(References.MinimumLogLevel, "None"));
 
-		const afterFirst = readFileSync(filepath, "utf-8");
-		// The scoped key must round-trip as DOUBLE-quoted, never single-quoted —
-		// otherwise the action churns every consumer's pnpm-workspace.yaml on each run.
-		expect(afterFirst).toContain(`"@parcel/watcher"`);
-		expect(afterFirst).not.toContain(`'@parcel/watcher'`);
+			const afterFirst = readFileSync(filepath, "utf-8");
+			// The scoped key must round-trip as DOUBLE-quoted, never single-quoted —
+			// otherwise the action churns every consumer's pnpm-workspace.yaml on each run.
+			expect(afterFirst).toContain(`"@parcel/watcher"`);
+			expect(afterFirst).not.toContain(`'@parcel/watcher'`);
 
-		// Idempotent: a second format must not change the bytes.
-		await Effect.runPromise(
-			Effect.gen(function* () {
+			// Idempotent: a second format must not change the bytes.
+			yield* Effect.gen(function* () {
 				const ws = yield* WorkspaceYaml;
 				yield* ws.format(tempDir);
-			}).pipe(Effect.provide(WorkspaceYamlLive), Effect.provideService(References.MinimumLogLevel, "None")),
-		);
-		expect(readFileSync(filepath, "utf-8")).toBe(afterFirst);
-	});
+			}).pipe(Effect.provide(WorkspaceYamlLive), Effect.provideService(References.MinimumLogLevel, "None"));
+			expect(readFileSync(filepath, "utf-8")).toBe(afterFirst);
+		}),
+	);
 
-	it("handles missing pnpm-workspace.yaml gracefully", async () => {
-		await Effect.runPromise(
-			Effect.gen(function* () {
+	it.effect("handles missing pnpm-workspace.yaml gracefully", () =>
+		Effect.gen(function* () {
+			yield* Effect.gen(function* () {
 				const ws = yield* WorkspaceYaml;
 				yield* ws.format(tempDir);
-			}).pipe(Effect.provide(WorkspaceYamlLive), Effect.provideService(References.MinimumLogLevel, "None")),
-		);
-	});
+			}).pipe(Effect.provide(WorkspaceYamlLive), Effect.provideService(References.MinimumLogLevel, "None"));
+		}),
+	);
 
-	it("handles invalid YAML gracefully", async () => {
-		writeFileSync(join(tempDir, "pnpm-workspace.yaml"), ": invalid: yaml: {{{}");
+	it.effect("handles invalid YAML gracefully", () =>
+		Effect.gen(function* () {
+			writeFileSync(join(tempDir, "pnpm-workspace.yaml"), ": invalid: yaml: {{{}");
 
-		const result = await Effect.runPromise(
-			Effect.gen(function* () {
+			const result = yield* Effect.gen(function* () {
 				const ws = yield* WorkspaceYaml;
 				return yield* ws.format(tempDir).pipe(Effect.result);
-			}).pipe(Effect.provide(WorkspaceYamlLive), Effect.provideService(References.MinimumLogLevel, "None")),
-		);
+			}).pipe(Effect.provide(WorkspaceYamlLive), Effect.provideService(References.MinimumLogLevel, "None"));
 
-		expect(result._tag).toBe("Failure");
-	});
+			expect(result._tag).toBe("Failure");
+		}),
+	);
 
-	it("handles unreadable file", async () => {
-		const filepath = join(tempDir, "pnpm-workspace.yaml");
-		writeFileSync(filepath, `packages:\n  - "pkgs/*"\n`);
-		chmodSync(filepath, 0o000);
+	it.effect("handles unreadable file", () =>
+		Effect.gen(function* () {
+			const filepath = join(tempDir, "pnpm-workspace.yaml");
+			writeFileSync(filepath, `packages:\n  - "pkgs/*"\n`);
+			chmodSync(filepath, 0o000);
 
-		const result = await Effect.runPromise(
-			Effect.gen(function* () {
+			const result = yield* Effect.gen(function* () {
 				const ws = yield* WorkspaceYaml;
 				return yield* ws.format(tempDir).pipe(Effect.result);
-			}).pipe(Effect.provide(WorkspaceYamlLive), Effect.provideService(References.MinimumLogLevel, "None")),
-		);
+			}).pipe(Effect.provide(WorkspaceYamlLive), Effect.provideService(References.MinimumLogLevel, "None"));
 
-		expect(result._tag).toBe("Failure");
-		// Restore perms for cleanup
-		chmodSync(filepath, 0o644);
-	});
+			expect(result._tag).toBe("Failure");
+			// Restore perms for cleanup
+			chmodSync(filepath, 0o644);
+		}),
+	);
 
-	it("handles unwritable file", async () => {
-		const filepath = join(tempDir, "pnpm-workspace.yaml");
-		writeFileSync(filepath, `packages:\n  - "pkgs/*"\n`);
-		// Make file readable but not writable
-		chmodSync(filepath, 0o444);
+	it.effect("handles unwritable file", () =>
+		Effect.gen(function* () {
+			const filepath = join(tempDir, "pnpm-workspace.yaml");
+			writeFileSync(filepath, `packages:\n  - "pkgs/*"\n`);
+			// Make file readable but not writable
+			chmodSync(filepath, 0o444);
 
-		const result = await Effect.runPromise(
-			Effect.gen(function* () {
+			const result = yield* Effect.gen(function* () {
 				const ws = yield* WorkspaceYaml;
 				return yield* ws.format(tempDir).pipe(Effect.result);
-			}).pipe(Effect.provide(WorkspaceYamlLive), Effect.provideService(References.MinimumLogLevel, "None")),
-		);
+			}).pipe(Effect.provide(WorkspaceYamlLive), Effect.provideService(References.MinimumLogLevel, "None"));
 
-		expect(result._tag).toBe("Failure");
-		// Restore perms for cleanup
-		chmodSync(filepath, 0o644);
-	});
+			expect(result._tag).toBe("Failure");
+			// Restore perms for cleanup
+			chmodSync(filepath, 0o644);
+		}),
+	);
 });
 
 describe("WorkspaceYaml.read", () => {
@@ -223,31 +221,31 @@ describe("WorkspaceYaml.read", () => {
 		rmSync(tempDir, { recursive: true, force: true });
 	});
 
-	it("reads and parses valid YAML", async () => {
-		writeFileSync(
-			join(tempDir, "pnpm-workspace.yaml"),
-			`packages:\n  - "pkgs/*"\nconfigDependencies:\n  typescript: "5.4.0"\n`,
-		);
+	it.effect("reads and parses valid YAML", () =>
+		Effect.gen(function* () {
+			writeFileSync(
+				join(tempDir, "pnpm-workspace.yaml"),
+				`packages:\n  - "pkgs/*"\nconfigDependencies:\n  typescript: "5.4.0"\n`,
+			);
 
-		const result = await Effect.runPromise(
-			Effect.gen(function* () {
+			const result = yield* Effect.gen(function* () {
 				const ws = yield* WorkspaceYaml;
 				return yield* ws.read(tempDir);
-			}).pipe(Effect.provide(WorkspaceYamlLive), Effect.provideService(References.MinimumLogLevel, "None")),
-		);
+			}).pipe(Effect.provide(WorkspaceYamlLive), Effect.provideService(References.MinimumLogLevel, "None"));
 
-		expect(result).not.toBeNull();
-		expect(result?.packages).toEqual(["pkgs/*"]);
-		expect(result?.configDependencies).toEqual({ typescript: "5.4.0" });
-	});
+			expect(result).not.toBeNull();
+			expect(result?.packages).toEqual(["pkgs/*"]);
+			expect(result?.configDependencies).toEqual({ typescript: "5.4.0" });
+		}),
+	);
 
-	it("returns null when file does not exist", async () => {
-		const result = await Effect.runPromise(
-			Effect.gen(function* () {
+	it.effect("returns null when file does not exist", () =>
+		Effect.gen(function* () {
+			const result = yield* Effect.gen(function* () {
 				const ws = yield* WorkspaceYaml;
 				return yield* ws.read(tempDir);
-			}).pipe(Effect.provide(WorkspaceYamlLive), Effect.provideService(References.MinimumLogLevel, "None")),
-		);
-		expect(result).toBeNull();
-	});
+			}).pipe(Effect.provide(WorkspaceYamlLive), Effect.provideService(References.MinimumLogLevel, "None"));
+			expect(result).toBeNull();
+		}),
+	);
 });

@@ -1,5 +1,5 @@
+import { describe, expect, it } from "@effect/vitest";
 import { Effect } from "effect";
-import { describe, expect, it } from "vitest";
 
 import {
 	configDepUpgradeRange,
@@ -35,28 +35,30 @@ describe("configDepUpgradeRange", () => {
 		expect(configDepUpgradeRange("latest")).toBeNull();
 	});
 
-	it("resolves the latest 1.x for a sub-1.0.0 dep when a stable major exists", async () => {
-		const range = configDepUpgradeRange("0.14.5");
-		expect(range).not.toBeNull();
-		const resolved = await Effect.runPromise(
-			resolveLatestSatisfying(["0.14.5", "0.20.0", "1.2.0", "2.0.0"], range as string),
-		);
-		expect(resolved).toBe("1.2.0");
-	});
+	it.effect("resolves the latest 1.x for a sub-1.0.0 dep when a stable major exists", () =>
+		Effect.gen(function* () {
+			const range = configDepUpgradeRange("0.14.5");
+			expect(range).not.toBeNull();
+			const resolved = yield* resolveLatestSatisfying(["0.14.5", "0.20.0", "1.2.0", "2.0.0"], range as string);
+			expect(resolved).toBe("1.2.0");
+		}),
+	);
 
-	it("resolves the latest 0.x for a sub-1.0.0 dep when no stable major exists", async () => {
-		const range = configDepUpgradeRange("0.14.5");
-		const resolved = await Effect.runPromise(resolveLatestSatisfying(["0.14.5", "0.20.0"], range as string));
-		expect(resolved).toBe("0.20.0");
-	});
+	it.effect("resolves the latest 0.x for a sub-1.0.0 dep when no stable major exists", () =>
+		Effect.gen(function* () {
+			const range = configDepUpgradeRange("0.14.5");
+			const resolved = yield* resolveLatestSatisfying(["0.14.5", "0.20.0"], range as string);
+			expect(resolved).toBe("0.20.0");
+		}),
+	);
 
-	it("resolves the latest in-major version for a >=1.0.0 dep", async () => {
-		const range = configDepUpgradeRange("1.14.5");
-		const resolved = await Effect.runPromise(
-			resolveLatestSatisfying(["1.14.5", "1.20.0", "2.0.0", "2.3.0"], range as string),
-		);
-		expect(resolved).toBe("1.20.0");
-	});
+	it.effect("resolves the latest in-major version for a >=1.0.0 dep", () =>
+		Effect.gen(function* () {
+			const range = configDepUpgradeRange("1.14.5");
+			const resolved = yield* resolveLatestSatisfying(["1.14.5", "1.20.0", "2.0.0", "2.3.0"], range as string);
+			expect(resolved).toBe("1.20.0");
+		}),
+	);
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
