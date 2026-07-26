@@ -9,7 +9,7 @@ The action runs as three phases — `pre`, `main` and `post` — declared in its
   - [Parse inputs](#parse-inputs)
   - [Branch management](#branch-management)
   - [Capture lockfile state (before)](#capture-lockfile-state-before)
-  - [Upgrade pnpm](#upgrade-pnpm)
+  - [Upgrade the package manager](#upgrade-the-package-manager)
   - [Upgrade runtimes](#upgrade-runtimes)
   - [Update config dependencies](#update-config-dependencies)
   - [Update workspace dependencies](#update-workspace-dependencies)
@@ -39,8 +39,8 @@ The main phase reads the token the pre phase provisioned and runs the dependency
 
 ### Parse inputs
 
-- Parses and validates all action inputs
-- Validates that at least one update type is active — `config-dependencies`, `dependencies`, `upgrade-package-manager` or an `upgrade-runtime-*` input
+- Parses and validates all action inputs. An input that is present but malformed fails the run here, naming the input; an absent input takes its documented default
+- Validates that at least one update type is active — `config-dependencies`, `dependencies`, a non-`false` `upgrade-package-manager`, or an `upgrade-runtime-*` input. All of these default to off, so a workflow that configures none of them fails at this step
 - Validates that `peer-lock` and `peer-minor` do not list the same package
 - Warns if a `peer-lock` or `peer-minor` entry does not match any `dependencies` pattern
 - Creates a GitHub check run for status visibility in the UI
@@ -48,9 +48,8 @@ The main phase reads the token the pre phase provisioned and runs the dependency
 ### Branch management
 
 - Validates that the `source-branch` and `target-branch` refs exist, failing fast before any destructive operation
-- Checks whether the update branch already exists
-- If the branch does not exist, creates it from the source branch (`source-branch`, default `main`) using the GitHub API, then fetches and checks it out locally
-- If the branch exists, deletes it and recreates it from the source branch to ensure a clean baseline
+- Creates the update branch from the source branch (`source-branch`, default `main`) when it does not exist, then fetches and checks it out locally
+- Force-resets the branch to the source branch when it does exist, in a single ref update rather than a delete followed by a create, so the ref never disappears mid-run
 - This reset strategy guarantees the PR always shows only the dependency changes against the current source branch
 
 ### Capture lockfile state (before)
@@ -58,21 +57,23 @@ The main phase reads the token the pre phase provisioned and runs the dependency
 - Reads the current `pnpm-lock.yaml`
 - Stores the lockfile in memory for later comparison
 
-### Upgrade pnpm
+### Upgrade the package manager
 
-- Runs when the `upgrade-package-manager` input is non-`false` (the default is `true`)
-- Detects the current pnpm version from `devEngines.packageManager` in `package.json`, falling back to the `packageManager` field
-- Checks for the latest available pnpm version within range
-- Updates the `packageManager` and `devEngines` fields when a newer version is available
-- Records the version change for the PR summary and commit message; it does not create a changeset, but it does trigger the lockfile regeneration step, whose `pnpm install` performs the corepack switch to the new version
+- Runs when the `upgrade-package-manager` input is non-`false`. The default is `false`, so this step is skipped unless the workflow opts in
+- Applies to the package manager detected for the workspace — pnpm, bun or npm — not to pnpm specifically
+- Detects the current version from `devEngines.packageManager` in `package.json`, falling back to the `packageManager` field
+- Checks for the latest available version of that manager within range. An explicit range typed for a different manager satisfies nothing and is skipped with a warning naming the mismatch
+- Updates the `packageManager` and `devEngines` fields when a newer version is available, hash-pinned for the corepack-managed managers (pnpm, npm) and bare for bun
+- Records the version change for the PR summary and commit message; it does not create a changeset, but it does trigger the lockfile regeneration step, whose install performs the corepack switch to the new version
 
 ### Upgrade runtimes
 
 - Runs when any of `upgrade-runtime-node`, `upgrade-runtime-deno` or `upgrade-runtime-bun` is set to `auto` or a semver range
-- Resolves the latest version for the matching `devEngines.runtime` entry and rewrites its `version`, preserving the entry's operator
+- Resolves the latest version for the matching `devEngines.runtime` entry and rewrites its `version` to the bare exact version, dropping any range operator
+- Upgrades only an entry the manifest already declares; a runtime with no entry is skipped with a warning, in every mode
 - Uses the `runtime-data` source — `offline` reads the bundled cache, `live` fetches the latest data and falls back to the cache on failure
 - Resolution covers only currently-maintained major lines; a request targeting an end-of-life line is skipped with a warning
-- Like a pnpm self-upgrade, a runtime bump appears in the PR summary and commit message but never creates a changeset; unlike a pnpm self-upgrade, it never triggers the install step
+- Like a package-manager self-upgrade, a runtime bump appears in the PR summary and commit message but never creates a changeset; unlike a package-manager self-upgrade, it never triggers the install step
 
 ### Update config dependencies
 

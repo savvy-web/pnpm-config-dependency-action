@@ -4,20 +4,20 @@
 		{
 			"source": "CLAUDE.md",
 			"target": ".claude/design/silk-update-action/01-dependencies.md",
-			"hash": "dbc81b21e55252cff1f29d3ed066f747df93a827a80529a35fc235e11e114cf3",
-			"recordedAt": "2026-07-24"
+			"hash": "0c79e426e3563ad48fd5bb61744365e8f99d3f4f2ee9781d0984fe21eccd6afa",
+			"recordedAt": "2026-07-26"
 		},
 		{
 			"source": "CLAUDE.md",
 			"target": ".claude/design/silk-update-action/05-module-library.md",
-			"hash": "6c5fe44620e488e26f3de85fbe6ae92ec2b01c28b8aea0940b71da243c737e46",
-			"recordedAt": "2026-07-24"
+			"hash": "21447f797f889ca5de4a04ab5390dc10458d323cdde419616153005586184f78",
+			"recordedAt": "2026-07-26"
 		},
 		{
 			"source": "CLAUDE.md",
 			"target": ".claude/design/silk-update-action/_index.md",
-			"hash": "ec34a9c0fbb17793f0f4fa670abcf91ec2c4f2c2d9f597ef0ccc7b26490699d6",
-			"recordedAt": "2026-07-21"
+			"hash": "affb6bb873ceaca6fa6cc22b31ece777ae837c6013f9b69e73bb5bfbcd049f81",
+			"recordedAt": "2026-07-26"
 		}
 	]
 }

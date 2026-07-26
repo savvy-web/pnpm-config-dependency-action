@@ -3,8 +3,8 @@ status: current
 module: silk-update-action
 category: architecture
 created: 2026-02-20
-updated: 2026-07-21
-last-synced: 2026-07-21
+updated: 2026-07-26
+last-synced: 2026-07-26
 completeness: 95
 related:
   - ./_index.md
@@ -18,154 +18,111 @@ implementation-plans: []
 
 ## Current State
 
-The action is Effect-first and runs as three phases (`pre` / `main` / `post`) around the `GitHubToken` token lifecycle. It runs on **Effect v4** (`effect` from `catalog:effect`, a `4.0.0-beta` pin) and the `@effected/*` first-party kit (`@effected/workspaces`, `@effected/runtimes`, `@effected/semver`, `@effected/lockfiles`, `@effected/npm`, `@effected/yaml`) — a runtime/toolchain migration that left `action.yml` inputs/outputs unchanged. All domain logic is wrapped as Effect
-services with `Context.Service` (v4; was `Context.Tag`) + `Layer`, plus a few
-standalone helper modules (`PeerSync`, `WorkspaceYaml`). Layer composition is
-centralized in `src/layers/app.ts`. Workspace enumeration comes from
-`@effected/workspaces`, and the dependency-changeset step delegates to
-`@savvy-web/silk-effects`' `Changesets.DepsRegen` (which owns publishability
-detection and changeset-config reading internally).
+The action is Effect-first and runs as three phases (`pre` / `main` / `post`)
+around the `GitHubToken` token lifecycle. It runs on **Effect v4** and the
+**`@effected/*` kit** — `github-actions`, `github`, `commands`, `npm`,
+`workspaces`, `lockfiles`, `runtimes`, `semver`, `yaml` — plus
+`@savvy-web/silk-effects` for the changeset step. The former all-in-one
+`@savvy-web/github-action-effects` is **deleted**; its surface was split across
+those kit packages (mapping table in @./01-dependencies.md).
+
+All domain logic is wrapped as Effect services with `Context.Service` + `Layer`,
+plus a few standalone helper modules (`detectPackageManager`, `syncPeers`,
+`fetchModuleCatalogs`, the `WorkspaceYaml` / `Lockfile` helpers). Layer
+composition is centralized in `src/layers/app.ts`.
 
 **Architecture:**
 
 - **Three-phase entry:** `src/pre.ts` provisions the GitHub App installation
-  token (`GitHubToken.provision`, fail-fast scope check) and records a start
-  time; `src/main.ts` is a thin wrapper calling `Action.run(program)` (no
-  `{ layer }`); `src/post.ts` reports total duration and revokes the token
-  (`GitHubToken.dispose`). The testable `program`
-  Effect lives in `src/program.ts` along with `runCommands` and `runInstall`
-  helpers. Cross-phase state schemas live in `src/state.ts` (`StartTimeState`,
-  `STATE_KEYS`).
-- **Effect-first services:** Domain services in `src/services/` —
-  `BranchManager`, `PnpmUpgrade`, `RuntimeUpgrade`, `ConfigDeps`, `RegularDeps`,
-  `Report`, `Lockfile`, `Changesets`. `Changesets` is a thin adapter over
-  `@savvy-web/silk-effects`' `Changesets.DepsRegen`; the former
-  `services/changeset-config.ts` and `services/publishability.ts` re-export
-  shims are deleted, since `ChangesetConfig` and the `PublishabilityDetector`
-  overrides are now internal to DepsRegen. Stateless helpers (`PeerSync`,
-  `WorkspaceYaml`) export functions without their own service tag. Workspace
-  enumeration goes through `WorkspaceDiscovery` from `@effected/workspaces`
-  directly (for `RegularDeps`, `PeerSync` and `Lockfile`).
-- **Layer composition:** `makeAppLayer(dryRun, { runtimeLive })` in
-  `src/layers/app.ts` wires all library and domain layers together. The
-  `GitHubClient` is built from `GitHubToken.client()` (over a self-contained
-  `ActionStateLive`, `Layer.orDie`), which reads the token envelope `pre`
-  persisted to `ActionState` — there is no bare `GitHubClientLive` and no
-  `process.env.GITHUB_TOKEN` bridge. `runtimeLive` selects the bundled offline
-  vs live `@effected/runtimes` resolver layers consumed by `RuntimeUpgradeLive`.
-- **Pure helpers:** `src/utils/` contains stateless functions (`deps.ts`,
-  `input.ts`, `markdown.ts`, `pnpm.ts`, `runtime.ts`, `semver.ts`).
-- **No barrel re-exports:** Direct imports everywhere, no `index.ts` files.
-- **Co-located tests:** Each `.ts` file has a `.test.ts` sibling.
-- **Library services:** `NpmRegistry` (npm queries), `PullRequest` (PR
-  management with auto-merge), `GithubMarkdown` (markdown utilities),
-  `OctokitAuthAppLive` (provides `GitHubAppLive`'s auth dependency).
+  token (`GitHubToken.provision`, explicit credentials parsed via `ActionInput`,
+  fail-fast `required` scope check) and records a start time; `src/main.ts` is a
+  thin `Action.run(program)` wrapper; `src/post.ts` reports duration and revokes
+  the token. The testable pieces (`readInputs`, `program`, `innerProgram`,
+  `runCommands`, `runInstall`) live in `src/program.ts`; cross-phase schemas in
+  `src/state.ts`.
+- **Package-manager dispatch:** `detectPackageManager()` resolves root + manager
+  once, inside the check run, and every dispatch point (config deps, install,
+  manager upgrade, workspace formatting) reads that one value. pnpm, bun and npm
+  are supported; yarn is rejected with `InvalidInputError`.
+- **Inputs go through `ActionInput`, never bare `Config`.** `readInputs` is
+  extracted and tested against a runner-shaped `INPUT_*` environment.
+- **Layer composition:** `makeAppLayer(dryRun, { runtimeLive })` builds the
+  `GitHubClient` from `GitHubToken.clientLayer()` (`Layer.orDie`) and `Repo` from
+  `Repo.layerFromConfig()`; `ActionState` comes from `Action.run`'s runtime rather
+  than being rebuilt. `runtimeLive` selects offline vs live `@effected/runtimes`
+  resolvers.
+- **Tests are not co-located:** every unit suite lives under `__test__/unit/`
+  mirroring `src/`, with reserved helper modules in `__test__/utils/`.
+- **No barrel re-exports:** direct imports everywhere.
 
-**Implemented Features:**
+**Implemented features:**
 
-- Three-phase (`pre` / `main` / `post`) execution. The dependency-update
-  workflow is orchestrated in `program.ts` (`main` phase); token provisioning
-  and revocation live in `pre.ts` / `post.ts`.
-- GitHub App token lifecycle via the `GitHubToken` namespace: `provision()`
-  (pre, fail-fast scope check) → `client()` (main, builds `GitHubClient`) →
-  `dispose()` (post, never fails the workflow).
-  The envelope is persisted to `ActionState` (backed by `GITHUB_STATE`) — no
+- Three-phase execution with the `GitHubToken` lifecycle: `provision()` (pre) →
+  `clientLayer()` (main) → `dispose()` (post, never fails the workflow). The
+  envelope is persisted to `ActionState` (backed by `GITHUB_STATE`) — no
   `process.env.GITHUB_TOKEN` bridge.
-- Branch management with delete-and-recreate strategy via `BranchManager`
-  service. The source ref and PR target are configurable via the
-  `source-branch` (default `main`) and `target-branch` (default `""` → follow
-  source) inputs, with `validateBranches` failing fast on a missing ref before
-  the destructive reset.
-- Config dependency updates via `ConfigDeps` service (uses `NpmRegistry`).
-  Config deps carry no declared range, so it synthesizes a conservative one from
-  the current version's major via `configDepUpgradeRange` and resolves the
-  highest in-range version with `resolveLatestSatisfying` rather than jumping to
-  npm's absolute latest (`>=1.0.0` stays within the major; `<1.0.0` may adopt the
-  first stable major but never crosses two majors at once).
-- Regular dependency updates via `RegularDeps` service (uses `NpmRegistry`
-  and `WorkspaceDiscovery` from `@effected/workspaces`). Resolves the highest
-  published version **satisfying the current specifier treated as a range** via
-  `resolveLatestSatisfying` rather than npm's absolute `latest` dist-tag, so
-  `^4.0.0` stays within major 4, `>=4.0.0` may advance across a major, and an
-  exact pin never bumps. Caret-on-zero (`^0.y.z`) is the one exception — it
-  resolves within the config-dep range (`>=version <2.0.0`) so a pre-stable dep
-  rolls forward across `0.x` and into the first stable `1.x` instead of being
-  locked to `0.y.x`. Iterates `dependencies`, `devDependencies`, and
-  `optionalDependencies` independently and reports the real section type per
-  update — `peerDependencies` are managed by `syncPeers`.
-- Release-age gating via the `ReleaseAge` service (`src/services/release-age.ts`, gate vocabulary from `@effected/npm`). Mirrors pnpm's `minimumReleaseAge` / `minimumReleaseAgeExclude` settings at resolution time — discovered from inline `pnpm-workspace.yaml` keys plus a subprocess replay of config-dependency pnpmfile `updateConfig` hooks, combined strictest-wins — so `ConfigDeps` and `RegularDeps` filter candidate versions before `resolveLatestSatisfying` and the action never writes a version pnpm would reject at install time (`ERR_PNPM_NO_MATURE_MATCHING_VERSION`). Fail-open by design: a missing gate, an excluded package or unavailable publish times degrade to the pre-gate behavior.
-- Peer dependency range syncing via `syncPeers` (`peer-lock` and
-  `peer-minor` strategies, powered by `@effected/semver`).
-- pnpm self-upgrade via `PnpmUpgrade` service, driven by the `upgrade-package-manager`
-  input (`false` | `true` | `auto` | a semver range, default `"true"`). The
-  input is named generically for consistency with `upgrade-runtime-*` and to
-  leave room for upgrading other package managers later — it currently upgrades
-  pnpm only (the `PnpmUpgrade` service is the only implementation).
-  `true`/`auto` resolve the latest within the current major (favoring the
-  `devEngines.packageManager` reference over the `packageManager` field); an
-  explicit range may cross majors and adds a `packageManager` field when none
-  exists. The service edits `package.json` directly — writing both
-  `packageManager` and `devEngines.packageManager.version` as a hash-pinned
-  `version+sha512.<hex>` string derived from the npm registry integrity — rather
-  than running `corepack use` (which errors when both fields are present); the
-  subsequent `runInstall` performs the corepack switch.
-- `devEngines.runtime` upgrades via `RuntimeUpgrade` service (node/deno/bun),
-  driven by the `upgrade-runtime-node/deno/bun` inputs (`false` | `auto` | a
-  semver range) and `runtime-data` (`offline` bundled cache vs `live`). Resolves
-  versions via `@effected/runtimes` within currently-maintained (non-EOL) majors;
-  `auto` no-ops on a static pin or already-current value. **Upgrade only, never
-  add:** a runtime with no existing `devEngines.runtime` entry is skipped with a
-  warning in every mode. **Always exact:** the range only selects which line to
-  resolve; the bare resolved version is written with no operator (an existing
-  `^24.0.0` becomes e.g. `24.9.1`), because `silk-runtime-action` downstream does
-  not support ranges. Runtime
-  bumps fold into `allUpdates` for reporting/commit/PR only — they never produce
-  a changeset (DepsRegen scopes changesets to dependency diffs) and never trigger
-  `runInstall` (unlike the pnpm bump, which does trigger `runInstall` to perform
-  the corepack switch).
-- Lockfile regeneration via `runInstall`: `pnpm clean --lockfile` then
-  `pnpm install --frozen-lockfile=false`. The action changes the pnpm version,
-  config and dependency ranges, so the lockfile is regenerated from a clean
-  slate rather than repaired in place with `--fix-lockfile` (which would not
-  re-run resolution under the new inputs and could commit a stale graph).
-  Advancing transitives is expected, not noise. `pnpm clean --lockfile`
-  requires pnpm 11+.
-- Workspace YAML formatting via `WorkspaceYaml` helpers.
-- Custom command execution via `runCommands` (`sh -c`) with error collection.
-- Lockfile comparison via `Lockfile` service. Catalog comparison emits one
-  `LockfileChange` per (catalog change, consuming importer, dep section)
-  triple, carrying the precise `type` field. These records drive change
-  detection / reporting; they no longer feed the changeset step.
-- Changeset creation via the `Changesets` service, a thin adapter over
-  `@savvy-web/silk-effects`' `Changesets.DepsRegen`. `create(cwd, base)` calls
-  `depsRegen.plan({ cwd, base }) → execute(plan)` and maps the written files
-  back to `ChangesetFile[]` for reporting. Content comes from DepsRegen's
-  cumulative `merge-base(base) → worktree` git diff (`base` = resolved
-  `target-branch`, the release baseline): it writes one consolidated dependency
-  changeset per in-scope package, deletes stale pure-dependency changesets
-  (idempotent across re-fires), drops devDependency rows and leaves mixed
-  changesets (Dependencies table + prose) untouched. Requires a `fetch-depth: 0`
-  checkout; `program.ts` runs `BranchManager.ensureBaseHistory(base)` first as a
-  shallow-checkout safety net.
-- All changeset gating (versionable-minus-ignored: publishable OR
-  `privatePackages.version`, minus the changeset `ignore` list) plus
-  publishability detection and changeset-config reading now live **upstream in
-  DepsRegen** (`@savvy-web/silk-effects`, FileSystem-based). The action no
-  longer carries its own ignore gate, versionable cascade or
-  trigger/informational classification, and no longer imports `ChangesetConfig`
-  or the `PublishabilityDetector` overrides directly.
-- Verified commits via `BranchManager.commitChanges()` (GitHub API,
-  `GitCommit.commitFiles`).
-- PR creation/update via `Report` service (uses `PullRequest` library service).
-- Auto-merge support via `PullRequest` service (GraphQL API).
-- Check run lifecycle via `CheckRun.withCheckRun()`.
-- PR creation failures propagate as `PullRequestError` through the Effect error
-  channel rather than returning a sentinel result.
-- Dry-run mode for testing.
+- Branch management via `GitBranch.upsert` (create when absent, force-reset to the
+  source ref when present), with `validateBranches` failing fast on a missing
+  `source-branch` / `target-branch` before the reset.
+- Config dependency updates, dispatched on the package manager: **pnpm** edits
+  `pnpm-workspace.yaml` (`ConfigDeps`); **bun** merges the config dependency's
+  `catalogs` export into `package.json` via a three-way merge against the
+  lockfile's installed version (`CatalogConfigDeps` + `fetchModuleCatalogs`),
+  emitting `CatalogDelta` records that reach the PR body; **npm** is skipped with a
+  warning (no `catalog:` protocol). Resolution uses a conservative range
+  synthesized from the current major, never npm's absolute latest.
+- Regular dependency updates resolving within each specifier's own range
+  (caret-on-zero widened to `>=version <2.0.0`), across `dependencies`,
+  `devDependencies` and `optionalDependencies`, reporting the real section type
+  per update. Under bun, names owned by the config-dep path are excluded so one
+  manifest entry is not bumped twice.
+- Release-age gating (`ReleaseAge` over `@effected/npm`'s `ReleaseAgeGate`),
+  discovered from inline `pnpm-workspace.yaml` keys plus a subprocess replay of
+  config-dependency pnpmfile hooks, combined strictest-wins, with publish times
+  from `NpmRegistry.publishTimes`. Fail-open by design.
+- Peer dependency range syncing (`peer-lock` / `peer-minor`).
+- Package-manager self-upgrade (`PackageManagerUpgrade`) for pnpm, bun and npm,
+  driven by `upgrade-package-manager` (`false` — the **default** — / `true` /
+  `auto` / a semver range). corepack-managed managers are written hash-pinned into
+  both `packageManager` and `devEngines.packageManager`; bun is written bare.
+  `upgrade()` always returns an outcome, so a skip reports its `kind`, and the
+  `unsatisfiable` kind (a range typed for a different manager) warns.
+- `devEngines.runtime` upgrades (`RuntimeUpgrade`) for node/deno/bun: upgrade only,
+  never add; always writes the bare exact resolved version; `auto` no-ops on a
+  static pin; EOL major lines are skipped with a warning. Runtime bumps never
+  create a changeset and never trigger the install.
+- Lockfile regeneration per manager (`pnpm clean --lockfile` + install;
+  `bun install --force`; unlink `package-lock.json` + `npm install`).
+- Workspace YAML formatting (pnpm only), custom command execution with error
+  collection, lockfile comparison, changeset creation via silk's `DepsRegen`,
+  verified commits via `GitCommit.commitFiles`, PR create/update via
+  `PullRequest.upsert` with `setAutoMerge` degrading to a warning, check-run
+  lifecycle with an explicit conclusion on every terminal state, and dry-run mode.
 
-**Next Steps:**
+**Recent change with a behavioral consequence:** `upgrade-package-manager`'s
+default flipped from `"true"` to `"false"` (a breaking change), making it opt-in
+and consistent with the `upgrade-runtime-*` inputs. A workflow that configures
+**nothing** now fails the "at least one update type must be active" validation
+rather than silently performing a package-manager-only run.
 
-1. Integration testing with real GitHub App in CI.
+**Known loose ends:**
+
+- `action.config.ts`'s `build.ignore` list (`xmlbuilder2`, `libxmljs2`,
+  `ajv-formats-draft2019`) is vestigial: it existed for `@cyclonedx/cyclonedx-library`,
+  which came in transitively through the deleted `github-action-effects` and no
+  longer appears in the lockfile at all. Harmless, but the comment there still
+  describes the old provenance.
+- `GitHubApiError` and `PnpmError` remain in `src/errors/errors.ts` and in the
+  `ActionError` union but are no longer constructed anywhere; GitHub failures are
+  the kit's `GitHubError` and subprocess failures are `@effected/commands`' error
+  types.
+- Two duplicate resolutions (`@effected/workspaces` 0.8.0, `@effected/npm` 0.4.0)
+  come entirely from the `@vitest-agent/plugin` devDependency tree and clear when
+  that plugin bumps; neither reaches the shipped artifact.
+
+**Next steps:**
+
+1. Integration testing with a real GitHub App in CI.
 2. Documentation: user guide and troubleshooting.
 3. Support for additional changeset strategies beyond `patch`.
 
@@ -173,98 +130,79 @@ detection and changeset-config reading internally).
 
 ### Why Effect Instead of Plain TypeScript/Promises?
 
-**Type-Safe Error Handling:**
+**Type-safe error handling:** Effect's type system makes errors explicit in
+function signatures, and the compiler ensures you handle them.
 
-Effect's type system makes errors explicit in function signatures. You can see at a glance what errors
-a function might produce, and the compiler ensures you handle them.
+**Error accumulation:** a GitHub Action should be resilient. If updating 10
+dependencies and 2 fail, the run should continue with the other 8, report all
+failures, and still create a PR with the successful updates. Effect makes this
+easy with `Effect.all`, `Effect.result` and custom error types — and this codebase
+leans on it heavily (per-dependency registry failures, per-runtime resolver
+failures, auto-merge failures and PR failures all degrade rather than abort).
 
-**Error Accumulation:**
+**Resource management:** the App token spans three processes and the check run must
+close on every path. The token is provisioned in `pre` and revoked in `post` (which
+always runs), and `CheckRun.withCheckRun` concludes on every exit path.
 
-GitHub Actions should be resilient. If updating 10 dependencies, and 2 fail, we want to:
-
-1. Continue with the other 8
-2. Report all failures at the end
-3. Still create a PR with successful updates
-
-Effect makes this pattern easy with `Effect.all`, `Effect.result` (v4; was
-`Effect.either`), and custom error types.
-
-**Resource Management:**
-
-GitHub App tokens and check runs need proper lifecycle management. The token is
-provisioned in `pre` and revoked in `post` (which always runs, even when `main`
-fails) via the `GitHubToken` namespace, and check runs use Effect's resource
-pattern (`acquireUseRelease` under `CheckRun.withCheckRun()`) so cleanup always
-happens.
-
-**Testing:**
-
-Effect programs are pure and composable, making them easier to test. Services can be
-mocked via `Layer.succeed()` without complex mocking frameworks.
+**Testing:** Effect programs are pure and composable. Services are mocked with
+`Layer.succeed` or each service's `layerTest`, with no module-mocking framework.
 
 ### Why Effect-First Service Architecture?
 
-**Dependency injection:** `Context.Service` (v4; was `Context.Tag`) + `Layer`
-provides compile-time verified dependency injection. Each service declares its
-dependencies in its Layer, and the compiler ensures all dependencies are
-satisfied.
+`Context.Service` + `Layer` gives compile-time-verified dependency injection; each
+service declares its dependencies in its layer and the compiler ensures they are
+satisfied. Adding a service means defining its tag, implementing its layer, and
+adding it to `makeAppLayer`.
 
-**Testability:** Mock any service by providing `Layer.succeed(Tag, mockImpl)`.
-No need for complex mocking frameworks or module mocking.
+### Why the `@effected` kit instead of one library?
 
-**Composition:** `makeAppLayer` in `src/layers/app.ts` wires all layers in one place.
-Adding a new service means defining its Tag, implementing its Layer, and adding it
-to `makeAppLayer`.
+The all-in-one `@savvy-web/github-action-effects` bundled unrelated concerns —
+Actions runtime, GitHub API, npm registry, subprocess execution, Markdown — behind
+one dependency, so any consumer of one part paid for all of them (including the
+transitive cyclonedx tree this action had to teach its bundler to ignore).
+Splitting into focused kit packages made each surface independently versionable
+and let the shapes improve: one `GitHubError` instead of per-service error classes,
+`upsert` instead of exists/delete/create, `Run` free functions instead of a
+`CommandRunner` service, `ActionInput` accessors that actually know the runner's
+`INPUT_*` mangling. The one deliberate non-successor is `GithubMarkdown`: report
+shaping is consumer policy, so those builders live in `src/utils/`.
 
 ### Why Three-Phase (Pre/Main/Post)?
 
-The `@savvy-web/github-action-effects` library is built around a three-phase
-token lifecycle and steers single-token actions to the `GitHubToken` namespace.
-Using it:
-
-- **Keeps the client construction idiomatic.** `GitHubToken.client()` reads the
-  envelope `pre` persisted, so there is no bare `GitHubClientLive` and no
+- **Idiomatic client construction.** `GitHubToken.clientLayer()` reads the envelope
+  `pre` persisted, so there is no bare client layer and no
   `process.env.GITHUB_TOKEN` bridge.
-- **Revokes the token even when `main` fails.** `post` always runs and disposes
-  the token (guarded so it never fails the workflow). Tokens also expire after
-  1 hour regardless.
-- **Fails fast on missing scopes.** `pre` passes the required permissions to
-  `GitHubToken.provision`, so a misconfigured App fails in `pre` rather than
-  mid-run in `main`.
+- **Revokes the token even when `main` fails.** `post` always runs (guarded so it
+  never fails the workflow). Tokens also expire after 1 hour regardless.
+- **Fails fast on missing scopes.** `pre` passes the `required` permissions to
+  `provision`, so a misconfigured App fails there rather than mid-run with a 403.
 
-Cross-phase state persistence is handled by `ActionState` (backed by
-`GITHUB_STATE`); the only consumer-modelled state is `StartTimeState` for
-duration reporting.
+### Why a Dedicated Branch, Reset Each Run?
 
-### Why Dedicated Branch Instead of Ephemeral Branches?
-
-**Delete-and-Recreate Strategy:**
-
-- Always starts from clean state (no stale changes)
-- Simpler than rebase (no conflict resolution)
-- Appropriate for automated dependency updates
+Always starting from a clean state is simpler than rebasing, needs no conflict
+resolution, and is appropriate because the branch only contains automated updates.
+`GitBranch.upsert` performs the reset atomically from the caller's perspective,
+which the previous delete-then-create sequence did not.
 
 ### Why Changesets Integration?
 
-Changesets is the de facto standard for versioning in pnpm monorepos:
-
-- Automatic changelog generation
-- Semantic versioning enforcement
-- Release automation compatibility
+Changesets is the de facto standard for versioning in pnpm monorepos: automatic
+changelog generation, semantic versioning enforcement, release automation
+compatibility. The dependency-changeset step is delegated to
+`@savvy-web/silk-effects`' `DepsRegen` so the gating rules live in one place and
+this action does not re-implement them.
 
 ### Why GitHub App Instead of PAT?
 
-- Tokens expire in 1 hour (vs PAT never expires)
-- Fine-grained permissions
-- Verified commits via Git Data API (no SSH/GPG keys needed)
-- Consistent with GitHub's own bots (Dependabot, etc.)
+Tokens expire in 1 hour, permissions are fine-grained, commits are verified via the
+Git Data API without SSH/GPG keys, and it matches how GitHub's own bots behave.
 
 ## Related Documentation
 
-**External References:**
+**External references:**
 
 - [pnpm Config Dependencies](https://pnpm.io/config-dependencies)
+- [bun catalogs](https://bun.sh/docs/install/catalogs)
 - [GitHub Apps Authentication](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app)
 - [Changesets Documentation](https://github.com/changesets/changesets)
 - [Effect Documentation](https://effect.website)
-- [GitHub Actions Toolkit](https://github.com/actions/toolkit)

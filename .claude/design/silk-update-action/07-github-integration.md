@@ -3,8 +3,8 @@ status: current
 module: silk-update-action
 category: integration
 created: 2026-02-20
-updated: 2026-07-21
-last-synced: 2026-07-21
+updated: 2026-07-26
+last-synced: 2026-07-26
 completeness: 95
 related:
   - ./_index.md
@@ -16,6 +16,10 @@ implementation-plans: []
 
 [Back to index](./_index.md)
 
+All GitHub API access goes through `@effected/github` (resource services) and
+`@effected/github-actions` (runtime + token lifecycle). No custom auth or REST
+code exists in this codebase.
+
 ## GitHub App Authentication
 
 **Benefits over Personal Access Tokens:**
@@ -25,137 +29,169 @@ implementation-plans: []
 - No user account dependency
 - Audit trail tied to app
 
-**Flow (three-phase, coordinated by the `GitHubToken` namespace):**
+**Flow (three-phase, coordinated by `GitHubToken`):**
 
-1. **pre** — `GitHubToken.provision({ permissions })` reads the `app-client-id`
-   / `app-private-key` inputs, signs a JWT, finds the installation, exchanges
-   the JWT for an installation token, runs a **fail-fast scope check** against
-   the requested permissions, and persists the token envelope to `ActionState`.
-2. **main** — `GitHubToken.client()` reads the envelope back from `ActionState`
-   and builds the `GitHubClient` layer used by all API calls.
-3. **post** — `GitHubToken.dispose()` revokes the token. `post` always runs,
-   even when `main` fails.
+1. **pre** — `pre.ts` parses `app-client-id` / `app-private-key` via `ActionInput`
+   and calls `GitHubToken.provision({ appId, privateKey, owner, required })`,
+   which signs a JWT, finds the installation, exchanges it for an installation
+   token, verifies the `required` scopes against what GitHub actually granted, and
+   persists the envelope to `ActionState`. The kit takes credentials **explicitly**
+   rather than reading the inputs itself, and names the scope field `required`.
+2. **main** — `GitHubToken.clientLayer()` reads the envelope back and builds the
+   `GitHubClient` layer used by all API calls.
+3. **post** — `GitHubToken.dispose()` revokes the token. `post` always runs, even
+   when `main` fails.
 
 `ActionState` is backed by the runner's `GITHUB_STATE`, which is process-global
-across the three Node processes, so the token survives the `pre` → `main` →
-`post` process boundaries. The entire flow is handled by
-`@savvy-web/github-action-effects`. No custom auth code exists in this codebase.
+across the three Node processes, so the token survives the phase boundaries.
 
 ```typescript
 // pre.ts
 const token = yield* GitHubToken.provision({
- permissions: { contents: "write", pull_requests: "write", checks: "write" },
+ appId, privateKey, owner,
+ required: { contents: "write", pull_requests: "write", checks: "write" },
 });
 
 // main.ts (via makeAppLayer)
-const githubClient = GitHubToken.client().pipe(Layer.provide(actionState), Layer.orDie);
+const githubClient = GitHubToken.clientLayer().pipe(Layer.orDie);
 
 // post.ts
 yield* GitHubToken.dispose();
 ```
 
+`GitHubApp.layer` (used only by `pre` / `post`) is self-contained in the kit —
+there is no octokit auth-app strategy to provide and no separate `FetchHttpClient`
+wiring.
+
+## The `Repo` service
+
+Every resource call resolves against a `Repo`, which is **required per call**
+rather than captured when a service layer is built. `makeAppLayer` provides
+`Repo.layerFromConfig()` (reading `GITHUB_REPOSITORY` through the ambient
+ConfigProvider, `Layer.orDie`), and domain services such as `BranchManager`
+deliberately leave `Repo` in each method's `R` — which is what keeps
+`Repo.provide(ref)` meaningful for a caller targeting a different repository.
+
 ## Branch Management
 
 **Strategy:**
 
-- Use dedicated branch (default: `pnpm/config-deps`)
-- Create if doesn't exist
-- Delete and recreate from `source-branch` (default `main`) if exists (fresh start each run)
-- Validate `source-branch` and `target-branch` exist first (`BranchManager.validateBranches`), failing fast with `ActionInputError` before any destructive operation
+- Use a dedicated branch (default: `pnpm/config-deps`).
+- Validate `source-branch` and `target-branch` exist first
+  (`BranchManager.validateBranches`), failing fast with `InvalidInputError` before
+  any destructive operation.
+- `GitBranch.upsert(name, sha)` then creates the branch when absent and
+  **force-resets** it to the source SHA when present, returning `"created"` or
+  `"reset"`. This replaced the old exists → delete → create sequence: same net
+  effect (a fresh start from the source ref each run), without a window in which
+  the ref does not exist for anything else reading it.
+- Fetch and checkout locally afterwards (`git fetch origin`,
+  `git checkout -B <branch> origin/<branch>`).
 
-**Configurable refs:** the branch the update is cut from is the `source-branch` input (default `main`), and the PR target is the `target-branch` input (default `""`, which follows `source-branch`). This supports cutting from one branch and merging into another (e.g. cut from `dev`, PR into `main`).
+**Configurable refs:** the update is cut from `source-branch` (default `main`) and
+the PR targets `target-branch` (default `""`, which follows `source-branch`). This
+supports cutting from one branch and merging into another (e.g. cut from `dev`, PR
+into `main`).
 
-**Base-history preflight:** when changesets are enabled, `BranchManager.ensureBaseHistory(target)` runs before the changeset step. Silk's `DepsRegen` diffs `merge-base(target) → worktree`, so it needs the base ref and a common ancestor present locally — a `fetch-depth: 0` checkout of the base (the documented setup) satisfies this. On a shallower checkout the preflight best-effort fetches the base ref, unshallows and materializes a local ref, warning non-fatally if the merge-base still cannot be resolved.
+**Base-history preflight:** when changesets are enabled,
+`BranchManager.ensureBaseHistory(target)` runs before the changeset step, because
+silk's `DepsRegen` diffs `merge-base(target) → worktree` and needs both the base
+ref and a common ancestor locally. A `fetch-depth: 0` checkout satisfies this and
+the preflight is then a no-op; on a shallower checkout it best-effort fetches,
+unshallows and materializes a local ref, warning non-fatally if the merge-base
+still cannot be resolved.
 
-**Why Delete-and-Recreate Instead of Rebase:**
-
-- Simpler logic, no conflict resolution needed
-- Always starts from a clean state
-- Avoids rebase complexity with force-push
-- Appropriate since the branch only contains automated dependency updates
-
-**Implementation uses library services:**
-
-- `GitBranch.exists(branchName)` - Check if branch exists
-- `GitBranch.getSha(defaultBranch)` - Get SHA of default branch
-- `GitBranch.create(branchName, sha)` - Create branch via GitHub API
-- `GitBranch.delete(branchName)` - Delete branch via GitHub API
-- `CommandRunner.exec("git", [...])` - Fetch and checkout locally
+**Why reset rather than rebase:** simpler logic, no conflict resolution, always a
+clean state — appropriate because the branch only ever contains automated
+dependency updates.
 
 ## Check Runs and Status
 
-**Purpose:**
-
-- Provide visibility in GitHub UI
-- Show progress during execution
-- Report final status (success/failure/neutral)
-
-**Lifecycle (handled by `CheckRun.withCheckRun()`):**
-
-1. Create check run at start (status: `in_progress`)
-2. Callback runs the main logic
-3. Use `checkRunService.complete(id, conclusion, output)` to finalize
-4. Automatically cleaned up on failure
+`CheckRun.withCheckRun(name, headSha, use)` owns the lifecycle. The kit's `use`
+callback receives `(checkRunId, conclude)` and the check run is concluded on
+**every** exit path, so an unhandled failure still closes it.
 
 ```typescript
 const checkRunService = yield* CheckRun;
-yield* checkRunService.withCheckRun("Dependency Updates", headSha, (checkRunId) =>
+yield* checkRunService.withCheckRun("Dependency Updates", headSha, (_id, conclude) =>
  Effect.gen(function* () {
-  // ... do work ...
-  yield* checkRunService.complete(checkRunId, "success", {
+  // …do work…
+  yield* conclude("success", CheckRunOutput.make({
    title: "Dependency Updates Complete",
    summary: summaryText,
-  });
+  }));
  }),
 );
 ```
 
+`CheckRunOutput.make({...})` is required — it is a `Schema.Class`, and a bare
+object literal fails typechecking. `innerProgram` concludes explicitly for three
+terminal states: `failure` (a custom command failed), `neutral` (no changes
+detected) and `success`. The name is `Dependency Updates (Dry Run)` under
+`dry-run: true`.
+
+Everything that can reject a run — package-manager detection (yarn, no workspace
+root) and branch-ref validation — happens **inside** the check run, so a rejection
+is visible in the GitHub UI rather than being an invisible early exit.
+
 ## Pull Request Management
 
-**Strategy:**
+`PullRequest.upsert({ head, base, title, body })` creates the PR or updates the
+existing one for the branch, returning `{ pullRequest, created }`. Updating rather
+than close/reopen preserves review history, comment threads and the visible
+evolution of the change.
 
-- Check if PR already exists for the branch via `GitHubClient.rest()`
-- Create new PR if none exists
-- Update existing PR description if already exists
+**Auto-merge is a separate call.** The kit exposes `setAutoMerge(info, method)`
+(the GraphQL `enablePullRequestAutoMerge` mutation — no REST endpoint exists)
+rather than a field on create:
 
-**Why Update Instead of Close/Reopen:**
+- **Values:** `""` (disabled, default), `"merge"`, `"squash"`, `"rebase"`.
+- **Requirements:** the repository must allow auto-merge, the target branch needs
+  branch protection with required status checks, and the App needs
+  `pull-requests: write`.
+- **Failure is swallowed to a warning** on purpose: the repository may simply not
+  have auto-merge enabled, and that must not fail a run whose PR was created
+  successfully.
 
-- Preserves review history
-- Maintains comment threads
-- Shows evolution of changes
-
-**Auto-merge Support:**
-
-The action supports enabling auto-merge via the `auto-merge` input:
-
-- **Values:** `""` (disabled, default), `"merge"`, `"squash"`, or `"rebase"`
-- **Implementation:** Uses `AutoMerge.enable(nodeId, mergeMethod)` from the library,
-  which calls the GitHub GraphQL `enablePullRequestAutoMerge` mutation
-- **Requirements:**
-  - Repository must have "Allow auto-merge" setting enabled
-  - Target branch must have branch protection with required status checks
-  - The GitHub App must have `pull-requests: write` permission
-- **Error Handling:** Warnings logged on failure, action does not fail
+A `createOrUpdatePR` failure is caught in `innerProgram`, logged as a warning, and
+reported as a `FAILED` step line — the run still concludes and writes its summary.
 
 ## Verified Commits via GitHub API
 
-Commits are created via the `GitCommit` library service:
+`GitCommit.commitFiles({ branch, message, changes })` wraps the Git Data API
+(create tree → create commit → update ref) in one call. Changes are **tagged
+members** in the kit — `FileContent.make({ path, content })` and
+`FileDeletion.make({ path })` — replacing the old `{ path, sha: null }` sentinel
+for deletions. No author is passed, which is what lets GitHub attribute and verify
+the commit.
 
-1. `GitCommit.createTree(entries, baseSha)` - Create git tree with changed files
-2. `GitCommit.createCommit(message, treeSha, parents)` - Create commit (NO author
-   parameter, enabling GitHub to attribute and verify)
-3. `GitCommit.updateRef(ref, sha, force)` - Update branch ref to new commit
+**Why this matters:** verified commits show authenticity, need no SSH or GPG keys,
+work automatically with GitHub App tokens, and match how GitHub's own bots behave.
 
-**Why This Matters:**
+**File mode:** the change list comes from
+`git -c core.fileMode=false status --porcelain`. Executable-bit-only flips (e.g.
+husky chmod-ing hooks during a `run` command) do not survive a content-based API
+commit at mode 100644, so counting them would produce an empty commit and a
+spurious PR. `program.ts`'s change detection queries status the same way, and the
+two must stay consistent. The status output is read verbatim (via `Run.collect`,
+not the trimming `Run.text`) because `--porcelain`'s two-character status field is
+column-aligned.
 
-- Verified commits show trust and authenticity
-- No SSH keys or GPG keys needed
-- Works automatically with GitHub App tokens
-- Consistent with how GitHub's own bots work (Dependabot, etc.)
+After committing, the working tree is synced with `git fetch origin <branch>` +
+`git reset --hard origin/<branch>` — `git checkout` would refuse to overwrite the
+just-committed working-copy state.
 
-**Title and commit subject:** Both the PR title and the commit subject (the first line of the commit message) are generated from the run's contents by `buildUpdateSubject(updates)` (`src/utils/commit-subject.ts`) — not a static `chore(deps): Update Silk Dependencies` constant. The helper names a single change (e.g. `chore(deps): bump effect to 3.1.0`), summarizes runtime- or config-only batches, scopes a single-workspace dependency batch (with the typed noun when the batch is one section, e.g. `chore(deps): update devDependencies in @scope/pkg`) and composes mixed runs. Regular deps are broken down by package.json section with field-name nouns (e.g. `chore(deps): update 1 config dependency and 4 devDependencies`); the coarse `update N config and M dependencies` form is kept when the regular deps are all plain `dependencies`. The 72-char header budget is a progressive ladder — typed breakdown, then coarse phrasing, then the generic `chore(deps): update dependencies` fallback. See `src/utils/commit-subject.ts` for the full bucketing logic.
+**Title and commit subject:** both are generated from the run's contents by
+`buildUpdateSubject(updates)` (`src/utils/commit-subject.ts`) — there is no static
+`chore(deps): …` constant. It names a single change (e.g.
+`chore(deps): bump effect to 3.1.0`), summarizes runtime- or config-only batches,
+scopes a single-workspace dependency batch (with the typed noun when the batch is
+one section, e.g. `chore(deps): update devDependencies in @scope/pkg`) and composes
+mixed runs, degrading progressively to fit a 72-char header. The commit body adds
+one bullet per update and a `Signed-off-by` footer attributed to the app slug's bot
+identity (or `github-actions[bot]`), which is what makes the API commit verify.
 
-**PR Description Template:**
+**PR description template:**
 
 ```markdown
 ## Dependency Updates
@@ -174,6 +210,12 @@ Updates 2 config and 3 regular dependencies.
 |---------|------|-----|
 | [`effect`](https://www.npmjs.com/package/effect) | ^3.0.0 | ^3.1.0 |
 
+### Catalog Changes
+
+| Catalog | Dependency | From | To | Action |
+|---------|------------|------|-----|--------|
+| default | vitest | 3.2.0 | 3.3.0 | updated |
+
 ### Changesets
 
 1 changeset(s) created for version management.
@@ -182,3 +224,10 @@ Updates 2 config and 3 regular dependencies.
 
 _This PR was automatically created by [silk-update-action](https://github.com/savvy-web/silk-update-action)_
 ```
+
+The Catalog Changes section appears only for bun compat-mode runs, built from the
+`CatalogDelta[]` the config-dependency step returns — on a plugin bump that table
+is the actual payload of the run. The Markdown is assembled with the local
+`GithubMarkdown` builders in `src/utils/github-markdown.ts`; the kit ships no
+successor to the deleted library's version, because report shaping is consumer
+policy.

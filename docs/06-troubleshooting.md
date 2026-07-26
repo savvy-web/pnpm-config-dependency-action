@@ -4,12 +4,37 @@ Common issues and their solutions.
 
 ## Table of contents
 
+- [Input errors](#input-errors)
 - [Authentication errors](#authentication-errors)
 - [No changes detected](#no-changes-detected)
 - [Custom commands failing](#custom-commands-failing)
 - [Branch conflicts](#branch-conflicts)
 - [Changeset issues](#changeset-issues)
 - [Lockfile comparison issues](#lockfile-comparison-issues)
+
+## Input errors
+
+### "At least one update type must be active"
+
+**Cause**: The workflow configured no update type. `config-dependencies`, `dependencies`, `upgrade-package-manager` and every `upgrade-runtime-*` input default to off, so a step that only passes the App credentials has nothing to do and fails rather than reporting a successful no-op run.
+
+This also catches workflows written against an earlier version, where `upgrade-package-manager` defaulted to `true` and an otherwise empty configuration performed a package-manager upgrade implicitly.
+
+**Solutions**:
+
+- Add the dependencies you want updated to `config-dependencies` or `dependencies`
+- To keep the old implicit package-manager bump, set `upgrade-package-manager` to `true`, `auto` or a semver range explicitly
+
+### The run fails naming a single input
+
+**Cause**: The input is present but its value cannot be parsed. Malformed values fail the run instead of falling back to the documented default, so a typo cannot silently change what the action does — a `dry-run: maybe` reading as `false` and performing a live run is the failure this guards against.
+
+**Solutions**:
+
+- `dry-run` and `changesets` accept only the YAML 1.2 booleans: `true`, `True`, `TRUE`, `false`, `False`, `FALSE`. `yes`, `on` and `1` are rejected
+- `timeout` must be an integer number of seconds
+- `upgrade-package-manager` must be `false`, `true`, `auto` or a parseable semver range; each `upgrade-runtime-*` input must be `false`, `auto` or a parseable semver range
+- An input left out entirely still takes its default — only a present, unparseable value fails
 
 ## Authentication errors
 
@@ -42,7 +67,7 @@ Common issues and their solutions.
 **Solutions**:
 
 - Check the workflow logs for errors in the "Pre" section, where the token is provisioned
-- Pin the action to a released version (`@v1` or a full tag) rather than a branch or fork that may be missing the pre step
+- Pin the action to a released version (the major alias tag `@v4`, or a full tag) rather than a branch or fork that may be missing the pre step
 - Verify the runner has network access to `api.github.com`
 
 ## No changes detected
@@ -107,14 +132,14 @@ Common issues and their solutions.
 
 ## Branch conflicts
 
-### "Failed to delete branch"
+### The update branch cannot be reset
 
-**Cause**: The branch may have protection rules or the App lacks permissions.
+**Cause**: The branch may have protection rules, or the App lacks permissions. Each run force-resets the update branch to the source branch.
 
 **Solutions**:
 
 - Ensure the GitHub App has `contents: write` permission
-- Check that no branch protection rules prevent deletion of the update branch
+- Check that no branch protection rules prevent force-pushing the update branch
 - If the branch is locked, unlock it manually in the repository settings
 
 ### Branch is out of date after action runs
