@@ -15,6 +15,32 @@ Complete reference for all action inputs, outputs and usage patterns.
 
 ## Inputs
 
+### Input value formats
+
+Every input is read and validated before any update runs. Omitting an input takes the default documented below, but supplying a value that cannot be parsed fails the run — a `dry-run` of `maybe`, a `timeout` of `soon`, a `runtime-data` of `cached`, or an `upgrade-runtime-node` of `not-a-range` each abort with an error naming the input, rather than silently falling back to the default.
+
+At least one update type must be active: `config-dependencies`, `dependencies`, a non-`false` `upgrade-package-manager`, or one of the `upgrade-runtime-*` inputs. Since every one of those defaults to off, a workflow that configures none of them fails with `At least one update type must be active`.
+
+The multi-value inputs — `config-dependencies`, `dependencies`, `peer-lock`, `peer-minor` and `run` — accept four forms, and any combination of them in the same value:
+
+- A newline-separated list, one entry per line.
+- A newline-separated list with `-` or `*` bullets, so a YAML block scalar can read like a list.
+- A JSON array, for example `["vitest", "@savvy-web/*"]`.
+- A comma-separated list, for example `vitest, @savvy-web/*`.
+
+An entry whose first character is `#` is a comment and is dropped; blank entries are ignored. A bullet marker is stripped only after the comment check, so `- #tag` is the value `#tag` rather than a comment. These two inputs produce the same list:
+
+```yaml
+dependencies: |
+  # test tooling
+  - vitest
+  - @savvy-web/*
+```
+
+```yaml
+dependencies: '["vitest", "@savvy-web/*"]'
+```
+
 ### Required inputs
 
 #### `app-client-id`
@@ -148,7 +174,9 @@ Upgrades the package manager **detected for this workspace** — pnpm, bun or np
 root `package.json`. Values: `false` (skip), `true`/`auto` (latest within the
 current major, favoring the `devEngines` version), or a semver range (e.g. `^11`,
 which may cross majors and adds a `packageManager` field when none exists). The
-version change is tracked as a config dependency update. Default: `true`.
+version change is tracked as a config dependency update. Default: `false`.
+
+The upgrade is opt-in, matching the `upgrade-runtime-*` inputs: leaving this input unset means the package manager is left alone. Workflows that relied on the earlier implicit upgrade need to set `true`, `auto` or a range explicitly.
 
 pnpm and npm are managed by corepack, so their resolved version is written
 hash-pinned (`pnpm@11.0.0+sha512.<hex>`). corepack does not manage bun, so bun is
@@ -162,7 +190,7 @@ A package-manager bump also triggers the lockfile regeneration step, whose insta
 performs the corepack switch to the new version (pnpm, npm).
 
 ```yaml
-upgrade-package-manager: false # Disable automatic package-manager upgrades
+upgrade-package-manager: auto # Latest within the current major
 ```
 
 #### `upgrade-runtime-node`
@@ -170,15 +198,10 @@ upgrade-package-manager: false # Disable automatic package-manager upgrades
 Upgrade the Node.js entry in `devEngines.runtime`. Three modes:
 
 - `false` (default) — skip; Node.js runtime is not touched
-- `auto` — resolve the latest version within the existing entry's range and
-  re-decorate with its operator; no-op if the entry is a static exact pin, if
-  no entry exists, or if the resolved version already matches the current value;
-  never adds a missing entry
-- A semver range (e.g. `^22`) — resolve the latest version satisfying the given
-  range, then write it back **preserving the existing entry's operator** (an
-  exact pin like `24.11.0` stays exact, a caret stays caret) regardless of the
-  operator in the range you pass — the range only selects which line to move to.
-  Adds a new entry if one is missing, using the range's own operator in that case
+- `auto` — resolve the latest version within the existing entry's range; no-op if the entry is a static exact pin, if no entry exists, or if the resolved version already matches the current value
+- A semver range (e.g. `^22`) — resolve the latest version satisfying that range; the range selects which line to move to and nothing more
+
+In both modes the action **upgrades only an entry the manifest already declares** — it never adds one, and skips with a warning naming the runtime when no entry exists. The resolved version is always written **exact**, with no range operator: an existing `^24.0.0` becomes `24.9.1`, not `^24.9.1`. Downstream consumers of `devEngines.runtime` (such as `silk-runtime-action`) reject range operators, so an operator written here would be a latent failure later in the pipeline.
 
 ```yaml
 upgrade-runtime-node: auto
@@ -219,6 +242,8 @@ Data source used by the runtime version resolver. Default: `offline`.
 - `live` — fetch the latest runtime data from the network, falling back to the
   bundled cache on failure
 
+These are the only accepted values. Any other value fails the run naming the input, rather than falling back to `offline`. The fallback described here applies to a `live` *fetch* that fails at runtime, not to an unrecognized input value.
+
 ```yaml
 runtime-data: live
 ```
@@ -245,11 +270,7 @@ upgrade-runtime-node: auto
 upgrade-runtime-deno: auto
 ```
 
-The action resolves the latest Node.js `^24` and Deno `^2` versions (within
-maintained lines) and rewrites the `version` fields to e.g. `^24.16.0` and
-`^2.1.0`, preserving the `^` operator and the `onFail` field. The bump is
-included in the PR summary and commit message. It does not trigger a changeset
-and does not run `pnpm install`.
+The action resolves the latest Node.js `^24` and Deno `^2` versions (within maintained lines) and rewrites the `version` fields to the exact resolved versions — e.g. `24.16.0` and `2.1.0` — dropping the `^` and preserving the `onFail` field. The bump is included in the PR summary and commit message. It does not trigger a changeset and does not run `pnpm install`.
 
 #### `changesets`
 
@@ -431,7 +452,7 @@ The action manages a dedicated branch for dependency updates:
 
 1. The `source-branch` and `target-branch` refs are validated up front — a missing ref fails the run before any destructive operation
 2. If the branch does not exist, it is created from the source branch (`source-branch`, default `main`)
-3. If the branch exists, it is deleted and recreated from the source branch to ensure a clean state
+3. If the branch exists, it is force-reset to the source branch in a single update, so the ref never disappears mid-run
 4. Changes are committed via the GitHub API (not `git commit`) to produce verified/signed commits
 5. The branch ref is updated directly using the Git Data API
 

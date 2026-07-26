@@ -7,20 +7,11 @@
  */
 
 import { NodeServices } from "@effect/platform-node";
+import { CheckRun, GitBranch, GitCommit, PullRequest, Repo } from "@effected/github";
+import { DryRun, GitHubToken } from "@effected/github-actions";
+import { NpmRegistry } from "@effected/npm";
 import { BunResolver, DenoResolver, NodeResolver, GitHubClient as RuntimesGitHubClient } from "@effected/runtimes";
 import { LockfileReader, PackageManagerDetector, WorkspaceDiscovery, WorkspaceRoot } from "@effected/workspaces";
-import {
-	ActionStateLive,
-	CheckRunLive,
-	CommandRunnerLive,
-	DryRunLive,
-	GitBranchLive,
-	GitCommitLive,
-	GitHubGraphQLLive,
-	GitHubToken,
-	NpmRegistryLive,
-	PullRequestLive,
-} from "@savvy-web/github-action-effects";
 import { Changesets as SilkChangesets } from "@savvy-web/silk-effects";
 import { Layer } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
@@ -58,23 +49,27 @@ const makeRuntimeResolvers = (live: boolean) => {
 
 export const makeAppLayer = (dryRun: boolean, options: { runtimeLive: boolean } = { runtimeLive: false }) => {
 	// The GitHub App installation token is provisioned in the pre phase and
-	// persisted to ActionState. GitHubToken.client() reads it back and builds a
-	// GitHubClient — no process.env.GITHUB_TOKEN bridge. ActionState is provided
-	// here (backed by NodeContext's FileSystem) so the layer is self-contained
-	// and the withCheckRun callback's R = never requirement holds; Layer.orDie
-	// turns a missing/unreadable token into a fatal defect.
-	const actionState = ActionStateLive.pipe(Layer.provide(NodeServices.layer));
-	const githubClient = GitHubToken.client().pipe(Layer.provide(actionState), Layer.orDie);
+	// persisted to ActionState. GitHubToken.clientLayer() reads it back and
+	// builds a GitHubClient — no process.env.GITHUB_TOKEN bridge. ActionState
+	// comes from ActionRuntime via Action.run, so it is NOT rebuilt here.
+	// Layer.orDie turns a missing/expired token into a fatal defect.
+	const githubClient = GitHubToken.clientLayer().pipe(Layer.orDie);
 
-	const ghGraphql = GitHubGraphQLLive.pipe(Layer.provide(githubClient));
-	const npmRegistry = NpmRegistryLive.pipe(Layer.provide(CommandRunnerLive));
+	// The repository every resource call resolves against. Repo is required per
+	// call rather than captured, so this is a layer like any other; reading it
+	// from GITHUB_REPOSITORY goes through the ambient ConfigProvider.
+	const repo = Repo.layerFromConfig().pipe(Layer.orDie);
+
+	// GraphQL is a member of GitHubClient in the kit — there is no separate
+	// GitHubGraphQL service to wire.
+	const npmRegistry = NpmRegistry.layer.pipe(Layer.provide(FetchHttpClient.layer));
 	// Effective pnpm minimumReleaseAge gate (inline pnpm-workspace.yaml keys +
 	// config-dependency hook replay), applied by ConfigDeps/RegularDeps before
 	// version resolution. Inert when the workspace declares no gate.
-	const releaseAge = ReleaseAgeLive().pipe(Layer.provide(CommandRunnerLive));
-	const gitBranch = GitBranchLive.pipe(Layer.provide(githubClient));
-	const gitCommit = GitCommitLive.pipe(Layer.provide(githubClient));
-	const prLayer = PullRequestLive.pipe(Layer.provide(Layer.merge(githubClient, ghGraphql)));
+	const releaseAge = ReleaseAgeLive().pipe(Layer.provide(Layer.merge(NodeServices.layer, npmRegistry)));
+	const gitBranch = GitBranch.layer.pipe(Layer.provide(githubClient));
+	const gitCommit = GitCommit.layer.pipe(Layer.provide(githubClient));
+	const prLayer = PullRequest.layer.pipe(Layer.provide(githubClient));
 
 	// Platform layer (FileSystem, Path, ChildProcessSpawner, …) for @effected/workspaces.
 	const platform = NodeServices.layer;
@@ -98,13 +93,16 @@ export const makeAppLayer = (dryRun: boolean, options: { runtimeLive: boolean } 
 
 	const libraryLayers = Layer.mergeAll(
 		githubClient,
+		repo,
 		gitBranch,
 		gitCommit,
-		CheckRunLive.pipe(Layer.provide(githubClient)),
+		CheckRun.layer.pipe(Layer.provide(githubClient)),
 		prLayer,
 		npmRegistry,
-		CommandRunnerLive,
-		DryRunLive(dryRun),
+		// The subprocess seam Run needs, plus FileSystem/Path for the workspace
+		// layers below.
+		NodeServices.layer,
+		DryRun.layerFrom(dryRun),
 		FetchHttpClient.layer,
 	);
 
@@ -113,11 +111,11 @@ export const makeAppLayer = (dryRun: boolean, options: { runtimeLive: boolean } 
 		workspaceDiscovery,
 		packageManagerDetector,
 		ChangesetsLive.pipe(Layer.provide(depsRegen)),
-		BranchManagerLive.pipe(Layer.provide(Layer.mergeAll(gitBranch, gitCommit, CommandRunnerLive))),
+		BranchManagerLive.pipe(Layer.provide(Layer.mergeAll(gitBranch, gitCommit, NodeServices.layer))),
 		PackageManagerUpgradeLive.pipe(Layer.provide(npmRegistry)),
 		ConfigDepsLive.pipe(Layer.provide(Layer.merge(npmRegistry, releaseAge))),
 		CatalogConfigDepsLive.pipe(
-			Layer.provide(Layer.mergeAll(npmRegistry, lockfileReader, FetchHttpClient.layer, CommandRunnerLive)),
+			Layer.provide(Layer.mergeAll(npmRegistry, lockfileReader, FetchHttpClient.layer, NodeServices.layer)),
 		),
 		RegularDepsLive.pipe(Layer.provide(Layer.mergeAll(npmRegistry, workspaceDiscovery, releaseAge))),
 		ReportLive.pipe(Layer.provide(prLayer)),

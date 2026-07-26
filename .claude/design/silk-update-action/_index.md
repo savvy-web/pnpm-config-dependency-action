@@ -3,8 +3,8 @@ status: current
 module: silk-update-action
 category: architecture
 created: 2026-02-06
-updated: 2026-07-21
-last-synced: 2026-07-21
+updated: 2026-07-26
+last-synced: 2026-07-26
 completeness: 95
 related: []
 dependencies: []
@@ -17,20 +17,24 @@ implementation-plans: []
 
 The `silk-update-action` is a GitHub Action that automates updates to pnpm config dependencies, regular dependencies, and peer dependencies. Unlike Dependabot, this action supports [pnpm's config dependencies](https://pnpm.io/config-dependencies) feature, which allows dependencies to be declared in `pnpm-workspace.yaml` for centralized version management across a monorepo. It also syncs peer dependency ranges across workspace packages to keep them consistent.
 
+The action is built on **Effect v4** and the first-party **`@effected/*` kit** (`github`, `github-actions`, `commands`, `npm`, `workspaces`, `lockfiles`, `runtimes`, `semver`, `yaml`) plus `@savvy-web/silk-effects`. The previous all-in-one `@savvy-web/github-action-effects` library is **deleted** — its surface was split across the kit packages (see @./01-dependencies.md).
+
+The package manager is **detected once per run** (`detectPackageManager`, over `@effected/workspaces`' `PackageManagerDetector`) and every dispatch point — config dependencies, install, package-manager upgrade, workspace formatting — routes on that one value. pnpm, bun and npm are supported; yarn is rejected with a clear error.
+
 **Key Features:**
 
-- Upgrades pnpm itself via the `upgrade-package-manager` input (`false`/`true`/`auto`/a semver range) by editing the `packageManager` and `devEngines.packageManager` fields directly with a hash-pinned version — `true`/`auto` stay within the current major, an explicit range may cross majors
+- Upgrades the **detected** package manager (pnpm/bun/npm) via the `upgrade-package-manager` input (`false` — the default — / `true` / `auto` / a semver range), editing the `packageManager` and `devEngines.packageManager` fields directly. corepack-managed managers (pnpm, npm) are written hash-pinned (`pnpm@11.0.0+sha512.<hex>`); bun is written bare. `true`/`auto` stay within the current major, an explicit range may cross majors
 - Upgrades `devEngines.runtime` engines (node/deno/bun) via `@effected/runtimes` (`RuntimeUpgrade` service), with `auto`/explicit-range modes and offline/live data sources. It only ever upgrades an entry the manifest already declares (never adds one), and always writes the bare resolved version — the range drives resolution only
-- Updates config dependencies via direct npm queries and YAML editing, resolving within a conservative range synthesized from the current major rather than jumping to npm's absolute latest
+- Updates config dependencies via direct npm queries, resolving within a conservative range synthesized from the current major rather than jumping to npm's absolute latest. Under **pnpm** this edits `pnpm-workspace.yaml` (`ConfigDeps`); under **bun** the same workflow is reproduced by merging the config dependency's `catalogs` export into `package.json` (`CatalogConfigDeps`); **npm** has no `catalog:` protocol, so config dependencies are skipped with a warning
 - Updates regular dependencies via direct npm registry queries (avoids `catalogMode: strict` issues), resolving the highest version within each dependency's declared specifier range rather than the absolute latest
 - Honors pnpm's `minimumReleaseAge` / `minimumReleaseAgeExclude` settings at resolution time (`ReleaseAge` service over `@effected/npm`'s `ReleaseAgeGate`), holding back too-young versions so it never proposes an update pnpm would reject at install time (`ERR_PNPM_NO_MATURE_MATCHING_VERSION`)
 - Syncs peer dependency ranges across workspace packages (`syncPeers` helper) with configurable lock/minor strategies
 - Supports glob patterns for dependency matching
 - Runs custom commands after updates (linting, testing, building)
 - Integrates with Changesets for versioning by delegating the dependency-changeset step to `@savvy-web/silk-effects`' `Changesets.DepsRegen`, which regenerates a consolidated per-package dependency changeset from the cumulative `merge-base(target) → worktree` git diff and applies its own versionable-minus-ignored gating upstream (requires a `fetch-depth: 0` checkout)
-- Regenerates the lockfile via `pnpm clean --lockfile` then `pnpm install --frozen-lockfile=false` so it reflects the changed pnpm version, config and ranges (advancing transitives is expected, not noise)
-- Uses GitHub App authentication across a three-phase (pre/main/post) token lifecycle coordinated by the `GitHubToken` namespace for secure, short-lived tokens
-- Manages dedicated update branch with delete-and-recreate strategy
+- Regenerates the lockfile per package manager (`pnpm clean --lockfile` + `pnpm install --frozen-lockfile=false`; `bun install --force`; remove `package-lock.json` + `npm install`) so it reflects the changed manager version, config and ranges (advancing transitives is expected, not noise)
+- Uses GitHub App authentication across a three-phase (pre/main/post) token lifecycle coordinated by `GitHubToken` (from `@effected/github-actions`) for secure, short-lived tokens
+- Manages a dedicated update branch via `GitBranch.upsert` (create when absent, force-reset to the source ref when present)
 - Creates verified/signed commits via GitHub API (`GitCommit.commitFiles`)
 - Creates detailed PR summaries with dependency changes
 
@@ -39,7 +43,7 @@ The `silk-update-action` is a GitHub Action that automates updates to pnpm confi
 **Primary Goals:**
 
 1. **Config Dependency Support**: Fill the gap left by Dependabot's lack of config dependency support
-2. **Monorepo Centralization**: Enable centralized dependency management in pnpm monorepos
+2. **Monorepo Centralization**: Enable centralized dependency management in pnpm monorepos, and reproduce the same workflow for bun catalogs
 3. **Automation**: Reduce manual effort in keeping dependencies up-to-date
 4. **Safety**: Provide clear visibility into what's being updated via detailed PR summaries
 5. **Integration**: Work seamlessly with existing tools (Changesets, CI/CD, code review)
@@ -48,7 +52,8 @@ The `silk-update-action` is a GitHub Action that automates updates to pnpm confi
 **Non-Goals:**
 
 - Replace Dependabot entirely (complementary tool)
-- Manage dependencies for other package managers (config/regular/peer dependency updates are pnpm-specific). The `upgrade-package-manager` input is deliberately named generically — it currently upgrades pnpm only, but support for upgrading other package managers is planned
+- Support yarn — it is detected upstream but rejected here with an `InvalidInputError`, because nothing in the config-dep, install or upgrade paths is wired or tested for it
+- Reproduce config dependencies for npm, which has no `catalog:` protocol to merge into
 - Automatically merge PRs (requires human review)
 - Handle breaking change detection (relies on semver and testing)
 

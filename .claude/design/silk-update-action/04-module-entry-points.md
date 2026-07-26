@@ -3,8 +3,8 @@ status: current
 module: silk-update-action
 category: architecture
 created: 2026-02-20
-updated: 2026-07-21
-last-synced: 2026-07-21
+updated: 2026-07-26
+last-synced: 2026-07-26
 completeness: 95
 related:
   - ./_index.md
@@ -17,53 +17,68 @@ implementation-plans: []
 [Back to index](./_index.md)
 
 The action ships three entry points wired to the `runs` block in `action.yml`:
-`pre: dist/pre.js`, `main: dist/main.js`, `post: dist/post.js`. The GitHub App
-token lifecycle spans them — `pre` provisions, `main` consumes, `post` revokes.
+`pre: dist/pre.js`, `main: dist/main.js`, `post: dist/post.js` (the build derives
+them from `action.config.ts`). The GitHub App token lifecycle spans them — `pre`
+provisions, `main` consumes, `post` revokes.
 
 ## src/pre.ts - Pre-Phase Entry
 
-`pre.ts` provisions the GitHub App installation token and records the start
-time for `post`'s duration report. `GitHubToken.provision({ permissions })`
-reads the `app-client-id` / `app-private-key` inputs, mints the token, performs
-a **fail-fast scope check** (a missing App scope fails here in `pre` rather than
-mid-run in `main`), resolves the App identity best-effort and persists the token
-envelope to `ActionState`. The start time is saved as a `StartTimeState`
-(`src/state.ts`).
+`pre.ts` provisions the GitHub App installation token and records the start time
+for `post`'s duration report.
+
+Unlike the deleted library's `provision`, the kit's
+`GitHubToken.provision` takes credentials **explicitly** rather than reading the
+action inputs itself, so `pre.ts` parses them — through `ActionInput`, like every
+other input in this action. The scope-check field is named `required`, and it is
+verified against what GitHub actually granted before the token is persisted, so a
+misconfigured installation fails here in `pre` rather than mid-run in `main` with
+a 403 on one request.
 
 ```typescript
+const state = yield* ActionState;
+const env = yield* ActionEnvironment;
+
 yield* state.save(STATE_KEYS.startTime, new StartTimeState({ startedAt: Date.now() }), StartTimeState);
+
+const appId = yield* ActionInput.string("app-client-id");
+const privateKey = yield* ActionInput.redacted("app-private-key");
+const owner = (yield* env.github).repositoryOwner;
+
 const token = yield* GitHubToken.provision({
- permissions: { contents: "write", pull_requests: "write", checks: "write" },
+ appId,
+ privateKey,
+ owner,
+ required: { contents: "write", pull_requests: "write", checks: "write" },
 });
 ```
 
-`PreLive` provides `GitHubAppLive` (over `OctokitAuthAppLive` and
-`FetchHttpClient.layer`, since `GitHubAppLive` requires `HttpClient.HttpClient`)
-merged with `NodeFileSystem.layer`. The module-level run is guarded by
+`PreLive` is just `GitHubApp.layer` — in the kit that layer is **self-contained**:
+there is no octokit auth-app strategy to provide and no separate `FetchHttpClient`
+wiring. `ActionState` / `ActionOutputs` come from `Action.run`'s runtime, so they
+are not rebuilt here either. The module-level run is
+`await Action.run(pre, { layer: PreLive })`, guarded by
 `if (process.env.GITHUB_ACTIONS)` so importing the module in tests does not
 execute it.
 
 ## src/post.ts - Post-Phase Entry
 
 `post.ts` runs after `main`, even on failure. It reports total duration from the
-saved `StartTimeState`, then revokes the token via `GitHubToken.dispose()`. The
-whole effect is guarded with `Effect.catch` (around `dispose`) plus
-`Effect.catchDefect` (v4 spellings of the old `catchAll` / `catchAllDefect`) so a
-post failure never fails the workflow. `PostLive` provides `GitHubAppLive` over
-`OctokitAuthAppLive` and `FetchHttpClient.layer` (imported from
-`effect/unstable/http` in v4) merged with `NodeFileSystem.layer`, mirroring
-`PreLive`.
+saved `StartTimeState` (read with `state.getOptional`, so a run where `pre` never
+recorded one is silent rather than failing), then revokes the token via
+`GitHubToken.dispose()` — a no-op if `pre` never provisioned one. The whole
+effect is guarded with `Effect.catch` (around `dispose`) plus `Effect.catchDefect`
+so a post failure never fails the workflow. `PostLive` is `GitHubApp.layer`,
+mirroring `PreLive`.
 
 ## src/main.ts - Main-Phase Entry
 
 `main.ts` is intentionally tiny: it calls `Action.run(program)` on the program
 imported from `./program.ts`. No `{ layer }` is needed — `program`'s only
-requirements are the core services `Action.run` injects (`ActionEnvironment`,
-`ActionOutputs`, config provider); `GitHubClient` and the domain services are
-provided internally by `appLayer`.
+requirements are the core services `Action.run` injects; the `GitHubClient` and
+the domain services are provided internally by `appLayer`.
 
 ```typescript
-import { Action } from "@savvy-web/github-action-effects";
+import { Action } from "@effected/github-actions";
 import { program } from "./program.js";
 
 /* v8 ignore next */
@@ -71,8 +86,8 @@ Action.run(program);
 ```
 
 The module-level call is annotated with `/* v8 ignore next */` so coverage is
-attributed to `program.ts`. Tests import `program` and `runCommands` directly
-from `./program.js` without ever evaluating `main.ts`.
+attributed to `program.ts`. Tests import `readInputs`, `program`, `runCommands`
+and `runInstall` directly from `./program.js` without ever evaluating `main.ts`.
 
 ## src/state.ts - Cross-Phase State
 
@@ -85,148 +100,169 @@ own internal key.
 
 ## src/program.ts - The Effect Program
 
-**Responsibility:** Orchestrate the complete dependency update workflow for the
-`main` phase, including check runs and all update steps. Token provisioning and
-revocation live in `pre.ts` / `post.ts`, not here.
+**Responsibility:** orchestrate the complete dependency update workflow for the
+`main` phase, including the check run and all update steps. Token provisioning
+and revocation live in `pre.ts` / `post.ts`, not here.
 
-### Input Parsing
+The module exports four things: `readInputs`, `program`, `innerProgram`, and the
+`runCommands` / `runInstall` helpers.
 
-Inputs are parsed using Effect's `Config.*` API:
+### `readInputs` — the input layer, extracted deliberately
 
-```typescript
-const branch = yield* Config.string("branch").pipe(Config.withDefault("pnpm/config-deps"));
-const sourceBranch = yield* Config.string("source-branch").pipe(Config.withDefault("main"));
-const rawTargetBranch = yield* Config.string("target-branch").pipe(Config.withDefault(""));
-// Empty target-branch follows source-branch (resolveTargetBranch in src/utils/branch.ts).
-const targetBranch = resolveTargetBranch(rawTargetBranch, sourceBranch);
-const rawConfigDeps = yield* Config.string("config-dependencies").pipe(Config.withDefault(""));
-const configDependencies = parseMultiValueInput(rawConfigDeps);
-const rawDeps = yield* Config.string("dependencies").pipe(Config.withDefault(""));
-const dependencies = parseMultiValueInput(rawDeps);
-const rawPeerLock = yield* Config.string("peer-lock").pipe(Config.withDefault(""));
-const peerLock = parseMultiValueInput(rawPeerLock);
-const rawPeerMinor = yield* Config.string("peer-minor").pipe(Config.withDefault(""));
-const peerMinor = parseMultiValueInput(rawPeerMinor);
-const rawRun = yield* Config.string("run").pipe(Config.withDefault(""));
-const run = parseMultiValueInput(rawRun);
-// upgrade-package-manager is a string: "false" | "true" | "auto" | a semver range.
-const upgradePackageManager = yield* Config.string("upgrade-package-manager").pipe(Config.withDefault("true"));
-const changesets = yield* Config.boolean("changesets").pipe(Config.withDefault(true));
-const autoMerge = yield* Config.string("auto-merge").pipe(Config.withDefault(""));
-const dryRun = yield* Config.boolean("dry-run").pipe(Config.withDefault(false));
-const timeout = yield* Config.int("timeout").pipe(Config.withDefault(180));
-// upgrade-runtime-{node,deno,bun} default "false"; runtime-data default "offline".
-const rawRuntimeNode = yield* Config.string("upgrade-runtime-node").pipe(Config.withDefault("false"));
-const rawRuntimeDeno = yield* Config.string("upgrade-runtime-deno").pipe(Config.withDefault("false"));
-const rawRuntimeBun = yield* Config.string("upgrade-runtime-bun").pipe(Config.withDefault("false"));
-const runtimeData = yield* Config.string("runtime-data").pipe(Config.withDefault("offline"));
-const runtimeLive = runtimeData === "live";
+Input parsing is **split out of `program`** rather than inlined, because it is the
+only part of the program reachable in-process without the real GitHub/layer
+wiring — and leaving it inline is exactly what let an input regression ship green.
 
-// upgrade-package-manager and each upgrade-runtime-* value must be one of the input's
-// allowed keywords or a parseable semver range — explicit ranges are validated
-// via Range.parse from @effected/semver.
-const anyRuntime = rawRuntimeNode !== "false" || rawRuntimeDeno !== "false" || rawRuntimeBun !== "false";
-
-// Cross-validate: at least one update type must be active
-if (configDependencies.length === 0 && dependencies.length === 0 && upgradePackageManager === "false" && !anyRuntime) {
- return yield* Effect.fail(new ActionInputError({ /* ... */ }));
-}
-
-// peer-lock and peer-minor must not overlap
-const peerOverlap = peerLock.filter((p) => peerMinor.includes(p));
-if (peerOverlap.length > 0) {
- return yield* Effect.fail(new ActionInputError({ /* ... */ }));
-}
-```
-
-`parseMultiValueInput` (in `src/utils/input.ts`) accepts JSON arrays,
-newline-separated lists (with optional `*` bullets and `#` comments), or
-comma-separated strings. The `runtime-data` input (`offline` | `live`) selects
-which `@effected/runtimes` resolver layers `makeAppLayer` wires.
-
-### Layer Composition
-
-There is no token plumbing in `program.ts`. The installation token was
-provisioned in `pre` and its envelope persisted to `ActionState`; `program`
-reads `headSha` from `ActionEnvironment`, builds the per-run layer and runs
-`innerProgram` under the resolved log-level minimum (debug when the runner's
-step-debug flag is on, info otherwise) and the timeout:
+Every read goes through **`ActionInput`**, never bare `Config`:
 
 ```typescript
-const env = yield* ActionEnvironment;
-const headSha = (yield* env.github).sha;
-
-const appLayer = makeAppLayer(dryRun, { runtimeLive });
-yield* innerProgram(inputs, dryRun, headSha, appLayer)
- // v4: minimum log level is set via References, not Logger.withMinimumLogLevel;
- // effectLogLevel is a string literal ("Debug" | "Info").
- .pipe(Effect.provideService(References.MinimumLogLevel, effectLogLevel))
- // v4: Effect.timeoutOrElse replaces Effect.timeoutFail.
- .pipe(Effect.timeoutOrElse({
-  duration: Duration.seconds(timeout),
-  orElse: () => Effect.fail(new Error(`Action timed out after ${timeout} seconds`)),
- }));
+export const readInputs = Effect.gen(function* () {
+ const branch = yield* ActionInput.string("branch").pipe(Config.withDefault("pnpm/config-deps"));
+ const sourceBranch = yield* ActionInput.string("source-branch").pipe(Config.withDefault("main"));
+ const rawTargetBranch = yield* ActionInput.string("target-branch").pipe(Config.withDefault(""));
+ const targetBranch = resolveTargetBranch(rawTargetBranch, sourceBranch);
+ const configDependencies = yield* ActionInput.list("config-dependencies").pipe(
+  Config.withDefault<ReadonlyArray<string>>([]),
+ );
+ const dependencies = yield* ActionInput.list("dependencies").pipe(Config.withDefault<ReadonlyArray<string>>([]));
+ const peerLock = yield* ActionInput.list("peer-lock").pipe(Config.withDefault<ReadonlyArray<string>>([]));
+ const peerMinor = yield* ActionInput.list("peer-minor").pipe(Config.withDefault<ReadonlyArray<string>>([]));
+ const run = yield* ActionInput.list("run").pipe(Config.withDefault<ReadonlyArray<string>>([]));
+ // Default "false" — opt-in, matching the upgrade-runtime-* inputs.
+ const upgradePackageManager = yield* ActionInput.string("upgrade-package-manager").pipe(Config.withDefault("false"));
+ const changesets = yield* ActionInput.boolean("changesets").pipe(Config.withDefault(true));
+ const autoMerge = yield* ActionInput.string("auto-merge").pipe(Config.withDefault(""));
+ const dryRun = yield* ActionInput.boolean("dry-run").pipe(Config.withDefault(false));
+ const timeout = yield* ActionInput.integer("timeout").pipe(Config.withDefault(180));
+ // upgrade-runtime-{node,deno,bun} default "false"; runtime-data default "offline".
+ // …validation below…
+});
 ```
 
-`makeAppLayer(dryRun, { runtimeLive })` builds the `GitHubClient` from
-`GitHubToken.client()` (see `src/layers/app.ts`), which reads the token envelope
-from `ActionState` — no `process.env.GITHUB_TOKEN` bridge. `program.ts` does no
-token plumbing of its own. `runtimeLive` (derived from `runtime-data === "live"`)
-selects the `@effected/runtimes` resolver layers.
+**Why this matters (the regression it pins):** GitHub exports inputs as `INPUT_*`
+with only spaces mangled — `dependencies` → `INPUT_DEPENDENCIES`,
+`upgrade-runtime-node` → `INPUT_UPGRADE-RUNTIME-NODE` (the dash survives). A bare
+`Config.string("dependencies")` looks up the literal name `dependencies`, finds
+nothing under the runner and silently takes its `withDefault`. Every input then
+resolves to its default and every step reports "not configured" while the
+workflow plainly configured it — including `dry-run`, so a workflow asking to
+rehearse performed a live run. `program.inputs.test.ts` injects a runner-shaped
+environment through `ActionInput.layer`, so reverting to bare `Config` fails every
+assertion. (Upstream has since also made `Action.run` install an ActionInput-aware
+provider — defense in depth; the accessors remain the API.)
 
-### Program Structure
+`ActionInput.list` supplies the multi-value grammar (newline lists with `-` or `*`
+bullets, `#` comment lines dropped before bullet-stripping, JSON arrays, commas)
+that used to live in this repo's `src/utils/input.ts`, now **deleted** along with
+`parseMultiValueInput`. `list` fails on an absent **and** on an empty input, so
+the `Config.withDefault([])` on each list read is load-bearing, not decoration.
 
-The module exports:
+Validation performed in `readInputs`:
 
-- `program` — the main Effect (input parsing, layer composition, timeout).
-- `innerProgram(inputs, dryRun, headSha, appLayer)` — the orchestration body.
-  Provides `appLayer` at two levels (outer + inside the `withCheckRun`
-  callback) because the callback signature requires `R = never`. Inside
-  `withCheckRun` it calls `BranchManager.validateBranches(sourceBranch,
-  targetBranch)` **before** `BranchManager.manage(branch, sourceBranch)`, so a
-  missing ref fails fast before the destructive delete-and-recreate. The
-  resolved `targetBranch` is threaded into `Report.createOrUpdatePR(branch,
-  base, ...)` as the PR base, and into `Changesets.create(process.cwd(),
-  targetBranch)` as the diff baseline. When `changesets` is enabled it first
-  runs `BranchManager.ensureBaseHistory(targetBranch)` so the DepsRegen
-  `merge-base(target) → worktree` diff can resolve on a shallow checkout.
-- `runCommands(commands)` — execute custom commands sequentially via
-  `CommandRunner` (`sh -c "<cmd>"`); returns `{ successful, failed }`.
-- `runInstall()` — regenerates the lockfile via `CommandRunner.exec`:
-  `pnpm clean --lockfile` then `pnpm install --frozen-lockfile=false`. It does
-  not `--fix-lockfile` — the action changes the pnpm version, config and ranges,
-  so resolution is re-run from scratch rather than repairing the existing
-  lockfile (see the `runInstall` doc comment in `src/program.ts` for the full
-  rationale and the pnpm 11+ / consumer-`clean`-script caveats).
+- `upgrade-package-manager` and each `upgrade-runtime-*` value must be one of the
+  input's keywords or a parseable semver range — checked with the **standalone**
+  `Range.parse` from `@effected/semver` (the static alias is tree-shaken out of
+  the bundled dist), raising `InvalidInputError` on failure.
+- At least one update type must be active. Since `upgrade-package-manager`
+  defaults to `"false"`, a workflow configuring nothing now fails here.
+- `peer-lock` / `peer-minor` must not overlap; peer entries matching no
+  `dependencies` pattern warn.
+- An unrecognized `runtime-data` value warns and falls back to `offline`.
 
-`innerProgram` requires all domain services (`BranchManager`, `PnpmUpgrade`,
-`RuntimeUpgrade`, `ConfigDeps`, `RegularDeps`, `Changesets`, `Report`) and
-helper functions (`captureLockfileState`, `compareLockfiles`, `syncPeers`,
-`formatWorkspaceYaml`) plus library services (`ActionOutputs`, `CheckRun`,
-`CommandRunner`) and `WorkspaceDiscovery` (from `@effected/workspaces`) in its
-context.
+### `program` — layer composition and timeout
 
-The module-level call in `main.ts` uses `Action.run(program)` which handles all
-error formatting via `formatCause` automatically.
+```typescript
+export const program = Effect.gen(function* () {
+ const { inputs, dryRun, timeout, runtimeLive } = yield* readInputs;
 
-Timeout is applied inside `program` via `Effect.timeoutOrElse` using the
-configurable `timeout` input (default: 180 seconds).
+ const env = yield* ActionEnvironment;
+ // The kit has no Action.resolveLogLevel — ActionEnvironment.isDebug is the
+ // seam that reads the runner's step-debug flag (RUNNER_DEBUG/ACTIONS_STEP_DEBUG).
+ const effectLogLevel = (yield* env.isDebug) ? "Debug" : "Info";
+ const headSha = (yield* env.github).sha;
 
-### Key Exported Functions
+ const appLayer = makeAppLayer(dryRun, { runtimeLive });
+ yield* innerProgram(inputs, dryRun, headSha, appLayer)
+  .pipe(Effect.provideService(References.MinimumLogLevel, effectLogLevel))
+  .pipe(Effect.timeoutOrElse({
+   duration: Duration.seconds(timeout),
+   orElse: () => Effect.fail(new Error(`Action timed out after ${timeout} seconds`)),
+  }));
+});
+```
 
-- `program` — Main Effect (exported for testability).
-- `runCommands(commands)` — Execute custom commands sequentially via
-  `CommandRunner`.
-- `runInstall()` — Regenerate the lockfile: `pnpm clean --lockfile` then `pnpm install --frozen-lockfile=false`.
+`makeAppLayer` builds the `GitHubClient` from `GitHubToken.clientLayer()` (see
+`src/layers/app.ts`), which reads the token envelope from `ActionState` — no
+`process.env.GITHUB_TOKEN` bridge and no token plumbing in `program.ts`.
 
-Report-related functions (PR creation, commit messages, summaries) live in the
-`Report` service in `src/services/report.ts`.
+### `innerProgram(inputs, dryRun, headSha, appLayer)`
+
+The orchestration body. It provides `appLayer` at two levels (outer, and again
+inside the `withCheckRun` callback, because that callback signature requires
+`R = never`).
+
+Inside the check run it:
+
+1. Calls `detectPackageManager()` **first** — inside the check run, like the
+   branch validation and for the same reason: an unsupported workspace (yarn, or
+   no workspace root) must fail with a check run in the GitHub UI rather than an
+   invisible early exit.
+2. Logs a "Run context" block (package manager + evidence, workspace root +
+   package count, lockfile name, branch triple, mode/changesets/runtime-data).
+3. Runs `BranchManager.validateBranches` before `BranchManager.manage`, so a
+   missing ref fails before the branch is reset.
+4. Threads `detected.root` — **not** `process.cwd()` — into every step that reads
+   or writes files, and `detected.pm` into every dispatch point.
+5. Threads the resolved `targetBranch` into `Report.createOrUpdatePR(branch,
+   base, …)` as the PR base and into `Changesets.create(detected.root,
+   targetBranch)` as the diff baseline, running
+   `BranchManager.ensureBaseHistory(targetBranch)` first.
+
+Its logging contract is part of its design, and is what `program.inner.test.ts`
+asserts on: every skipped step states a reason, dispatch decisions name the path
+and the evidence, and the one non-benign skip (an unsatisfiable
+`upgrade-package-manager` range) reports at **warning** while "disabled" and
+"already current" stay at info.
+
+`innerProgram` requires the domain services (`BranchManager`,
+`PackageManagerUpgrade`, `RuntimeUpgrade`, `ConfigDeps`, `CatalogConfigDeps`,
+`RegularDeps`, `Changesets`, `Report`), the standalone helpers
+(`detectPackageManager`, `captureLockfileState`, `compareLockfiles`, `syncPeers`,
+`formatWorkspaceYaml`), the kit services (`ActionOutputs`, `CheckRun`, `Repo`)
+and `WorkspaceDiscovery` plus `ChildProcessSpawner`.
+
+### `runCommands(commands)`
+
+Executes each custom command sequentially via
+`Run.collect(ChildProcess.make("sh", ["-c", command]))`. `Run.collect` treats a
+non-zero exit as a **result**, so the failure branch is driven by the exit code
+and the surrounding `Effect.catch` covers only a genuine spawn failure. All
+commands are attempted; failures are collected and returned as
+`{ successful, failed }`.
+
+### `runInstall(pm, workspaceRoot?)`
+
+Regenerates the lockfile, dispatched on the package manager, with every command
+anchored at `workspaceRoot`:
+
+- **pnpm:** `pnpm clean --lockfile` then `pnpm install --frozen-lockfile=false`.
+- **bun:** `bun install --force`.
+- **npm:** remove `package-lock.json` via `node:fs` (not a shelled `rm` — it does
+  not exist on a Windows runner) then `npm install`.
+
+It regenerates rather than repairs because the action mutates all three inputs to
+resolution — the manager version, the manager's config, and the declared ranges —
+and a repair-only install (pnpm's `--fix-lockfile`) never re-runs resolution under
+the changed inputs, so it can commit an inconsistent lockfile (an upstream peer
+range moving leaves a required peer unfilled → `ERR_MODULE_NOT_FOUND` for the
+consumer). It uses `Run.text`, which fails typed on a non-zero exit, so an install
+failure aborts the run.
 
 ### Required GitHub App Permissions
 
-Passed to `GitHubToken.provision({ permissions })` in `pre.ts` for a fail-fast
+Passed to `GitHubToken.provision({ required })` in `pre.ts` for the fail-fast
 scope check:
 
-- `contents: write` - Push commits and branches
-- `pull_requests: write` - Create and update PRs
-- `checks: write` - Create and update check runs
+- `contents: write` — push commits and branches
+- `pull_requests: write` — create and update PRs
+- `checks: write` — create and update check runs

@@ -3,8 +3,8 @@ status: current
 module: silk-update-action
 category: architecture
 created: 2026-02-20
-updated: 2026-07-24
-last-synced: 2026-07-24
+updated: 2026-07-26
+last-synced: 2026-07-26
 completeness: 95
 related:
   - ./_index.md
@@ -18,162 +18,176 @@ implementation-plans: []
 
 ## Domain Services (src/services/)
 
-All domain logic is wrapped as Effect services with `Context.Service` (v4; was
-`Context.Tag`) + `Layer`, or (for stateless concerns) exported as standalone
-helper functions. Each service depends on library services from
-`@savvy-web/github-action-effects` and/or `@effected/workspaces`. The v4
-`Context.Service` form is `class Foo extends Context.Service<Foo, Shape>()("Foo") {}`;
-where a service value needs typing without being yielded, the library exposes a
-companion `*Shape` interface (e.g. `NpmRegistryShape`).
+All domain logic is wrapped as Effect services with `Context.Service` + `Layer`,
+or (for stateless concerns) exported as standalone helper functions. Each service
+depends on kit services from `@effected/*` and/or `@savvy-web/silk-effects`. The
+service form is
+`class Foo extends Context.Service<Foo, Shape>()("Foo") {}`; where a service value
+needs typing without being yielded, the kit exposes a companion `*Shape`
+interface (e.g. `NpmRegistryShape`, `WorkspaceDiscoveryShape`, `GitBranchShape`,
+`PullRequestShape`).
 
 ### Workspace discovery (via @effected/workspaces)
 
-Domain services consume the `WorkspaceDiscovery` service from
-`@effected/workspaces` directly, via its **arg-less** `listPackages()` and
-`importerMap()` methods. In Effect v4 the workspace root is bound when the layer
-is built (`WorkspaceDiscovery.layer(opts?)`), so these methods no longer take a
-`cwd` parameter.
-
-The upstream service interface (relevant slice):
-
-```typescript
-import { WorkspaceDiscovery } from "@effected/workspaces";
-
-// WorkspaceDiscovery exposes (among others):
-//   listPackages: () =>
-//     Effect.Effect<ReadonlyArray<WorkspacePackage>, ...>
-//   importerMap: () =>
-//     Effect.Effect<ReadonlyMap<string, WorkspacePackage>, ...>
-// (companion WorkspaceDiscoveryShape types a resolved instance)
-```
-
-`importerMap` returns a map keyed by importer path relative to the workspace
-root (`.` for the root workspace), used by `Lockfile.compare` to translate
-importer ids into package names.
-
-`WorkspaceDiscovery.layer()` requires `WorkspaceRoot.layer` and
-`NodeServices.layer` (FileSystem/Path). Both are wired in `makeAppLayer`;
-integration tests build their own `discoveryLayer` from `NodeServices.layer`
-directly.
+Domain services consume `WorkspaceDiscovery` directly, via its **arg-less**
+`listPackages()` and `importerMap()` methods — the workspace root is bound when
+`WorkspaceDiscovery.layer(opts?)` is built. `importerMap` is keyed by importer
+path relative to the root (`.` for the root workspace), used by `Lockfile.compare`
+to translate importer ids into package names.
 
 **Caching:** `WorkspaceDiscovery` caches `listPackages` per root for the layer
-lifetime, and Effect memoizes layers by object reference, so every consumer
-wired from the same layer shares one instance — an enumeration cached before
+lifetime, and Effect memoizes layers by object reference, so every consumer wired
+from the same layer shares one instance — an enumeration cached before
 `ConfigDeps`/`RegularDeps` edit manifests stays stale for later readers unless
-refreshed. DepsRegen refreshes at plan time (see the `Changesets` service
-below), so the changeset step is not bitten by this.
+refreshed. DepsRegen refreshes at plan time (see `Changesets` below), so the
+changeset step is not bitten by this.
 
-### Changeset gating (via @savvy-web/silk-effects DepsRegen)
+### src/services/package-manager.ts - detectPackageManager
 
-The dependency-changeset step delegates entirely to silk's `Changesets.DepsRegen` — see the `Changesets` service below. All gating (versionable-minus-ignored: publishable OR `privatePackages.version`, minus the changeset `ignore` list) lives **upstream inside DepsRegen**. The action no longer wraps `ChangesetConfig` or the `PublishabilityDetector` overrides: the former `services/changeset-config.ts` and `services/publishability.ts` re-export shims are deleted, and DepsRegen's batteries-included Layer (`DepsRegenDefault`) provides those services internally.
+Resolves the workspace root and package manager **once per run**; every dispatch
+point in `innerProgram` reads that one value. Standalone function, no service tag.
+
+```typescript
+export const detectPackageManager = (
+ cwd?: string,
+) => Effect.Effect<DetectedPm, InvalidInputError, PackageManagerDetector | WorkspaceRoot>;
+```
+
+- Delegates to `@effected/workspaces`' `PackageManagerDetector`, which is also what
+  `LockfileReader` and `PointInTimeWorkspace` consult internally — so the manager
+  the action dispatches on is always the one those libraries parse for.
+- **Yarn is rejected** with `InvalidInputError`: it is detected upstream, but
+  nothing in the config-dep, install or upgrade paths is wired or tested for it.
+- `WorkspaceRootNotFoundError` and `PackageManagerDetectionError` share the same
+  `reason` / `searchPath` shape and are mapped to `InvalidInputError` through one
+  handler. The kit has no `ActionInputError` successor, and this is not an
+  input-parse failure anyway — the workspace on disk is the thing being rejected.
 
 ### src/services/branch.ts - BranchManager
 
-Branch management and commit operations using `GitBranch`, `GitCommit`, and
-`CommandRunner` library services.
-
-**Service interface:**
+Branch management and commit operations over `GitBranch` / `GitCommit` (from
+`@effected/github`) for the API half, and `@effected/commands`' `Run` for the
+local git half.
 
 ```typescript
 export class BranchManager extends Context.Service<BranchManager, {
  readonly manage: (branchName: string, defaultBranch?: string) =>
-  Effect.Effect<BranchResult, GitBranchError | CommandRunnerError>;
+  Effect.Effect<BranchResult, GitHubError | GitRunError, Repo>;
  readonly commitChanges: (message: string, branchName: string) =>
-  Effect.Effect<void, GitCommitError | CommandRunnerError>;
+  Effect.Effect<void, GitHubError | GitRunError, Repo>;
  readonly validateBranches: (source: string, target: string) =>
-  Effect.Effect<void, GitBranchError | ActionInputError>;
- readonly ensureBaseHistory: (base: string) =>
-  Effect.Effect<void, CommandRunnerError>;
+  Effect.Effect<void, GitHubError | InvalidInputError, Repo>;
+ readonly ensureBaseHistory: (base: string) => Effect.Effect<void, GitRunError>;
 }>()("BranchManager") {}
 ```
 
-**Branch Strategy:** Delete-and-recreate instead of rebase. The update branch is
-created from (and reset to) the configurable `source-branch` (default `main`,
-passed as `manage`'s second argument). When the branch already exists, it is
-deleted and recreated from the source branch for a fresh start.
+**`Repo` stays in `R`, deliberately.** The layer resolves the `ChildProcessSpawner`
+once (ambient infrastructure) but does **not** resolve `Repo` — keeping it in each
+method's requirements is what makes `Repo.provide(ref)` meaningful for a caller
+targeting a different repository.
 
-**Pre-flight validation:** `validateBranches(source, target)` yields
-`GitBranch.exists` for both refs and fails fast with `ActionInputError`
-(`inputName` `"source-branch"` / `"target-branch"`) if either ref is missing
-(the target check is skipped when `target === source`). `program.ts` calls it
-inside `withCheckRun` **before** `manage`, so a typo'd ref aborts before the
-destructive delete-and-recreate.
+**Branch strategy — `GitBranch.upsert`.** `manage` reads the source branch SHA via
+the API and calls `upsert(branchName, baseSha)`, which creates the branch when
+absent and force-resets it when present, reporting which happened. This replaced
+the exists/delete/create dance: same net effect, without racing anything that
+reads the ref in between.
 
-**Commit via GitHub API:** `commitChanges` reads changed files from
-`git status --porcelain` (handling `D`-marked deletions as `{ path, sha: null }`)
-and calls `GitCommit.commitFiles(branch, message, fileChanges)` — the library's
-single-call wrapper that creates the tree, the commit (without an explicit
-author so GitHub verifies it), and updates the branch ref. After committing,
-the working tree is synced via `git fetch origin <branch>` + `git reset --hard
-origin/<branch>` because `git checkout` would refuse to overwrite the
+**Pre-flight validation.** `validateBranches(source, target)` checks both refs and
+fails fast with `InvalidInputError` (`field` = `"source-branch"` /
+`"target-branch"`); the target check is skipped when `target === source`.
+`innerProgram` calls it before `manage`, so a typo'd ref aborts before the reset.
+
+**Commit via GitHub API.** `commitChanges` reads changed files from
+`git -c core.fileMode=false status --porcelain` and calls
+`GitCommit.commitFiles({ branch, message, changes })` — one call that creates the
+tree, the commit (without an explicit author, so GitHub verifies it) and updates
+the ref. The kit models changes as tagged members: `FileDeletion.make({ path })`
+and `FileContent.make({ path, content })`, replacing the old `{ path, sha: null }`
+sentinel. Afterwards the working tree is synced with `git fetch origin <branch>` +
+`git reset --hard origin/<branch>`, because `git checkout` refuses to overwrite the
 just-committed working-copy state.
 
-**Base-history preflight:** `ensureBaseHistory(base)` probes
-`git merge-base <base> HEAD`; if it resolves (the `fetch-depth: 0` case) it is
-a no-op.
-Otherwise it best-effort fetches the base ref, unshallows a shallow clone and
-materializes a local `base` ref, then warns (non-fatal) if the merge-base is
-still missing. `program.ts` calls it before the changeset step because silk's
-`DepsRegen` diffs `merge-base(base) → worktree`, which a shallow checkout
-cannot resolve.
+- `core.fileMode=false` is load-bearing: executable-bit-only flips (e.g. husky
+  chmod-ing hooks during a `run` command) do not survive a content-based API
+  commit at mode 100644, so counting them would create an empty commit and a
+  spurious PR. `program.ts`'s change detection queries status the same way.
+- Status output is read through a local `gitRaw` helper using `Run.collect`, not
+  `Run.text`: **`Run.text` trims**, and `--porcelain`'s two-character status field
+  is column-aligned, so trimming a leading space shifts every `substring` index.
+
+**Base-history preflight.** `ensureBaseHistory(base)` probes
+`git merge-base <base> HEAD` (via `Run.succeeds`); if it resolves — the
+`fetch-depth: 0` case — it is a no-op. Otherwise it best-effort fetches the base
+ref, unshallows a shallow clone, materializes a local ref, and warns non-fatally
+if the merge-base is still missing. Required because DepsRegen diffs
+`merge-base(base) → worktree`.
 
 ### src/services/workspace-yaml.ts - WorkspaceYaml
 
-Format `pnpm-workspace.yaml` consistently to avoid lint-staged hook changes.
+Format `pnpm-workspace.yaml` consistently to avoid lint-staged hook churn.
 
-**Formatting Rules:**
+**Formatting rules:** sort `packages` / `onlyBuiltDependencies` /
+`publicHoistPattern` arrays, sort `configDependencies` keys, sort top-level keys
+alphabetically but keep `packages` first, and stringify with `indent: 2`,
+`lineWidth: 0`, `singleQuote: false`.
 
-1. Sort arrays alphabetically: `packages`, `onlyBuiltDependencies`, `publicHoistPattern`
-2. Sort `configDependencies` object keys alphabetically
-3. Sort top-level keys alphabetically, but keep `packages` first
-4. YAML stringify: `indent: 2`, `lineWidth: 0`, `singleQuote: false`
+**Exported helpers:** `formatWorkspaceYaml(workspaceRoot?)`,
+`readWorkspaceYaml(workspaceRoot?)`, `sortContent(content)`, `STRINGIFY_OPTIONS`,
+plus a `WorkspaceYaml` tag/`WorkspaceYamlLive` that the program does not wire (the
+standalone helpers are what `program.ts`, `ConfigDeps` and `ReleaseAge` use).
+Parsing/stringifying goes through `@effected/yaml`, whose `Yaml.parse` /
+`Yaml.stringify` return Effects, mapped into `FileSystemError`.
 
-**Exported helpers** (used directly by `program.ts` and `ConfigDeps`):
+### src/services/package-manager-upgrade.ts - PackageManagerUpgrade
 
-- `formatWorkspaceYaml(workspaceRoot?)` - Read, sort, and write back
-- `readWorkspaceYaml(workspaceRoot?)` - Read and parse workspace YAML
-- `sortContent(content)` - Sort workspace content
-- `STRINGIFY_OPTIONS` - Consistent YAML stringify options
-
-### src/services/pnpm-upgrade.ts - PnpmUpgrade
-
-Upgrade pnpm by editing the `packageManager` and `devEngines.packageManager` fields of the root `package.json` directly — **not** via `corepack use`. `corepack use` errors when both `packageManager` and `devEngines.packageManager` are present, so the service derives corepack's canonical hash itself and writes the fields; the subsequent `runInstall` performs the actual corepack switch. Depends on `NpmRegistry` (not `CommandRunner`): `NpmRegistryLive` routes every npm invocation through a runner-writable cache (`--cache $RUNNER_TEMP/silk-npm-cache`), sidestepping the partially root-owned `~/.npm` on GitHub macOS runners that made a raw `npm view` shell-out fail with EACCES (the pnpm upgrade was skipped with a warning while `ConfigDeps`/`RegularDeps`, already on `NpmRegistry`, succeeded).
-
-**Service interface:**
+Self-upgrade of the **detected** package manager. Generalizes the former
+pnpm-only `PnpmUpgrade` to every `SupportedPm`: all three are published on npm, so
+the registry lookup and range logic are identical; only the write format differs.
+Depends on `NpmRegistry` (an HTTP client — no `npm view` subprocess, so the
+root-owned `~/.npm` EACCES class of failure on macOS runners is gone by
+construction).
 
 ```typescript
-export class PnpmUpgrade extends Context.Service<PnpmUpgrade, {
- readonly upgrade: (mode: string, workspaceRoot?: string) =>
-  Effect.Effect<PnpmUpgradeResult | null, FileSystemError>;
-}>()("PnpmUpgrade") {}
+export class PackageManagerUpgrade extends Context.Service<PackageManagerUpgrade, {
+ readonly upgrade: (mode: string, pm: SupportedPm, workspaceRoot?: string) =>
+  Effect.Effect<PackageManagerUpgradeOutcome, FileSystemError>;
+}>()("PackageManagerUpgrade") {}
 ```
-
-`mode` is the parsed `upgrade-package-manager` value (`false` | `true` | `auto` | a semver
-range). `false` returns `null` (skip).
 
 **Algorithm:**
 
-1. Read root `package.json` and parse the `packageManager` field
-   (`pnpm@10.28.2`, `pnpm@^10.28.2+sha512...`) and the `devEngines.packageManager`
-   field (name must be `pnpm`).
-2. Pick a **reference** version favoring `devEngines.packageManager` over the
-   `packageManager` field.
-3. Choose a target range: `true`/`auto` use `^reference` (latest within the
-   current major; skip with a warning if no reference exists); an explicit
-   semver range is used verbatim (may cross majors).
-4. Query available versions via `NpmRegistry.getVersions("pnpm")` and resolve via `resolveLatestSatisfying`. Skip if none satisfies or the resolved version equals the reference.
-5. Derive the corepack-canonical `+sha512.<hex>` hash from the resolved version's npm registry integrity (`NpmRegistry.getPackageInfo("pnpm", resolved)` → `.integrity` → `corepackHashFromIntegrity`, best-effort with an `Effect.catch`); fall back to a bare version when integrity is unavailable.
-6. Write `packageManager` = `pnpm@<v>+sha512.<hex>` (creating it in range mode
-   when no pnpm field exists at all) and, when present,
-   `devEngines.packageManager.version` = `<v>+sha512.<hex>`. The pinned hash is
-   inherently exact, so no range operator is written. Returns
-   `PnpmUpgradeResult` with `from: string | null` and `added: boolean`.
+1. Read root `package.json`; parse the `packageManager` field and the
+   `devEngines.packageManager` entry. An entry naming a *different* manager than
+   the one being upgraded is not a reference for this run and is ignored.
+2. Pick a reference version favoring `devEngines.packageManager`.
+3. Choose the target range: `true`/`auto` → `^reference` (latest within the
+   current major); an explicit range is used verbatim and may cross majors.
+4. Resolve via `NpmRegistry.versions(pm)` + `resolveLatestSatisfying`.
+5. Write. **corepack-managed managers (pnpm, npm)** get a pinned
+   `version+sha512.<hex>` (derived from the registry integrity via
+   `corepackHashFromIntegrity`) in both `packageManager` and
+   `devEngines.packageManager.version` — no `corepack use` is invoked, because it
+   errors when both fields are present; the subsequent install performs the
+   corepack switch. **bun is not corepack-managed** — it never consults
+   `packageManager` — so it is written as a bare `bun@<version>` and the integrity
+   fetch is skipped entirely.
+
+**`upgrade()` never returns `null`.** It always resolves to a
+`PackageManagerUpgradeOutcome` (see @./03-type-definitions.md) so the caller can
+report *why* nothing happened. `disabled`, `no-reference` and `already-current`
+are benign and log at info; **`unsatisfiable` logs at warning**, because it almost
+always means the configured range was typed for a different package manager than
+the one detected (a pnpm `^11.0.0` copy-pasted into a bun repo resolves against
+bun's release list and, correctly, satisfies nothing). That must not read as
+"already up to date".
 
 ### src/services/release-age.ts - ReleaseAge
 
-Mirror pnpm's `minimumReleaseAge` / `minimumReleaseAgeExclude` gate at resolution time so `ConfigDeps` and `RegularDeps` never propose a version pnpm would reject at install time (`ERR_PNPM_NO_MATURE_MATCHING_VERSION`). The gate vocabulary (`ReleaseAgeGate`, `PartialReleaseAgeGate`) lives upstream in `@effected/npm`; this module owns discovery, publish-time fetching and the service wiring.
-
-**Service interface:**
+Mirror pnpm's `minimumReleaseAge` / `minimumReleaseAgeExclude` gate at resolution
+time so `ConfigDeps` and `RegularDeps` never propose a version pnpm would reject
+at install (`ERR_PNPM_NO_MATURE_MATCHING_VERSION`). The gate vocabulary
+(`ReleaseAgeGate`, `PartialReleaseAgeGate`) lives upstream in `@effected/npm`;
+this module owns discovery and the service wiring.
 
 ```typescript
 export class ReleaseAge extends Context.Service<ReleaseAge, {
@@ -183,22 +197,43 @@ export class ReleaseAge extends Context.Service<ReleaseAge, {
 }>()("ReleaseAge") {}
 ```
 
-**Gate discovery (two sources, combined strictest-wins via `ReleaseAgeGate.combine`, assembled once and `Effect.cached` for the layer lifetime):**
+**Gate discovery** (two sources, combined strictest-wins via
+`ReleaseAgeGate.combine`, assembled once and `Effect.cached` for the layer
+lifetime):
 
-- `readInlineReleaseAge(workspaceRoot?)` — reads `minimumReleaseAge` / `minimumReleaseAgeExclude` declared inline in `pnpm-workspace.yaml`.
-- `replayHookReleaseAge(workspaceRoot?)` — replays the workspace's config-dependency pnpmfile `updateConfig` hooks in a **node subprocess** via `CommandRunner` (script passed via argv, `pnpmfile.mjs` first then `.cjs`, mirroring pnpm 11's loader order) and reads the release-age keys they inject. A subprocess because `pnpm config get` never sees hook-injected values, and the rspack bundle cannot host an in-process computed dynamic import (the `nativeDynamicImports` knot documented in `01-dependencies.md` and `action.config.ts`). Best-effort: any per-dependency or whole-replay failure degrades to no contribution with a warning.
+- `readInlineReleaseAge(workspaceRoot?)` — the keys declared inline in
+  `pnpm-workspace.yaml`.
+- `replayHookReleaseAge(workspaceRoot?)` — replays the workspace's
+  config-dependency pnpmfile `updateConfig` hooks in a **node subprocess** via
+  `@effected/commands`' `Run` (script passed via argv; `pnpmfile.mjs` first then
+  `.cjs`, mirroring pnpm 11's loader order). A subprocess because `pnpm config get`
+  never sees hook-injected values, and the rspack bundle cannot host an in-process
+  computed dynamic import (see @./01-dependencies.md). Best-effort: any failure
+  degrades to no contribution with a warning.
 
-**Filtering:** `filterVersions(pkg, versions)` is the identity when the gate is inert (`ageMinutes <= 0`), the package is excluded (`gate.isExcluded` — pnpm's flat-string `*` matcher, not minimatch), or publish times are unavailable. Otherwise `getPublishTimes(pkg)` shells `npm view <pkg> time --json` through the same runner-writable cache `NpmRegistryLive` uses and the upstream pure `gate.filterVersions` drops versions younger than the cutoff. The whole path **fails open** — the worst case of missing data is exactly the pre-gate behavior, and pnpm still enforces the gate at install time.
+**Publish times** come from `NpmRegistry.publishTimes(pkg)` — the kit absorbed
+this repo's former hand-rolled `npm view <pkg> time --json` shell-out —
+normalized to a `version → ISO-8601` record via `getPublishTimes`.
 
-**Layers:** `ReleaseAgeLive(workspaceRoot?)` is a parameterized factory (root bound at build, mirroring the `@effected/workspaces` idiom; requires `CommandRunner`). `ReleaseAgeNoop` is the inert layer (zero gate, identity filtering) for unit tests and non-pnpm paths.
+**Filtering** is the identity when the gate is inert (`ageMinutes <= 0`), the
+package is excluded (`gate.isExcluded`, pnpm's flat-string `*` matcher, not
+minimatch), or publish times are unavailable. Otherwise the upstream pure
+`gate.filterVersions` drops versions younger than the cutoff. The whole path
+**fails open**: the worst case of missing data is exactly the pre-gate behavior,
+and pnpm still enforces the gate at install.
 
-### src/services/config-deps.ts - ConfigDeps
+**Layers:** `ReleaseAgeLive(workspaceRoot?)` is a parameterized factory (root
+bound at build) requiring `ChildProcessSpawner` **and** `NpmRegistry`; both are
+resolved once inside the layer so every member's `R` is `never` — which is what
+keeps `filterVersions` callable from `ConfigDeps` / `RegularDeps` without
+threading requirements. `ReleaseAgeNoop` is the inert layer (zero gate, identity
+filtering) for unit tests and non-pnpm paths.
 
-Update config dependencies by querying npm via `NpmRegistry` and editing
-`pnpm-workspace.yaml` in place. Avoids `pnpm add --config` catalog promotion.
-Depends on `NpmRegistry` and `ReleaseAge`.
+### src/services/config-deps.ts - ConfigDeps (pnpm)
 
-**Service interface:**
+Update pnpm config dependencies by querying npm and editing `pnpm-workspace.yaml`
+in place (avoiding `pnpm add --config`, which promotes deps to the default catalog
+under `catalogMode: strict`). Depends on `NpmRegistry` and `ReleaseAge`.
 
 ```typescript
 export class ConfigDeps extends Context.Service<ConfigDeps, {
@@ -207,445 +242,443 @@ export class ConfigDeps extends Context.Service<ConfigDeps, {
 }>()("ConfigDeps") {}
 ```
 
-**Algorithm:**
-
-1. Read `pnpm-workspace.yaml` via `readWorkspaceYaml()`
-2. For each dep, parse its hash-pinned version, derive a conservative upgrade
-   range from the major via `configDepUpgradeRange` (`src/utils/semver.ts`),
-   query `NpmRegistry.getVersions`, filter the candidates through
-   `ReleaseAge.filterVersions`, and resolve the highest in-range version via
-   `resolveLatestSatisfying` — config deps carry no declared range, so the range
-   is synthesized rather than reading npm's absolute latest
-3. Compare current with the resolved version; skip if up-to-date, otherwise fetch
-   the integrity for **that** resolved version via `getPackageInfo(dep, resolved)`
-4. Write back via `sortContent()` + `stringify()`
+1. Read `pnpm-workspace.yaml` via `readWorkspaceYaml()`.
+2. Per dep: parse the hash-pinned version, derive a conservative upgrade range
+   from its major via `configDepUpgradeRange`, query `NpmRegistry.versions`, filter
+   through `ReleaseAge.filterVersions`, then `resolveLatestSatisfying` — config
+   deps carry no declared range, so it is synthesized rather than reading npm's
+   absolute latest.
+3. Skip if up-to-date; otherwise fetch the integrity for **that resolved version**.
+4. Write back via `sortContent()` + `stringify()`.
 
 The range keeps a `>=1.0.0` dep within its current major; a `<1.0.0` dep may
-advance across `0.x` and adopt the first stable major but never crosses two
-majors in one step.
+advance across `0.x` and adopt the first stable major but never crosses two majors.
+
+### src/services/catalog-config-deps.ts - CatalogConfigDeps (bun)
+
+Reproduce pnpm's config-dependency workflow for **bun**, which has no such
+concept. The package named in `config-dependencies` is an ordinary dependency of
+the root manifest, so this service fetches its module, reads its `catalogs`
+export, and merges it into the manifest's own top-level `catalog` (default) and
+`catalogs` (named) fields — siblings of `workspaces`, not nested inside it, which
+is where bun reads them from. A nested `workspaces.catalog(s)` copy is still read
+(a repo may have been written that way) and migrated to the top level on write.
+
+```typescript
+export class CatalogConfigDeps extends Context.Service<CatalogConfigDeps, {
+ readonly update: (deps: ReadonlyArray<string>, workspaceRoot?: string) =>
+  Effect.Effect<CatalogConfigDepsResult, FileSystemError>;
+}>()("CatalogConfigDeps") {}
+```
+
+Requires `NpmRegistry`, `LockfileReader`, `HttpClient` and `ChildProcessSpawner`.
+The layer captures its context once (`Effect.context<…>()`) and re-provides it, so
+the method's `R` stays `never` without threading each service by hand.
+
+**Why a three-way merge.** Because the merge is written to disk rather than
+recomputed at each install, a later run cannot tell a deliberate user override
+from an entry the action itself wrote. `threeWayMergeCatalogs(base, disk, next)`
+separates them by diffing against the catalogs of the version that was **actually
+installed** last run — which is what the lockfile records, hence the
+`LockfileReader` dependency:
+
+- Absent from the manifest → adopt what the new version ships (`added`).
+- Diverged from what the previous version shipped → the user's; kept verbatim
+  (`kept`). A `kept` delta therefore means exactly one thing: a user override or
+  addition survived. An entry that is ours and simply did not move produces **no**
+  delta, rather than a `kept` that would be indistinguishable from an override.
+- Otherwise ours → follow the new version, including its removals (`updated` /
+  `removed`).
+- Only catalog names present in `base` or `next` are considered; a catalog no
+  config dependency ships belongs to the consumer and is never touched.
+
+When the base version's catalogs cannot be read (yanked/unpublished), it degrades
+to `pluginWinsMerge`: `next` overwrites what it defines, disk-only keys survive,
+nothing is removed — and the caller warns, because an override on a key the plugin
+still ships is lost in that mode.
+
+Nothing here is fatal except a manifest that cannot be read or written: a
+per-dependency failure warns and skips that dependency.
+
+### src/services/module-catalogs.ts - fetchModuleCatalogs
+
+Reads a config dependency's `catalogs` export from its **published tarball**.
+pnpm reads this out of the installed package, but this action's merge has to
+happen *before* any install runs (its output feeds the manifest install then
+reads). So `fetchModuleCatalogs` downloads the exact version being written,
+extracts the tarball with `tar` (present on every runner image, so no new
+dependency), and imports the extracted entry directly off disk — self-contained,
+no `node_modules` required. Entry resolution follows `exports` (preferring
+`import` over `default`, handling the conditions-vs-subpath distinction) and falls
+back to `main`.
+
+A standalone exported function, not a service — no state, one caller. Its
+`import()` carries an inline `/* webpackIgnore: true */`; see the build note in
+@./01-dependencies.md.
 
 ### src/services/regular-deps.ts - RegularDeps
 
-Update regular dependencies by querying npm via `NpmRegistry`. Avoids
-`pnpm up --latest` which promotes deps to catalogs with `catalogMode: strict`.
-
-**Service interface:**
+Update regular dependencies by querying npm directly (avoiding `pnpm up --latest`,
+which promotes deps to catalogs under `catalogMode: strict`). Depends on
+`NpmRegistry`, `WorkspaceDiscovery` and `ReleaseAge`.
 
 ```typescript
 export class RegularDeps extends Context.Service<RegularDeps, {
- readonly updateRegularDeps: (patterns: ReadonlyArray<string>, workspaceRoot?: string) =>
-  Effect.Effect<ReadonlyArray<DependencyUpdateResult>>;
+ readonly updateRegularDeps: (
+  patterns: ReadonlyArray<string>,
+  workspaceRoot?: string,
+  exclude?: ReadonlySet<string>,
+ ) => Effect.Effect<ReadonlyArray<DependencyUpdateResult>>;
 }>()("RegularDeps") {}
 ```
 
-**Key Design Decisions:**
+**Key design decisions:**
 
-- Queries every published version via `NpmRegistry.getVersions` and resolves the
-  highest version **satisfying the current specifier treated as a range** via
-  `resolveLatestSatisfying` — it does not read npm's absolute `latest` dist-tag.
-  So `^4.0.0` stays within major 4, `~3.0.0` stays within the minor, `>=4.0.0`
-  may advance across a major, and an exact pin (a one-version range) never bumps.
-  The sole exception is caret-on-zero (`^0.y.z`): it is widened via
-  `resolutionRangeForSpecifier` to the config-dep range (`>=version <2.0.0`) so a
-  `^0.5.0` dep rolls forward across `0.x` and adopts the first stable `1.x`, with
-  the caret still re-applied verbatim on write-back.
-- Candidate versions are filtered through `ReleaseAge.filterVersions` between the registry query and `resolveLatestSatisfying`, so the written specifier floor always respects the workspace's pnpm `minimumReleaseAge` gate (see the `ReleaseAge` section above; fail-open).
-- Enumerates workspace `package.json` files via `WorkspaceDiscovery` from
-  `@effected/workspaces`.
-- Uses `matchesPattern` from `src/utils/deps.ts` for glob matching.
-- Preserves specifier prefix (`^`, `~`, or exact) from `package.json`, re-applied
-  verbatim to the resolved version.
-- Skips `catalog:` and `workspace:` specifiers.
-- Iterates `dependencies`, `devDependencies`, and `optionalDependencies`
-  via `DEP_SECTIONS` (a typed array of `{ field, type }` records).
-  `peerDependencies` are intentionally excluded — peer ranges are managed
-  by `syncPeers`, not by direct version bumps. Catalog-resolved deps in
-  any section still flow through `compareCatalogs` independently.
-- Each match carries its `field` and `type` through the pipeline. Dedup
-  is per `(path, field)`, so a dep declared in both `dependencies` and
-  `devDependencies` of one package emits two records, each with the
-  accurate `type`.
-- `updatePackageJson` accepts `Map<DepSectionField, Map<string, string>>`
-  so each section is updated independently without cross-pollination.
-- `DependencyUpdateResult.type` reflects the actual section (`dependency`
-  / `devDependency` / `optionalDependency`).
-- Gracefully handles npm query failures per-dependency.
+- Resolves the highest published version **satisfying the current specifier
+  treated as a range**, then re-applies the operator verbatim — never npm's
+  absolute `latest`. `^4.0.0` stays within major 4, `~3.0.0` within the minor,
+  `>=4.0.0` may cross a major, an exact pin never bumps. Caret-on-zero (`^0.y.z`)
+  is the one exception, widened via `resolutionRangeForSpecifier` to the config-dep
+  range (`>=version <2.0.0`) so a `^0.5.0` dep rolls forward across `0.x` and into
+  the first stable `1.x`.
+- Candidates pass through `ReleaseAge.filterVersions` between the registry query
+  and resolution (fail-open).
+- **`exclude`** is populated **only under bun**: `CatalogConfigDeps` owns the
+  package.json range for a config dependency there and bumps it itself, so a
+  `dependencies` glob matching the same name must not bump it a second time and
+  race the same manifest write. Under pnpm the config deps live in
+  `pnpm-workspace.yaml` and `ConfigDeps` never touches package.json; under npm they
+  are skipped entirely — excluding them there would freeze the package.json range
+  of a package that is both a config dependency and a devDependency, forever.
+- Enumerates workspace manifests via `WorkspaceDiscovery`; glob matching via
+  `matchesPattern`; skips `catalog:` and `workspace:` specifiers.
+- Iterates `dependencies`, `devDependencies` and `optionalDependencies` via
+  `DEP_SECTIONS`; `peerDependencies` are intentionally excluded (managed by
+  `syncPeers`). Dedup is per `(path, field)`, so a dep declared in two sections of
+  one package emits two records, each with the accurate `type`.
+- A per-dependency registry failure yields an empty version list rather than
+  aborting the batch.
 
 ### src/services/peer-sync.ts - PeerSync
 
-Sync peerDependency ranges after devDependency updates based on `peer-lock`
-and `peer-minor` input configuration. Uses `@effected/semver` for version
-parsing. **Has no service tag of its own** — exported as standalone
-functions and consumed directly from `program.ts`. Yields `WorkspaceDiscovery`
-from `@effected/workspaces` to resolve package paths.
+Sync peerDependency ranges after devDependency updates, per the `peer-lock` /
+`peer-minor` inputs. **No service tag** — standalone functions consumed directly
+by `program.ts`. Yields `WorkspaceDiscovery` to resolve package paths and uses the
+standalone `parseValidSemVer` from `@effected/semver`.
 
-**Exported functions:**
-
-- `computePeerRange(params)` — Compute new peer range based on strategy
-  (returns `Effect<string | null, never>`).
-- `syncPeers(config, devUpdates, workspaceRoot?)` — Sync all peer ranges;
-  signature is
+- `computePeerRange(params)` — compute the new range for a strategy.
+- `syncPeers(config, devUpdates, workspaceRoot?)` —
   `Effect<readonly DependencyUpdateResult[], FileSystemError, WorkspaceDiscovery>`.
-
-**Types:**
-
-- `PeerStrategy` — `"lock" | "minor"`.
-- `PeerSyncConfig` — `{ lock: ReadonlyArray<string>; minor: ReadonlyArray<string> }`.
-
-**Strategies:**
-
-- `lock`: Sync peer range on every version bump (patch and minor).
-- `minor`: Sync peer range only on minor+ bumps, floor patch to `.0`.
-
-**Algorithm:**
-
-1. Build strategy lookup map from config.
-2. Yield `WorkspaceDiscovery` and call `listPackages()` to
-   resolve package paths.
-3. For each devDep update matching a strategy:
-   - Read the package.json.
-   - Find the peerDependencies entry.
-   - Compute new range using `computePeerRange`.
-   - Write updated package.json.
+- `lock`: sync on every version bump. `minor`: sync only on minor+ bumps, flooring
+  patch to `.0`.
 
 ### src/services/lockfile.ts - Lockfile
 
-Compare lockfile snapshots before and after updates to detect changes.
-Parses lockfiles with `@effected/lockfiles`' pure `Lockfile.parse(content, { format })`
-and yields `WorkspaceDiscovery` from `@effected/workspaces`. Package-manager
-agnostic: normalizes `pnpm-lock.yaml`, `bun.lock` and `package-lock.json` into
-one `Lockfile` model (the `@effected/lockfiles` `Lockfile` type; a decoded
-`ImporterDependency.specifier` is read via `.specifier.raw`).
-
-**Service interface:**
+Compare lockfile snapshots before and after updates. Package-manager agnostic:
+normalizes `pnpm-lock.yaml`, `bun.lock` and `package-lock.json` into one model via
+`@effected/lockfiles`' pure `Lockfile.parse(content, { format })`.
 
 ```typescript
 export class Lockfile extends Context.Service<Lockfile, {
  readonly capture: (pm: SupportedPm, workspaceRoot?: string) =>
-  Effect.Effect<Lockfile | null, LockfileError>;
+  Effect.Effect<LockfileModel | null, LockfileError>;
  readonly compare: (before, after, workspaceRoot?) =>
   Effect.Effect<ReadonlyArray<LockfileChange>, LockfileError, WorkspaceDiscovery>;
 }>()("Lockfile") {}
 ```
 
-**Key behavior — `compareCatalogs`:** for each catalog change, the comparator
-walks every importer that consumes the catalog entry and emits **one
-`LockfileChange` record per (catalog change, consuming importer, dep
-section) triple**. Each record carries the precise `type` field
-(`dependency` / `devDependency` / `optionalDependency` / `peerDependency`),
-so downstream `Changesets` gating can use `type` alone as the trigger
-signal. Catalog refs in `devDependencies` are returned with `type:
-"devDependency"` and treated by `Changesets` as informational only.
+**`compareCatalogs`** walks every importer consuming a changed catalog entry and
+emits **one `LockfileChange` per (catalog change, importer, dep section) triple**,
+each carrying the precise `type`. `compareImporters` handles non-catalog specifier
+changes (including removals), reading the section from the `after` snapshot.
 
-`compareImporters` handles non-catalog specifier changes (including
-removals), reading dep section from the `after` snapshot to type each entry.
+**Exported helpers** used directly by `program.ts`: `LOCKFILE_NAMES` (the lockfile
+each supported manager writes), `captureLockfileState(pm, workspaceRoot?)`,
+`compareLockfiles(before, after, workspaceRoot?)` and
+`groupChangesByPackage(changes)`.
 
-**Exported helpers** (used by `program.ts` and `Changesets`):
+### src/services/runtime-upgrade.ts - RuntimeUpgrade
 
-- `captureLockfileState(pm, workspaceRoot?)` - Standalone capture function
-- `compareLockfiles(before, after, workspaceRoot?)` - Standalone compare
-  function (signature requires `WorkspaceDiscovery` in its environment)
-- `groupChangesByPackage(changes)` - Group lockfile changes by affected package
+Upgrade `devEngines.runtime` entries (node/deno/bun) in the root `package.json`
+via `@effected/runtimes`' `NodeResolver` / `DenoResolver` / `BunResolver`. Resolver
+failures are caught and skipped per-runtime, never fatal.
+
+```typescript
+export class RuntimeUpgrade extends Context.Service<RuntimeUpgrade, {
+ readonly upgrade: (config: RuntimeUpgradeConfig, workspaceRoot?: string) =>
+  Effect.Effect<readonly RuntimeUpgradeResult[], FileSystemError>;
+}>()("RuntimeUpgrade") {}
+```
+
+**Per runtime:**
+
+1. `"false"` → skip.
+2. Look up the existing entry via `findRuntimeEntry`. **If none exists, skip with a
+   warning** — in *every* mode. These inputs upgrade a runtime the repo already
+   declares; they never add one. (An explicit range used to add a missing entry,
+   which grew an unwanted node entry in a bun-only repo.)
+3. `auto`: skip on a static pin (`isStaticVersion`); otherwise the existing version
+   string is the target range.
+4. Explicit range: the user-typed value is the target range — it only selects
+   *which line to resolve*.
+5. `resolver.resolve({ range })` → `.latest`; on any error (including
+   `VersionNotFoundError` for an EOL line) warn and skip.
+6. Skip if `latest` equals the current value.
+7. Assign `entry.version = latest` — the **bare, exact** version, no operator
+   re-attached. `findRuntimeEntry` returns the live object inside `devEngines`, so
+   this rewrites in place, preserving the entry's other keys and the surrounding
+   array/object shape.
+8. Write back once, preserving indentation via `detectIndent`, only if at least one
+   runtime updated.
+
+**Why exact:** `silk-runtime-action`, the next pipeline step, does not support
+range operators in `devEngines.runtime`, so any operator written here is a latent
+downstream failure.
 
 ### src/services/changesets.ts - Changesets
 
-A **thin adapter** over silk's `Changesets.DepsRegen` (from
-`@savvy-web/silk-effects`), which is the source of truth for dependency
-changesets. Depends only on `SilkChangesets.DepsRegen`. The bespoke changeset
-writer and the local gating cascade this file used to carry are gone — see
-`src/services/changesets.ts` for the adapter.
-
-**Service interface:**
+A **thin adapter** over silk's `Changesets.DepsRegen`. Depends only on
+`SilkChangesets.DepsRegen`.
 
 ```typescript
 export class Changesets extends Context.Service<Changesets, {
- readonly create: (
-  workspaceRoot: string,
-  base: string,
- ) => Effect.Effect<ReadonlyArray<ChangesetFile>, ChangesetError>;
+ readonly create: (workspaceRoot: string, base: string) =>
+  Effect.Effect<ReadonlyArray<ChangesetFile>, ChangesetError>;
 }>()("Changesets") {}
 ```
 
 `create(workspaceRoot, base)` calls `depsRegen.plan({ cwd: workspaceRoot, base })`
 then `execute(plan)`, and maps `result.written` back to `ChangesetFile[]` for
-reporting — reconstructing each `## Dependencies` table via
-`SilkChangesets.serializeDependencyTableToMarkdown`. DepsRegen failures
-(`GitError`, `WorkspaceDiscoveryError`, `ChangesetIOError`,
-`PointInTimeReadError`) are collapsed into the local `ChangesetError` via
-`Effect.mapError`. `base` is the resolved `target-branch` (the release
-baseline) — the anchor for DepsRegen's `merge-base(base) → worktree` diff.
+reporting (reconstructing each `## Dependencies` table via
+`SilkChangesets.serializeDependencyTableToMarkdown`). DepsRegen failures
+(`GitError`, `WorkspaceDiscoveryError`, `ChangesetIOError`, `PointInTimeReadError`)
+collapse into the local `ChangesetError`. `base` is the resolved `target-branch` —
+the release baseline, which is what makes consolidation correct rather than
+trimming.
 
-**Behavior (all upstream in DepsRegen):**
+**Behavior (all upstream in DepsRegen):** cumulative `merge-base(base) → worktree`
+diff; one consolidated dependency changeset per in-scope package; stale
+pure-dependency changesets deleted (idempotent across re-fires); devDependency rows
+dropped; mixed changesets (table + prose) untouched; gating is silk
+"versionable-minus-ignored"; specifiers resolve through the **importer-scoped**
+`WorkspaceStateSnapshot.resolveIn`, so a `catalog:` specifier backed only by a
+config-dependency pnpmfile hook still yields a concrete version per side; cell text
+is literal (only `|` and `\` escaped); and `plan` refreshes workspace discovery
+first, so the diff sees manifests edited earlier in the same run.
 
-- The adapter short-circuits with an empty result when no `.changeset/`
-  directory exists (`hasChangesets` guard).
-- Content is DepsRegen's cumulative git diff (`merge-base(base) → worktree`,
-  catalog-/workspace-aware). It writes one consolidated dependency changeset
-  per in-scope package and deletes stale pure-dependency changesets, so
-  re-firing converges to a single current table per package (idempotent).
-  devDependency rows are dropped; mixed changesets (Dependencies table +
-  prose) are left untouched.
-- Gating is silk "versionable-minus-ignored" (publishable OR
-  `privatePackages.version`, minus the changeset `ignore` list), applied
-  inside DepsRegen. The action no longer re-implements the ignore gate,
-  versionable cascade or trigger/informational classification.
-- Specifiers on both sides of the diff resolve through `@effected/workspaces`' importer-scoped `WorkspaceStateSnapshot.resolveIn`, so a `catalog:` specifier whose catalog comes from a config-dependency pnpmfile hook (in neither `pnpm-workspace.yaml` nor the lockfile's `catalogs:` block) still yields a concrete version per side and a real movement emits a row. The workspace-wide `resolve` abstains when importers disagree on a version, so it cannot be used here.
-- Cell text is emitted literally (only `|` and `\` escaped), so `~` specifiers and underscored package names reach the changeset unescaped.
-- `plan` refreshes workspace discovery before its snapshots and gating reads (silk-effects; `@effected/workspaces`' `worktree()` also refreshes), so the diff sees manifests edited earlier in the same run. Without this the memoized discovery cache served pre-update manifests, the worktree snapshot equaled the merge-base snapshot and the step silently wrote 0 changesets.
-
-**Exported helper:**
-
-- `hasChangesets(workspaceRoot?)` — checks for the existence of
-  `.changeset/` (used for early skip / no-op messaging).
-
-### src/services/runtime-upgrade.ts - RuntimeUpgrade
-
-Upgrade `devEngines.runtime` entries (node/deno/bun) in the root `package.json`
-via `@effected/runtimes`. Depends on the `NodeResolver`, `DenoResolver`, and
-`BunResolver` services from `@effected/runtimes`. Mirrors `PnpmUpgrade`; resolver
-failures are caught and skipped per-runtime, never fatal.
-
-**Service interface:**
-
-```typescript
-export class RuntimeUpgrade extends Context.Service<
- RuntimeUpgrade,
- {
-  readonly upgrade: (
-   config: RuntimeUpgradeConfig,
-   workspaceRoot?: string,
-  ) => Effect.Effect<readonly RuntimeUpgradeResult[], FileSystemError>;
- }
->()("RuntimeUpgrade") {}
-```
-
-**Types:**
-
-- `RuntimeName` — `"node" | "deno" | "bun"`.
-- `RuntimeUpgradeConfig` — `{ node: string; deno: string; bun: string }` where each field
-  is `"false"`, `"auto"`, or an explicit semver range string.
-- `RuntimeUpgradeResult` — `{ runtime: RuntimeName; from: string; to: string }`. `from` is the version the manifest already declared; `to` is always a bare, exact version.
-
-**Resolution algorithm (per runtime):**
-
-1. If the mode is `"false"`, return `null` (skip).
-2. Look up the existing `devEngines.runtime` entry via `findRuntimeEntry`. **If none exists, skip
-   with a warning** naming the runtime and the input — in *every* mode. These inputs upgrade a
-   runtime the repo already declares; they never add one. (An explicit range used to add a missing
-   entry, which grew an unwanted node entry in a bun-only repo.)
-3. **`auto` mode:** if the entry is a static pin (`isStaticVersion`), skip. Otherwise the existing
-   version string is the target range.
-4. **Explicit range mode:** the user-typed value is the target range. It only selects *which line
-   to resolve* — it never changes what shape is written.
-5. Call `resolver.resolve({ range: targetRange })` and get `.latest`. On any error
-   (`VersionNotFoundError` or network failure), log a warning and skip.
-6. If `latest` equals the current version, skip (already current).
-7. Assign `entry.version = latest` — the **bare, exact** resolved version, no operator re-attached.
-   `findRuntimeEntry` returns the live object inside `devEngines`, so this rewrites the manifest in
-   place and preserves the entry's other keys and the surrounding shape.
-8. After processing all runtimes, write back `package.json` (preserving indentation via
-   `detectIndent`) only if at least one update succeeded.
-
-**Shape handling:**
-
-- Existing array entry: version updated in place, all other fields preserved, array shape kept.
-- Existing single-object entry: version updated in place, object shape kept.
-- No entry (array missing the runtime, single object naming another runtime, absent
-  `devEngines.runtime`, absent `devEngines`): skipped with a warning — nothing is ever added or
-  promoted.
-
-**Why exact:** `silk-runtime-action`, which consumes `devEngines.runtime` in the next pipeline
-step, does not support range operators, so any operator written here is a latent downstream
-failure. The range is a *resolution* input only.
-
-**EOL note:** `@effected/runtimes`' bundled snapshot and live API both exclude end-of-life major lines.
-A resolution targeting an EOL line returns `VersionNotFoundError` and is skipped with a warning.
-This means `auto` on a `^20`-ranged entry (once Node 20 is EOL) will no-op.
+The adapter short-circuits with an empty result when no `.changeset/` directory
+exists (`hasChangesets(workspaceRoot?)`, also exported for the skip messaging).
 
 ### src/services/report.ts - Report
 
-PR management and report generation. Depends on `PullRequest` library
-service. Uses `GithubMarkdown` from the library to assemble PR bodies and
-summaries.
-
-**Service interface:**
+PR management and report generation over the kit's `PullRequest` service, using
+the local `GithubMarkdown` builders.
 
 ```typescript
 export class Report extends Context.Service<Report, {
- readonly createOrUpdatePR: (branch, base, updates, changesets, autoMerge?) =>
-  Effect.Effect<PullRequestResult, PullRequestError>;
- readonly generatePRBody: (updates, changesets) => string;
- readonly generateSummary: (updates, changesets, pr, dryRun) => string;
+ readonly createOrUpdatePR: (branch, base, updates, changesets, autoMerge?, deltas?) =>
+  Effect.Effect<PullRequestResult, GitHubError, Repo>;
+ readonly generatePRBody: (updates, changesets, deltas?) => string;
+ readonly generateSummary: (updates, changesets, pr, dryRun, deltas?) => string;
  readonly generateCommitMessage: (updates, appSlug?) => string;
 }>()("Report") {}
 ```
 
-`base` is the resolved `target-branch` (the PR merge target), threaded in from
-`program.ts`. PR creation failures propagate through the Effect error channel as
-`PullRequestError` rather than returning a sentinel result.
-
-Both the PR title (`createOrUpdatePR`) and the commit subject (the first line of `generateCommitMessage`) are derived from the run's contents via `buildUpdateSubject(updates)` (`src/utils/commit-subject.ts`) — no static `chore(deps): …` constant. `generateCommitMessage`'s body bullets and `Signed-off-by` footer are unchanged.
+- `base` is the resolved `target-branch`. Creation/update goes through
+  `PullRequest.upsert`.
+- **Auto-merge is a separate call** in the kit (`setAutoMerge`, a GraphQL
+  mutation) rather than a field on create. Its failure is deliberately swallowed
+  to a warning: the repository may simply not have auto-merge enabled, and that
+  must not fail a run whose PR was created successfully.
+- `deltas` (the bun catalog deltas) are threaded into the PR body and summary — on
+  a plugin bump that Catalog Changes table is the actual payload of the run.
+- Both the PR title and the commit subject come from `buildUpdateSubject(updates)`
+  (`src/utils/commit-subject.ts`) — there is no static `chore(deps): …` constant.
 
 ## Layer Composition (src/layers/app.ts)
 
-`makeAppLayer(dryRun, { runtimeLive })` wires all library and domain layers.
-`dryRun` controls the `DryRun` service; `runtimeLive` (default: `false`) selects
-how the `NodeResolver`, `DenoResolver` and `BunResolver` services consumed by
-`RuntimeUpgradeLive` are built (see `makeRuntimeResolvers` in `src/layers/app.ts`):
-the offline path uses each resolver's `*.layerOffline` (bundled snapshot, no
-network or auth), the live path uses `*.layer` over an HTTP client /
-`@effected/runtimes`' `GitHubClient.layerDefault` (which pre-wires auth +
-`FetchHttpClient`) and falls back to the bundled snapshot on any fetch failure.
-The `GitHubClient` layer used by the rest of the action is built from
-`GitHubToken.client()`, which reads the installation-token envelope the pre phase
-persisted to `ActionState` — there is no bare `GitHubClientLive` and no
-`process.env.GITHUB_TOKEN` bridge. `ActionState` is provided locally (backed by
-`NodeServices.layer`'s FileSystem) so the layer is self-contained, and
-`Layer.orDie` turns a missing/unreadable token into a fatal defect, keeping the
-resulting `githubClient` at `R = never` for the `withCheckRun` callback. In
-Effect v4 the workspace layers are **root-bound at build** (static `.layer` /
-`.layer()` factories on the classes) and `NodeServices.layer` (from
-`@effect/platform-node`) is the platform bundle (replacing `NodeContext.layer`).
+`makeAppLayer(dryRun, { runtimeLive })` wires every kit and domain layer. The
+whole function body is `/* v8 ignore */`-d as pure wiring, exercised indirectly.
 
 ```typescript
 import { NodeServices } from "@effect/platform-node";
-import { BunResolver, DenoResolver, NodeResolver } from "@effected/runtimes";
-import { WorkspaceDiscovery, WorkspaceRoot } from "@effected/workspaces";
+import { CheckRun, GitBranch, GitCommit, PullRequest, Repo } from "@effected/github";
+import { DryRun, GitHubToken } from "@effected/github-actions";
+import { NpmRegistry } from "@effected/npm";
+import { BunResolver, DenoResolver, NodeResolver, GitHubClient as RuntimesGitHubClient } from "@effected/runtimes";
+import { LockfileReader, PackageManagerDetector, WorkspaceDiscovery, WorkspaceRoot } from "@effected/workspaces";
+import { Changesets as SilkChangesets } from "@savvy-web/silk-effects";
+import { Layer } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 
-export const makeAppLayer = (
- dryRun: boolean,
- options: { runtimeLive: boolean } = { runtimeLive: false },
-) => {
- const actionState = ActionStateLive.pipe(Layer.provide(NodeServices.layer));
- const githubClient = GitHubToken.client().pipe(Layer.provide(actionState), Layer.orDie);
+export const makeAppLayer = (dryRun: boolean, options: { runtimeLive: boolean } = { runtimeLive: false }) => {
+ // The token is provisioned in `pre` and persisted to ActionState.
+ // clientLayer() reads it back. ActionState comes from ActionRuntime via
+ // Action.run, so it is NOT rebuilt here. orDie makes a missing/expired token
+ // a fatal defect, keeping R = never for the withCheckRun callback.
+ const githubClient = GitHubToken.clientLayer().pipe(Layer.orDie);
+ // Repo is required per call rather than captured, so it is a layer like any
+ // other; GITHUB_REPOSITORY is read through the ambient ConfigProvider.
+ const repo = Repo.layerFromConfig().pipe(Layer.orDie);
 
- const ghGraphql = GitHubGraphQLLive.pipe(Layer.provide(githubClient));
- const npmRegistry = NpmRegistryLive.pipe(Layer.provide(CommandRunnerLive));
- // Effective pnpm minimumReleaseAge gate, applied by ConfigDeps/RegularDeps
- // before version resolution. Inert when the workspace declares no gate.
- const releaseAge = ReleaseAgeLive().pipe(Layer.provide(CommandRunnerLive));
- const gitBranch = GitBranchLive.pipe(Layer.provide(githubClient));
- const gitCommit = GitCommitLive.pipe(Layer.provide(githubClient));
- const prLayer = PullRequestLive.pipe(Layer.provide(Layer.merge(githubClient, ghGraphql)));
+ // GraphQL is a member of GitHubClient in the kit — no separate service.
+ const npmRegistry = NpmRegistry.layer.pipe(Layer.provide(FetchHttpClient.layer));
+ const releaseAge = ReleaseAgeLive().pipe(Layer.provide(Layer.merge(NodeServices.layer, npmRegistry)));
+ const gitBranch = GitBranch.layer.pipe(Layer.provide(githubClient));
+ const gitCommit = GitCommit.layer.pipe(Layer.provide(githubClient));
+ const prLayer = PullRequest.layer.pipe(Layer.provide(githubClient));
 
- // Platform bundle (FileSystem, Path, …) for @effected/workspaces. The
- // workspace root is bound when the layer is built.
+ // Platform layer: FileSystem, Path, ChildProcessSpawner.
  const platform = NodeServices.layer;
  const workspaceRoot = WorkspaceRoot.layer.pipe(Layer.provide(platform));
- const workspaceDiscovery = WorkspaceDiscovery.layer().pipe(
-  Layer.provide(Layer.merge(workspaceRoot, platform)),
+ const workspaceDiscovery = WorkspaceDiscovery.layer().pipe(Layer.provide(Layer.merge(workspaceRoot, platform)));
+ const packageManagerDetector = PackageManagerDetector.layer.pipe(Layer.provide(platform));
+ // The lockfile records which config-dependency version is actually installed —
+ // the merge base for CatalogConfigDeps' three-way catalog merge.
+ const lockfileReader = LockfileReader.layer().pipe(
+  Layer.provide(Layer.mergeAll(workspaceRoot, packageManagerDetector, workspaceDiscovery, platform)),
  );
 
- // DepsRegen (silk-effects) is the source of truth for dependency changesets.
- // DepsRegenDefault is batteries-included — it bundles the point-in-time
- // workspace reader, ConfigInspector, WorkspaceDiscovery, the adaptive
- // PublishabilityDetector and ChangesetConfig internally, so it needs only
- // platform services (FileSystem/Path/CommandExecutor from NodeServices.layer).
  const depsRegen = SilkChangesets.DepsRegenDefault.pipe(Layer.provide(platform));
 
  const libraryLayers = Layer.mergeAll(
-  githubClient, gitBranch, gitCommit,
-  CheckRunLive.pipe(Layer.provide(githubClient)),
-  prLayer, npmRegistry, CommandRunnerLive, DryRunLive(dryRun),
+  githubClient, repo, gitBranch, gitCommit,
+  CheckRun.layer.pipe(Layer.provide(githubClient)),
+  prLayer, npmRegistry,
+  NodeServices.layer,
+  DryRun.layerFrom(dryRun),
   FetchHttpClient.layer,
  );
 
- // NodeResolver/DenoResolver/BunResolver, built offline (*.layerOffline) or
- // live (*.layer over fetchers + GitHubClient.layerDefault). See
- // makeRuntimeResolvers for the live wiring.
- const runtimeResolvers = makeRuntimeResolvers(options.runtimeLive);
-
  const domainLayers = Layer.mergeAll(
-  workspaceRoot,
-  workspaceDiscovery,
+  workspaceRoot, workspaceDiscovery, packageManagerDetector,
   ChangesetsLive.pipe(Layer.provide(depsRegen)),
-  BranchManagerLive.pipe(Layer.provide(Layer.mergeAll(gitBranch, gitCommit, CommandRunnerLive))),
-  PnpmUpgradeLive.pipe(Layer.provide(npmRegistry)),
+  BranchManagerLive.pipe(Layer.provide(Layer.mergeAll(gitBranch, gitCommit, NodeServices.layer))),
+  PackageManagerUpgradeLive.pipe(Layer.provide(npmRegistry)),
   ConfigDepsLive.pipe(Layer.provide(Layer.merge(npmRegistry, releaseAge))),
+  CatalogConfigDepsLive.pipe(
+   Layer.provide(Layer.mergeAll(npmRegistry, lockfileReader, FetchHttpClient.layer, NodeServices.layer)),
+  ),
   RegularDepsLive.pipe(Layer.provide(Layer.mergeAll(npmRegistry, workspaceDiscovery, releaseAge))),
   ReportLive.pipe(Layer.provide(prLayer)),
-  RuntimeUpgradeLive.pipe(Layer.provide(runtimeResolvers)),
+  RuntimeUpgradeLive.pipe(Layer.provide(makeRuntimeResolvers(options.runtimeLive))),
  );
 
  return Layer.provideMerge(domainLayers, libraryLayers);
 };
 ```
 
-> Note: the actual `src/layers/app.ts` also wires `PackageManagerDetector.layer`
-> and `LockfileReader.layer()` from `@effected/workspaces` plus the
-> `CatalogConfigDeps` / `PackageManagerUpgrade` domain layers for multi-package-manager
-> (pnpm/bun/npm) support. Those predate the Effect-v4 migration and are elided
-> here to keep this composition example at the same abstraction as the rest of
-> this section.
-
-`WorkspaceDiscovery.layer()` and `WorkspaceRoot.layer` come from
-`@effected/workspaces`; `NodeServices.layer` (from `@effect/platform-node`)
-satisfies their FileSystem/Path requirements. The action still wires
-`workspaceDiscovery` directly for `RegularDeps` — the changeset step no longer
-consumes it, since `DepsRegenDefault` bundles its own discovery internally.
-
-`Changesets.DepsRegenDefault` (from `@savvy-web/silk-effects`) is
-FileSystem-based — it reads `.changeset/config.json`, package manifests and the
-git worktree via core `effect`'s FileSystem/CommandExecutor rather than
-`node:fs`, so `makeAppLayer` provides the same `platform` (`NodeServices.layer`)
-and nothing else. The former hand-wired `changesetConfig` / `publishabilityDetector`
-locals are gone.
+`makeRuntimeResolvers(live)` returns either the three `*Resolver.layerOffline`
+layers (bundled snapshot, no IO, no requirements) or the live `*.layer` layers —
+`NodeResolver` over `FetchHttpClient.layer` (nodejs.org, unauthenticated) and
+Deno/Bun over `@effected/runtimes`' `GitHubClient.layerDefault`, which pre-wires
+auth + `FetchHttpClient` so the live graph is self-contained (`E = never`). Each
+live resolver falls back to the bundled snapshot on a fetch failure, logging a
+warning.
 
 ## Pure Helpers (src/utils/)
 
 ### src/utils/branch.ts
 
-- `resolveTargetBranch(rawTarget, source)` — Resolve the PR target branch. An empty (whitespace-only) `target-branch` input is the sentinel for "follow source-branch" (GitHub Actions input defaults cannot reference another input), so the fallback to `source` is resolved here in code.
+- `resolveTargetBranch(rawTarget, source)` — an empty (whitespace-only)
+  `target-branch` is the sentinel for "follow source-branch" (Actions input
+  defaults cannot reference another input), so the fallback is resolved in code.
+
+### src/utils/catalogs.ts
+
+Pure catalog-map helpers behind `CatalogConfigDeps`:
+
+- `CatalogMap` — catalog name → (dependency → specifier).
+- `normalizeCatalogs(value)` — coerce an arbitrary module export into a
+  `CatalogMap`, or `null`.
+- `readManifestCatalogs(pkgJson)` — read top-level `catalog` / `catalogs`, also
+  picking up a nested `workspaces.catalog(s)` copy.
+- `writeManifestCatalogs(pkgJson, catalogs)` — write back at the **top level**
+  (migrating a nested copy), which is where bun reads them.
+- `threeWayMergeCatalogs(base, disk, next)` — see `CatalogConfigDeps` above.
 
 ### src/utils/commit-subject.ts
 
-- `buildUpdateSubject(updates)` — Derive the full conventional PR title / commit subject (`chore(deps): …`) from the run's `DependencyUpdateResult[]`. First-match-wins over four buckets (pnpm self-upgrade, runtimes, config deps, regular deps): names a single change, summarizes runtime-only or config-only batches, scopes a single-workspace dependency batch and composes mixed runs. The regular-deps bucket is broken down by package.json section (dependencies / devDependencies / peerDependencies / optionalDependencies), counting distinct names per section in production-first order with field-name nouns (`update 1 config dependency and 4 devDependencies`); the elliptical coarse form (`update N config and M dependencies`) is kept when the regular deps are all plain `dependencies`, and the single-workspace variant gets the typed noun when the batch is one section (`update devDependencies in @scope/pkg`, mixed batches keep `update dependencies in <ws>`). The 72-char header budget is a progressive degradation ladder: typed breakdown → coarse phrasing → generic `chore(deps): update dependencies` fallback. Versions are shown clean (range operator and `+sha512` suffix stripped); runtime names are capitalized, pnpm stays lowercase. Consumed by `Report` for both the PR title and the commit subject.
+- `buildUpdateSubject(updates)` — derive the full conventional PR title / commit
+  subject (`chore(deps): …`) from the run's `DependencyUpdateResult[]`.
+  First-match-wins over four buckets (package-manager self-upgrade, runtimes,
+  config deps, regular deps): names a single change, summarizes runtime-only or
+  config-only batches, scopes a single-workspace dependency batch and composes
+  mixed runs. Regular deps are broken down by package.json section with field-name
+  nouns (`update 1 config dependency and 4 devDependencies`); the elliptical coarse
+  form (`update N config and M dependencies`) is kept when the regular deps are all
+  plain `dependencies`. The 72-char header budget is a progressive degradation
+  ladder: typed breakdown → coarse phrasing → generic
+  `chore(deps): update dependencies`. Versions are shown clean (operator and
+  `+sha512` suffix stripped); runtime names are capitalized, package-manager names
+  stay lowercase.
 
 ### src/utils/deps.ts
 
-- `parseConfigEntry(entry)` - Parse config dependency entry (version + optional hash)
-- `matchesPattern(depName, pattern)` - Glob matching via `path.matchesGlob`
-- `parseSpecifier(specifier)` - Parse version specifier; returns `null` for `catalog:`/`workspace:`
+- `parseConfigEntry(entry)` — parse a config dependency entry (version + optional
+  hash).
+- `matchesPattern(depName, pattern)` — glob matching via `path.matchesGlob`.
+- `parseSpecifier(specifier)` — parse a version specifier; `null` for
+  `catalog:`/`workspace:`.
 
-### src/utils/input.ts
+### src/utils/github-markdown.ts
 
-- `parseMultiValueInput(raw)` — Normalize a multi-value GitHub Action input
-  string. Accepts JSON arrays, newline-separated lists (with optional `*`
-  bullets and `#` comments), or comma-separated values.
+The GitHub-flavored Markdown builders for PR bodies, job summaries and check-run
+output: `heading`, `code`, `bold`, `link`, `rule`, `list`, `codeBlock`, `details`,
+`table`, plus the `GithubMarkdown` namespace object matching the destructuring
+call style `Report` uses.
+
+These replace `GithubMarkdown` from the deleted `@savvy-web/github-action-effects`.
+The kit deliberately ships **no successor**: report shaping is consumer policy, so
+the strings a given action emits belong to that action. They are pure string
+builders with no service dependency, which is why they live in `utils/` rather
+than `services/`. Two details worth keeping: `table` escapes only `\` and `|` and
+returns an empty string when there are no rows (so a caller can push
+unconditionally); `codeBlock` grows its fence past any backtick run in the content
+so an embedded fence cannot terminate the block early.
+
+### src/utils/input.ts — DELETED
+
+`parseMultiValueInput` and its module are gone. `ActionInput.list` from
+`@effected/github-actions` owns that grammar now (see @./04-module-entry-points.md);
+the five call sites read `ActionInput.list(name).pipe(Config.withDefault([]))`. The
+grammar itself is still pinned locally by `INPUT_*`-keyed tests in
+`__test__/unit/program.inputs.test.ts`.
 
 ### src/utils/markdown.ts
 
-- `npmUrl(packageName)` - Generate npmjs.com URL for a package
-- `cleanVersion(version)` - Strip prefix characters from version string
+- `npmUrl(packageName)` — npmjs.com URL for a package.
+- `cleanVersion(version)` — strip prefix characters from a version string.
 
 ### src/utils/pnpm.ts
 
-- `parsePnpmVersion(raw, stripPnpmPrefix?)` - Parse version from `packageManager` or `devEngines`
-- `formatPnpmVersion(version, hasCaret)` - Format version with optional caret
-- `detectIndent(content)` - Detect JSON file indentation (reused by `RegularDeps` and `PeerSync`)
-- `corepackHashFromIntegrity(integrity)` - Convert an npm registry integrity (`sha512-<base64>`) to corepack's `packageManager` hash form (`sha512.<hex>`) — the exact string `corepack use` would write. Tolerates a JSON-quoted value; returns `null` when the value is missing or not a sha512 integrity.
+- `parsePnpmVersion(raw, stripPnpmPrefix?)`, `formatPnpmVersion(version, hasCaret)`
+- `detectIndent(content)` — detect JSON indentation (reused by `RegularDeps`,
+  `PeerSync`, `RuntimeUpgrade`, `PackageManagerUpgrade`, `CatalogConfigDeps`).
+- `corepackHashFromIntegrity(integrity)` — convert an npm registry integrity
+  (`sha512-<base64>`) to corepack's `packageManager` hash form (`sha512.<hex>`) —
+  the exact string `corepack use` would write. Tolerates a JSON-quoted value;
+  returns `null` when missing or not a sha512 integrity.
 
 ### src/utils/runtime.ts
 
-Pure helpers for reading and rewriting `devEngines.runtime` entries. No Effect
-service dependencies — mirrors `src/utils/pnpm.ts`.
-
-- `isStaticVersion(raw)` — True when `raw` is a static exact version (`X.Y.Z`, optionally with
-  prerelease/build) and carries no range operator, wildcard (`x`/`*`), OR-set (`||`), or partial
-  form. Used to make `auto` a no-op on pinned versions.
-- `findRuntimeEntry(devEngines, runtime)` — Find the `devEngines.runtime` entry for `runtime`
-  (accepts object or array shape), or `null` if absent. The entry returned is the **live object**
-  inside `devEngines`, so assigning to its `version` rewrites the manifest in place — which is how
-  `RuntimeUpgrade` writes, preserving both the array and single-object shapes.
-
-There is no upsert/promote helper and no operator helper: the action never adds a runtime entry,
-and always writes a bare exact version (`parseRuntimeOperator`, `redecorateVersion` and
-`upsertRuntimeEntry` were removed with those behaviors).
+- `isStaticVersion(raw)` — true when `raw` is a static exact version with no range
+  operator, wildcard, OR-set or partial form. Makes `auto` a no-op on pins.
+- `findRuntimeEntry(devEngines, runtime)` — find the entry (object or array shape),
+  or `null`. Returns the **live object**, so assigning `version` rewrites the
+  manifest in place. There is no upsert/promote helper and no operator helper: the
+  action never adds an entry and always writes a bare exact version.
 
 ### src/utils/semver.ts
 
-- `resolveLatestSatisfying(versions, range)` - Find the highest stable version satisfying an arbitrary semver range (e.g. `^11`, `>=11`). Used by `RegularDeps` (current specifier as range) and `ConfigDeps` (synthesized range).
-- `resolutionRangeForSpecifier(prefix, version)` - Decide the range `RegularDeps` resolves a specifier within: the config-dep range (`configDepUpgradeRange(version)`) for caret-on-zero (`^0.y.z`), the literal `prefix+version` otherwise. Falls back to the literal specifier when no numeric major is present.
-- `resolveLatestInRange(versions, current)` - Find highest stable version satisfying `^current` (delegates to `resolveLatestSatisfying`).
-- `configDepUpgradeRange(version)` - Synthesize a conservative upgrade range from a hash-pinned config-dep version's major: `>=version <(major+1).0.0` for `>=1.0.0`, `>=version <2.0.0` for `<1.0.0`. Returns `null` for a version with no numeric major. Used by `ConfigDeps`, which has no declared range to read.
+- `resolveLatestSatisfying(versions, range)` — highest stable version satisfying an
+  arbitrary range. Used by `RegularDeps`, `ConfigDeps`, `CatalogConfigDeps` and
+  `PackageManagerUpgrade`.
+- `resolutionRangeForSpecifier(prefix, version)` — the range `RegularDeps` resolves
+  a specifier within: the config-dep range for caret-on-zero (`^0.y.z`), the literal
+  `prefix+version` otherwise.
+- `resolveLatestInRange(versions, current)` — highest stable version satisfying
+  `^current`.
+- `configDepUpgradeRange(version)` — synthesize a conservative range from a pinned
+  config-dep version's major: `>=version <(major+1).0.0` for `>=1.0.0`,
+  `>=version <2.0.0` for `<1.0.0`; `null` when there is no numeric major.

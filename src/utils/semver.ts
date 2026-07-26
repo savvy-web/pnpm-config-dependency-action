@@ -1,18 +1,22 @@
 /**
  * Semver resolution utilities.
  *
- * Extracted from `src/lib/pnpm/upgrade.ts`. Uses `SemverResolver` from
- * `@savvy-web/github-action-effects` (a namespace of static functions,
- * not an Effect service).
+ * Extracted from `src/lib/pnpm/upgrade.ts`. Uses `SemVer` / `Range` from
+ * `@effected/semver` (value classes with static parsers, not an Effect
+ * service).
  *
  * @module utils/semver
  */
 
-import { SemverResolver } from "@savvy-web/github-action-effects";
-import { Effect } from "effect";
+import { Range, SemVer } from "@effected/semver";
+import { Effect, Option } from "effect";
 
 /**
  * Resolve the latest stable version satisfying an arbitrary semver range.
+ *
+ * Unparseable versions and an unparseable range both degrade to `null` rather
+ * than failing: the callers treat "no resolvable target" as "skip this
+ * dependency", and a malformed registry entry should not abort the run.
  *
  * @param versions - Available versions to choose from
  * @param range - A semver range string (e.g. "^10.28.0", "^11", ">=11")
@@ -23,21 +27,30 @@ export const resolveLatestSatisfying = (
 	range: string,
 ): Effect.Effect<string | null, never, never> =>
 	Effect.gen(function* () {
-		// Filter out pre-release versions
-		const stableVersions: string[] = [];
-		for (const v of versions) {
-			const parsed = yield* SemverResolver.parse(v).pipe(Effect.option);
-			if (parsed._tag === "Some" && !parsed.value.prerelease) {
-				stableVersions.push(v);
+		// Filter out pre-release versions. The parsed value is paired with the
+		// registry's own spelling so the winner is written back verbatim rather
+		// than in SemVer's canonical form — these strings land in manifests.
+		const stable: Array<{ readonly raw: string; readonly semver: SemVer }> = [];
+		for (const raw of versions) {
+			const parsed = yield* SemVer.parse(raw).pipe(Effect.option);
+			if (Option.isSome(parsed) && parsed.value.isStable) {
+				stable.push({ raw, semver: parsed.value });
 			}
 		}
 
-		if (stableVersions.length === 0) return null;
+		if (stable.length === 0) return null;
 
-		const result = yield* SemverResolver.latestInRange(stableVersions, range).pipe(
-			Effect.catch(() => Effect.succeed(null as string | null)),
+		const parsedRange = yield* Range.parse(range).pipe(Effect.option);
+		if (Option.isNone(parsedRange)) return null;
+
+		const best = Range.maxSatisfying(
+			stable.map((entry) => entry.semver),
+			parsedRange.value,
 		);
-		return result;
+		if (Option.isNone(best)) return null;
+
+		const winner = stable.find((entry) => entry.semver.equal(best.value));
+		return winner === undefined ? best.value.toString() : winner.raw;
 	});
 
 /**

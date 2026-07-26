@@ -10,25 +10,34 @@
  * @module pre
  */
 
-import { NodeFileSystem } from "@effect/platform-node";
-import { Action, ActionState, GitHubAppLive, GitHubToken, OctokitAuthAppLive } from "@savvy-web/github-action-effects";
-import { Effect, Layer } from "effect";
-import { FetchHttpClient } from "effect/unstable/http";
+import { GitHubApp } from "@effected/github";
+import { Action, ActionEnvironment, ActionInput, ActionState, GitHubToken } from "@effected/github-actions";
+import { Effect } from "effect";
 import { STATE_KEYS, StartTimeState } from "./state.js";
 
 export const pre = Effect.gen(function* () {
 	const state = yield* ActionState;
+	const env = yield* ActionEnvironment;
 	yield* Effect.logDebug("Running pre-action script");
 
 	// Record start time for post-phase duration reporting.
 	yield* state.save(STATE_KEYS.startTime, new StartTimeState({ startedAt: Date.now() }), StartTimeState);
 
-	// Provision the GitHub App installation token. provision reads the
-	// app-client-id + app-private-key inputs, mints the token, verifies the
-	// requested scopes, and persists the envelope to ActionState.
+	// The kit's provision takes credentials explicitly rather than reading the
+	// inputs itself, so the two app inputs are parsed here. `required` is
+	// verified against what GitHub actually granted, before the token is
+	// persisted — a misconfigured installation fails here in `pre` rather than
+	// mid-run in `main` with a 403 on one request.
+	const appId = yield* ActionInput.string("app-client-id");
+	const privateKey = yield* ActionInput.redacted("app-private-key");
+	const owner = (yield* env.github).repositoryOwner;
+
 	yield* Effect.logInfo("Generating GitHub App installation token...");
 	const token = yield* GitHubToken.provision({
-		permissions: { contents: "write", pull_requests: "write", checks: "write" },
+		appId,
+		privateKey,
+		owner,
+		required: { contents: "write", pull_requests: "write", checks: "write" },
 	});
 
 	yield* Effect.logInfo(
@@ -38,16 +47,12 @@ export const pre = Effect.gen(function* () {
 });
 
 /**
- * Domain layers for pre-action. `GitHubToken.provision` needs a `GitHubApp`
- * layer — composed from `GitHubAppLive` over `OctokitAuthAppLive`; in 2.0
- * `GitHubAppLive` also requires `HttpClient.HttpClient`, provided via
- * `FetchHttpClient.layer`. `ActionState` / `ActionOutputs` come from
- * `Action.run`'s runtime.
+ * Domain layers for pre-action. `GitHubToken.provision` needs a `GitHubApp`,
+ * which in the kit is a self-contained layer — there is no octokit auth-app
+ * strategy to provide and no separate HttpClient wiring. `ActionState` /
+ * `ActionOutputs` come from `Action.run`'s runtime.
  */
-export const PreLive = Layer.mergeAll(
-	GitHubAppLive.pipe(Layer.provide(OctokitAuthAppLive), Layer.provide(FetchHttpClient.layer)),
-	NodeFileSystem.layer,
-);
+export const PreLive = GitHubApp.layer;
 
 /* v8 ignore next 3 -- entry-point guard, only runs in GitHub Actions */
 if (process.env.GITHUB_ACTIONS) {

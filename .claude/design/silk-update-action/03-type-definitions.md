@@ -3,8 +3,8 @@ status: current
 module: silk-update-action
 category: architecture
 created: 2026-02-20
-updated: 2026-07-21
-last-synced: 2026-07-21
+updated: 2026-07-26
+last-synced: 2026-07-26
 completeness: 95
 related:
   - ./_index.md
@@ -19,32 +19,33 @@ implementation-plans: []
 ## Overview
 
 Types are defined using Effect Schema (v4) in `src/schemas/domain.ts`. Error
-types use `Schema.TaggedErrorClass` (v4; was `Schema.TaggedError`) in
-`src/errors/errors.ts`. Module-level types (e.g., `PnpmUpgradeResult`) are
-defined in their respective service files.
+types use `Schema.TaggedErrorClass` in `src/errors/errors.ts`. Module-level
+types (e.g. `PackageManagerUpgradeOutcome`, `DetectedPm`) are defined in their
+respective service files.
 
 No barrel re-exports exist. Import directly from the defining module.
 
-Effect v4 Schema shifts the constructor spelling the snippets below use: literal
-unions are `Schema.Literals([...])` (was `Schema.Literal(...)`) and refinements
-attach via `.check(...)` (e.g. `Schema.String.check(Schema.isMinLength(1))`,
-`Schema.Number.check(Schema.isGreaterThan(0))`) rather than `.pipe(Schema.…)`.
+Effect v4 Schema spellings used throughout: literal unions are
+`Schema.Literals([...])` (was `Schema.Literal(...)`) and refinements attach via
+`.check(...)` (e.g. `Schema.String.check(Schema.isMinLength(1))`) rather than
+`.pipe(Schema.…)`.
 
 ## Domain Schemas (src/schemas/domain.ts)
 
 See `src/schemas/domain.ts` for the full set of `Schema.Struct` definitions
 (`BranchResult`, `DependencyChange`, `ChangedPackage`, `ChangesetFile`,
-`PullRequestResult`, `CatalogDelta`). Each schema derives its TypeScript type via
-`typeof Schema.Type`.
+`PullRequestResult`, `CatalogDelta`, `LockfileChange`). Each schema derives its
+TypeScript type via `typeof Schema.Type`.
 
 The load-bearing type is the `DependencyType` discriminator, shared by
-`DependencyUpdateResult` and `LockfileChange` and used across the pipeline as
-the changeset-trigger signal:
+`DependencyUpdateResult` and `LockfileChange`:
 
 ```typescript
 /**
  * Dependency type discriminator. The `runtime` member tags
- * devEngines.runtime engine bumps (node/deno/bun) emitted by RuntimeUpgrade.
+ * devEngines.runtime engine bumps (node/deno/bun) emitted by RuntimeUpgrade;
+ * `config` tags both config-dependency updates and the package-manager
+ * self-upgrade.
  */
 export const DependencyType = Schema.Literals([
  "config",
@@ -74,18 +75,86 @@ export const LockfileChange = Schema.Struct({
 });
 ```
 
-## Module-Level Types (src/services/pnpm-upgrade.ts)
+`CatalogDelta` records one catalog entry's fate in a bun compat-mode merge. On a
+plugin bump this table is the actual payload of the run, which is why it is
+carried all the way through to the PR body rather than being logged and dropped:
 
 ```typescript
-/** Result of a pnpm upgrade operation. */
-export interface PnpmUpgradeResult {
- readonly from: string | null; // null when a packageManager field was added
+export const CatalogDelta = Schema.Struct({
+ catalog: NonEmptyString,
+ dependency: NonEmptyString,
+ from: Schema.NullOr(Schema.String),
+ to: Schema.NullOr(Schema.String),
+ action: Schema.Literals(["added", "updated", "removed", "kept"]),
+});
+```
+
+## Package-Manager Types (src/services/package-manager.ts)
+
+```typescript
+/**
+ * The package managers this action supports. Yarn is detected upstream but
+ * rejected here: nothing in the config-dep, install or upgrade paths is wired
+ * or tested for it.
+ */
+export type SupportedPm = "pnpm" | "bun" | "npm";
+
+/** The package manager this run is operating on, resolved once. */
+export interface DetectedPm {
+ readonly pm: SupportedPm;
+ readonly version: string | undefined;
+ readonly root: string;
+}
+```
+
+## Upgrade Outcome Types (src/services/package-manager-upgrade.ts)
+
+`upgrade()` always resolves to an outcome — never `null` — so a caller can report
+*why* nothing happened. `kind` is the machine-readable discriminant callers
+dispatch on; `reason` is prose for humans and must never be parsed.
+
+```typescript
+export type PackageManagerReferenceSource = "devEngines" | "packageManager" | null;
+
+export type PackageManagerSkipKind =
+ | "disabled"        // upgrade-package-manager: false. Benign.
+ | "no-reference"    // auto mode, no packageManager/devEngines entry to anchor on.
+ | "unsatisfiable"   // nothing in THIS pm's release list satisfies the range.
+ | "already-current" // the reference is already the newest the range admits.
+ | "error";          // read/write failed, folded into an outcome by the caller.
+
+export interface PackageManagerUpgradeApplied {
+ readonly applied: true;
+ readonly pm: SupportedPm;
+ readonly reference: string | null;
+ readonly referenceSource: PackageManagerReferenceSource;
+ readonly targetRange: string;
+ readonly from: string | null;   // null when a field was added
  readonly to: string;
  readonly packageManagerUpdated: boolean;
  readonly devEnginesUpdated: boolean;
- readonly added: boolean; // true when a packageManager field was created
+ readonly added: boolean;
 }
+
+export interface PackageManagerUpgradeSkipped {
+ readonly applied: false;
+ readonly pm: SupportedPm;
+ readonly reference: string | null;
+ readonly referenceSource: PackageManagerReferenceSource;
+ readonly targetRange: string | null;
+ readonly kind: PackageManagerSkipKind;
+ readonly reason: string;
+}
+
+export type PackageManagerUpgradeOutcome =
+ | PackageManagerUpgradeApplied
+ | PackageManagerUpgradeSkipped;
 ```
+
+`unsatisfiable` is the acceptance signal for the whole multi-package-manager
+design: it distinguishes "this range names a different package manager than the
+one detected" from "already up to date", and is the only skip kind reported at
+warning level.
 
 ## Module-Level Types (src/services/runtime-upgrade.ts)
 
@@ -109,11 +178,27 @@ export interface RuntimeUpgradeConfig {
 }
 ```
 
+## Catalog Types (src/utils/catalogs.ts, src/services/catalog-config-deps.ts)
+
+```typescript
+/** catalog name → (dependency → specifier). The default catalog is keyed "". */
+export type CatalogMap = Record<string, Record<string, string>>;
+
+/** The updates and catalog deltas produced by one config-dependency pass. */
+export interface CatalogConfigDepsResult {
+ readonly updates: ReadonlyArray<DependencyUpdateResult>;
+ readonly deltas: ReadonlyArray<CatalogDelta>;
+}
+```
+
 ## Release-Age Types (src/services/release-age.ts)
 
-The release-age gate types live upstream in `@effected/npm`: `ReleaseAgeGate` (the combined, total gate) and `PartialReleaseAgeGate` (a per-source contribution), the latter re-exported by `src/services/release-age.ts`. See `@effected/npm` for the shapes — the action treats them as opaque beyond `combine`, `isExcluded` and `filterVersions`.
+The gate types live upstream in `@effected/npm`: `ReleaseAgeGate` (the combined,
+total gate) and `PartialReleaseAgeGate` (a per-source contribution), the latter
+re-exported by `src/services/release-age.ts`. The action treats them as opaque
+beyond `combine`, `isExcluded` and `filterVersions`.
 
-## Pure Helper Types (src/utils/pnpm.ts)
+## Pure Helper Types (src/utils/pnpm.ts, src/utils/runtime.ts)
 
 ```typescript
 /** Parsed pnpm version info. */
@@ -122,11 +207,7 @@ export interface ParsedPnpmVersion {
  readonly hasCaret: boolean;
  readonly hasSha: boolean;
 }
-```
 
-## Pure Helper Types (src/utils/runtime.ts)
-
-```typescript
 /** A JavaScript runtime managed by this action. */
 export type RuntimeName = "node" | "deno" | "bun";
 
@@ -141,24 +222,36 @@ export interface RuntimeEntry {
 
 ## Effect Error Types (src/errors/errors.ts)
 
-Errors use Effect v4's `Schema.TaggedErrorClass` for typed error handling with
-rich metadata. See `src/errors/errors.ts` for the full definitions. The local
-`ActionError` union covers:
+Errors use `Schema.TaggedErrorClass` for typed error handling with rich
+metadata. The local `ActionError` union covers:
 
-- `InvalidInputError` — `{ field, value, reason }`.
-- `GitHubApiError` — `{ operation, statusCode?, message }`. Exposes
-  `isRateLimited` (429), `isServerError` (>= 500) and `isRetryable`
-  (rate-limited or server error).
+- `InvalidInputError` — `{ field, value, reason }`. **This is the action's input
+  and workspace rejection error.** The deleted `@savvy-web/github-action-effects`
+  exported an `ActionInputError`; the kit has no successor (kit inputs are
+  `Config` values whose failures are core `ConfigError`), so input validation in
+  `program.ts`, the branch-ref preflight in `services/branch.ts`, and the
+  yarn/no-workspace rejection in `services/package-manager.ts` all raise this
+  local error instead.
+- `GitHubApiError` — `{ operation, statusCode?, message }`; exposes
+  `isRateLimited` (429), `isServerError` (>= 500) and `isRetryable`.
 - `GitError` — `{ operation, exitCode, stderr }`; `isRetryable` for `fetch`/`push`.
-- `PnpmError` — `{ command, dependency?, exitCode, stderr }`; `isRetryable` for `install`.
+- `PnpmError` — `{ command, dependency?, exitCode, stderr }`; `isRetryable` for
+  `install`.
 - `ChangesetError` — `{ reason, packages? }`.
 - `FileSystemError` — `{ operation, path, reason }`.
 - `LockfileError` — `{ operation, reason }`.
 - `DependencyUpdateFailures` — aggregate `{ failures, successful }` for
   partial-success batch updates; exposes `partialSuccess`.
 
-`isRetryableError(error)` and `getErrorMessage(error)` are exported helpers
-over the union.
+`isRetryableError(error)` and `getErrorMessage(error)` are exported helpers over
+the union.
 
-Input validation inside `program.ts` raises the library `ActionInputError`
-(from `@savvy-web/github-action-effects`), not the local `InvalidInputError`.
+**Which of these are actually raised today:** `InvalidInputError` (program,
+branch, package-manager), `FileSystemError` (every manifest/YAML writer),
+`ChangesetError` and `GitError` (the changesets adapter's error mapping) and
+`LockfileError` (lockfile capture/compare). `GitHubApiError` and `PnpmError` are
+no longer constructed anywhere in `src/` — GitHub failures now arrive as the
+kit's single `GitHubError` (discriminated with `hasKind`) and subprocess failures
+as `@effected/commands`' `CommandFailedError` / `CommandOutputError`. They remain
+in the union with their retry predicates; treat them as vestigial rather than as
+a description of current behavior.

@@ -10,7 +10,7 @@
  * @module main
  */
 
-import { Action } from "@savvy-web/github-action-effects";
+import { Action } from "@effected/github-actions";
 import { program } from "./program.js";
 
 // Run the main action — Action.run handles all error formatting via formatCause

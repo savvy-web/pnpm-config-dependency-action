@@ -40,9 +40,9 @@
  */
 
 import { readFileSync, writeFileSync } from "node:fs";
-import type { NpmRegistryShape } from "@savvy-web/github-action-effects";
-import { NpmRegistry } from "@savvy-web/github-action-effects";
-import { Context, Effect, Layer } from "effect";
+import type { NpmRegistryShape } from "@effected/npm";
+import { NpmRegistry } from "@effected/npm";
+import { Context, Effect, Layer, Option } from "effect";
 
 import { FileSystemError } from "../errors/errors.js";
 import { corepackHashFromIntegrity, detectIndent } from "../utils/pnpm.js";
@@ -278,8 +278,8 @@ const upgradePackageManagerImpl = (
 		// a runner-writable directory — a raw `npm view` here hits the partially
 		// root-owned ~/.npm on GitHub's macOS runners and dies EACCES.
 		const allVersions = yield* registry
-			.getVersions(pm)
-			.pipe(Effect.mapError((e) => fsReadError("npm registry", `Failed to query ${pm} versions: ${e.reason}`)));
+			.versions(pm)
+			.pipe(Effect.mapError((e) => fsReadError("npm registry", `Failed to query ${pm} versions: ${e.message}`)));
 
 		const resolved = yield* resolveLatestSatisfying(allVersions, targetRange);
 		if (!resolved) {
@@ -312,8 +312,8 @@ const upgradePackageManagerImpl = (
 		const isCorepackManaged = COREPACK_MANAGED.has(pm);
 		let hash: string | null = null;
 		if (isCorepackManaged) {
-			const integrity = yield* registry.getPackageInfo(pm, resolved).pipe(
-				Effect.map((info) => info.integrity ?? ""),
+			const integrity = yield* registry.version(pm, resolved).pipe(
+				Effect.map((info) => (Option.isSome(info) ? (info.value.integrity ?? "") : "")),
 				Effect.catch(() => Effect.succeed("")),
 			);
 			hash = corepackHashFromIntegrity(integrity);

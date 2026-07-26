@@ -5,8 +5,9 @@
  */
 
 import { PackageManagerDetector, WorkspaceRoot } from "@effected/workspaces";
-import { ActionInputError } from "@savvy-web/github-action-effects";
 import { Effect, Option } from "effect";
+
+import { InvalidInputError } from "../errors/errors.js";
 
 /**
  * The package managers this action supports.
@@ -35,12 +36,18 @@ export interface DetectedPm {
  * `WorkspaceRoot.find` and `PackageManagerDetector.detect` share the same
  * marker checks (`pnpm-workspace.yaml`, `package.json`'s `workspaces` field),
  * so a `WorkspaceRootNotFoundError` and a `PackageManagerDetectionError` are
- * mapped to `ActionInputError` through one shared handler below rather than
+ * mapped to `InvalidInputError` through one shared handler below rather than
  * two — both upstream errors carry the same `reason` / `searchPath` shape.
+ *
+ * The kit has no `ActionInputError` successor — action inputs are `Config`
+ * values and their failures are core `ConfigError`. This failure is not an
+ * input-parse failure though: the workspace on disk is the thing being
+ * rejected, so it uses this repo's own `InvalidInputError` rather than
+ * pretending to be a `ConfigError`.
  */
 export const detectPackageManager = (
 	cwd?: string,
-): Effect.Effect<DetectedPm, ActionInputError, PackageManagerDetector | WorkspaceRoot> =>
+): Effect.Effect<DetectedPm, InvalidInputError, PackageManagerDetector | WorkspaceRoot> =>
 	Effect.gen(function* () {
 		const workspaceRoot = yield* WorkspaceRoot;
 		const detector = yield* PackageManagerDetector;
@@ -51,10 +58,10 @@ export const detectPackageManager = (
 
 		if (detected.name === "yarn") {
 			return yield* Effect.fail(
-				new ActionInputError({
-					inputName: "workspace",
+				new InvalidInputError({
+					field: "workspace",
 					reason: "Detected yarn, which this action does not support. Supported: pnpm, bun, npm.",
-					rawValue: root,
+					value: root,
 				}),
 			);
 		}
@@ -62,12 +69,12 @@ export const detectPackageManager = (
 		return { pm: detected.name, version: Option.getOrUndefined(detected.version), root };
 	}).pipe(
 		Effect.mapError((error) =>
-			error instanceof ActionInputError
+			error instanceof InvalidInputError
 				? error
-				: new ActionInputError({
-						inputName: "workspace",
+				: new InvalidInputError({
+						field: "workspace",
 						reason: `Could not detect a package manager: ${error.message}`,
-						rawValue: "searchPath" in error ? error.searchPath : "root" in error ? error.root : "",
+						value: "searchPath" in error ? error.searchPath : "root" in error ? error.root : "",
 					}),
 		),
 	);

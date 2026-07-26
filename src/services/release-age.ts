@@ -14,40 +14,33 @@
  *   dependency (e.g. `@savvy-web/pnpm-plugin-silk`) can only be read by
  *   replaying the hooks.
  *
- * The replay runs in a `node` subprocess via `CommandRunner` rather than an
- * in-process dynamic `import()`: the rspack bundle miscompiles a computed
- * dynamic import into a context module (see the `action.config.ts` note on
- * `nativeDynamicImports`), and a subprocess also keeps config-dependency code
- * out of the action's own process. Discovery is best-effort by design — any
- * failure degrades to "no gate" (today's behavior) with a warning rather
- * than failing the run.
+ * The replay runs in a `node` subprocess via `@effected/commands`' `Run`
+ * rather than an in-process dynamic `import()`: the rspack bundle miscompiles
+ * a computed dynamic import into a context module (see the `action.config.ts`
+ * note on `nativeDynamicImports`), and a subprocess also keeps
+ * config-dependency code out of the action's own process. Discovery is
+ * best-effort by design — any failure degrades to "no gate" (today's
+ * behavior) with a warning rather than failing the run.
  *
  * Combining the two sources, exclude matching, and version filtering are
- * deliberately NOT implemented here — that vocabulary is being ported
- * upstream into `@effected/npm` (see the dogfood loop with
- * `savvy-web-systems`) and this module's `PartialReleaseAgeGate` matches its
- * requested `PartialGate` shape for drop-in adoption.
+ * deliberately NOT implemented here — that vocabulary lives upstream in
+ * `@effected/npm` (`ReleaseAgeGate`), as does publish-time fetching
+ * (`NpmRegistry.publishTimes`), which replaced this module's hand-rolled
+ * `npm view <pkg> time --json` shell-out.
  *
  * @module services/release-age
  */
 
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { Run } from "@effected/commands";
 import type { PartialReleaseAgeGate } from "@effected/npm";
-import { ReleaseAgeGate } from "@effected/npm";
-import { CommandRunner } from "@savvy-web/github-action-effects";
-import { Context, Effect, Layer } from "effect";
+import { NpmRegistry, ReleaseAgeGate } from "@effected/npm";
+import { Context, DateTime, Effect, Layer } from "effect";
+import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import type { FileSystemError } from "../errors/errors.js";
 import { readWorkspaceYaml } from "./workspace-yaml.js";
 
 export type { PartialReleaseAgeGate } from "@effected/npm";
-
-/**
- * The same runner-writable npm cache the library's `NpmRegistryLive` uses,
- * sidestepping the partially root-owned `~/.npm` on GitHub macOS runners.
- */
-const npmCacheArgs = (): string[] => ["--cache", join(process.env.RUNNER_TEMP ?? tmpdir(), "silk-npm-cache")];
 
 /**
  * Build a gate from raw `minimumReleaseAge` / `minimumReleaseAgeExclude`
@@ -89,7 +82,7 @@ export const readInlineReleaseAge = (
  * and prints the release-age slice of the resulting config as JSON.
  *
  * Receives the workspace root and the config-dependency names as argv (never
- * string-interpolated — `CommandRunner.execCapture` spawns without a shell).
+ * string-interpolated — `Run` spawns without a shell).
  * Mirrors pnpm 11's loader order (`pnpmfile.mjs` first, `pnpmfile.cjs`
  * fallback) and tolerates every per-dependency failure: a dependency whose
  * pnpmfile is missing, fails to load, or throws contributes nothing. This is
@@ -145,7 +138,7 @@ process.stdout.write(JSON.stringify({
  */
 export const replayHookReleaseAge = (
 	workspaceRoot: string = process.cwd(),
-): Effect.Effect<PartialReleaseAgeGate | null, never, CommandRunner> =>
+): Effect.Effect<PartialReleaseAgeGate | null, never, ChildProcessSpawner.ChildProcessSpawner> =>
 	Effect.gen(function* () {
 		const content = yield* readWorkspaceYaml(workspaceRoot).pipe(Effect.catch(() => Effect.succeed(null)));
 		const configDependencies = content?.configDependencies ?? {};
@@ -155,11 +148,12 @@ export const replayHookReleaseAge = (
 			return null;
 		}
 
-		const runner = yield* CommandRunner;
-		const result = yield* runner
-			.execCapture("node", ["--input-type=module", "-e", REPLAY_SCRIPT, workspaceRoot, ...names])
-			.pipe(Effect.catch(() => Effect.succeed(null)));
-		if (result === null) {
+		// Run.collect treats a non-zero exit as a result, so a replay that runs
+		// but exits non-zero is handled by the exitCode check below rather than
+		// the spawn-failure catch.
+		const command = ChildProcess.make("node", ["--input-type=module", "-e", REPLAY_SCRIPT, workspaceRoot, ...names]);
+		const result = yield* Run.collect(command).pipe(Effect.catch(() => Effect.succeed(null)));
+		if (result === null || !result.succeeded) {
 			yield* Effect.logWarning("Config-dependency hook replay failed; release-age gate from hooks unavailable");
 			return null;
 		}
@@ -177,42 +171,31 @@ export const replayHookReleaseAge = (
 	});
 
 /**
- * Fetch a package's publish timestamps from the npm registry
- * (`npm view <pkg> time --json`), keyed by version.
+ * Fetch a package's publish timestamps from the npm registry, keyed by version.
  *
- * Best-effort: a failed query or unparseable output yields an empty record,
- * which downstream filtering treats as "no timestamp data" for every
- * version. The registry's non-version `created` / `modified` entries are
- * dropped.
+ * Delegates to `@effected/npm`'s `NpmRegistry.publishTimes`, which owns the
+ * registry read and already drops the `time` object's non-version `created` /
+ * `modified` entries — the exclusion this module used to re-derive from a raw
+ * `npm view <pkg> time --json` shell-out.
+ *
+ * Best-effort: a failed query yields an empty record, which downstream
+ * filtering treats as "no timestamp data" for every version.
  *
  * @param pkg - Package name
  * @returns Version → ISO-8601 publish timestamp record
  */
-export const getPublishTimes = (pkg: string): Effect.Effect<Record<string, string>, never, CommandRunner> =>
+export const getPublishTimes = (pkg: string): Effect.Effect<Record<string, string>, never, NpmRegistry> =>
 	Effect.gen(function* () {
-		const runner = yield* CommandRunner;
-		const result = yield* runner
-			.execCapture("npm", ["view", pkg, "time", "--json", ...npmCacheArgs()])
-			.pipe(Effect.catch(() => Effect.succeed(null)));
-		if (result === null) {
+		const registry = yield* NpmRegistry;
+		const published = yield* registry.publishTimes(pkg).pipe(Effect.catch(() => Effect.succeed(null)));
+		if (published === null) {
 			yield* Effect.logWarning(`Failed to fetch publish times for ${pkg}; release-age filtering unavailable`);
 			return {};
 		}
 
-		const parsed = yield* Effect.try({
-			try: () => JSON.parse(result.stdout) as Record<string, unknown>,
-			catch: () => null,
-		}).pipe(Effect.catch(() => Effect.succeed(null)));
-		if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-			yield* Effect.logWarning(`Unparseable publish-time data for ${pkg}; release-age filtering unavailable`);
-			return {};
-		}
-
 		const times: Record<string, string> = {};
-		for (const [key, value] of Object.entries(parsed)) {
-			if (key !== "created" && key !== "modified" && typeof value === "string") {
-				times[key] = value;
-			}
+		for (const entry of published) {
+			times[entry.version] = DateTime.formatIso(entry.publishedAt);
 		}
 		return times;
 	});
@@ -245,15 +228,23 @@ export class ReleaseAge extends Context.Service<
  * (mirroring the `@effected/workspaces` root-bound layer idiom); the gate is
  * assembled once on first use and cached for the layer's lifetime.
  */
-export const ReleaseAgeLive = (workspaceRoot: string = process.cwd()): Layer.Layer<ReleaseAge, never, CommandRunner> =>
+export const ReleaseAgeLive = (
+	workspaceRoot: string = process.cwd(),
+): Layer.Layer<ReleaseAge, never, ChildProcessSpawner.ChildProcessSpawner | NpmRegistry> =>
 	Layer.effect(
 		ReleaseAge,
 		Effect.gen(function* () {
-			const runner = yield* CommandRunner;
+			// Both dependencies are resolved once here, so every member's R is
+			// `never` — which is what keeps `filterVersions` usable from the
+			// ConfigDeps/RegularDeps call sites without threading requirements.
+			const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+			const registry = yield* NpmRegistry;
 
 			const assembleGate = Effect.gen(function* () {
 				const inline = yield* readInlineReleaseAge(workspaceRoot).pipe(Effect.catch(() => Effect.succeed(null)));
-				const hooks = yield* replayHookReleaseAge(workspaceRoot).pipe(Effect.provideService(CommandRunner, runner));
+				const hooks = yield* replayHookReleaseAge(workspaceRoot).pipe(
+					Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+				);
 				const contributions = [inline, hooks].filter(
 					(contribution): contribution is PartialReleaseAgeGate => contribution !== null,
 				);
@@ -277,7 +268,7 @@ export const ReleaseAgeLive = (workspaceRoot: string = process.cwd()): Layer.Lay
 						return versions;
 					}
 
-					const times = yield* getPublishTimes(pkg).pipe(Effect.provideService(CommandRunner, runner));
+					const times = yield* getPublishTimes(pkg).pipe(Effect.provideService(NpmRegistry, registry));
 					// Fail open on missing publish-time data: pnpm would fail closed,
 					// but for resolution-time mirroring the worst case of proposing an
 					// unverifiable version is exactly today's behavior — and a warning
