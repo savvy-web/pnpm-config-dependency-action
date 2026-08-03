@@ -36,6 +36,7 @@ import { Effect, Layer } from "effect";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { Changesets, ChangesetsLive } from "../../src/services/changesets.js";
+import { silentLogger } from "../utils/fixtures.js";
 
 // makeAppLayer wires `SilkChangesets.DepsRegenDefault`, which is bound to
 // `process.cwd()` at layer-build time (correct in production, where the action
@@ -112,7 +113,10 @@ const setupRepo = (root: string, options: RepoOptions): void => {
 
 const run = (root: string): Promise<ReadonlyArray<{ id: string; packages: readonly string[] }>> =>
 	Effect.runPromise(
-		Effect.flatMap(Changesets, (c) => c.create(root, "main")).pipe(Effect.provide(changesetsLayerFor(root))),
+		Effect.flatMap(Changesets, (c) => c.create(root, "main")).pipe(
+			Effect.provide(changesetsLayerFor(root)),
+			Effect.provide(silentLogger),
+		),
 	) as Promise<ReadonlyArray<{ id: string; packages: readonly string[] }>>;
 
 const WS_LEAF = "packages:\n  - packages/leaf\n";

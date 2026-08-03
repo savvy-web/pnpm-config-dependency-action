@@ -13,9 +13,9 @@
 
 import { ActionState } from "@effected/github-actions";
 import { Effect, Option, Schema } from "effect";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { actionStateTestLayer, emptyActionState } from "../utils/action-doubles.js";
-import { configUpdate, regularUpdate } from "../utils/fixtures.js";
+import { configUpdate, regularUpdate, silentLogger } from "../utils/fixtures.js";
 
 describe("fixtures", () => {
 	it("exports valid fixture types", () => {
@@ -53,5 +53,24 @@ describe("action doubles", () => {
 		);
 
 		expect(Option.isNone(read)).toBe(true);
+	});
+});
+
+describe("silentLogger", () => {
+	// The escape hatch turns the layer into a no-op, which is exactly what this
+	// asserts against — so the assertion only holds in the default mode.
+	it.skipIf(process.env.TEST_LOGS)("drops log output that would otherwise reach the console", async () => {
+		const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+		try {
+			await Effect.runPromise(Effect.logInfo("silenced").pipe(Effect.provide(silentLogger)));
+			expect(spy, "silentLogger should suppress the write").not.toHaveBeenCalled();
+
+			// The control: without the layer the same effect DOES write, so the
+			// assertion above is a real constraint rather than a vacuous pass.
+			await Effect.runPromise(Effect.logInfo("not silenced"));
+			expect(spy, "the default logger should still write").toHaveBeenCalled();
+		} finally {
+			spy.mockRestore();
+		}
 	});
 });

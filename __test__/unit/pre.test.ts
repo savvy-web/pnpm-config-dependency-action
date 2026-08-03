@@ -22,6 +22,7 @@ import {
 	emptyGitHubApp,
 	gitHubAppTestLayer,
 } from "../utils/action-doubles.js";
+import { silentLogger } from "../utils/fixtures.js";
 
 interface Fixtures {
 	stateState: ActionStateRecording;
@@ -56,6 +57,7 @@ const runPre = (fixtures: Fixtures): Promise<void> =>
 				"INPUT_APP-PRIVATE-KEY": "test-private-key",
 			}),
 		),
+		Effect.provide(silentLogger),
 		Effect.runPromise,
 	);
 

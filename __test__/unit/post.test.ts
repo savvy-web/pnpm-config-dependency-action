@@ -22,6 +22,7 @@ import {
 	emptyGitHubApp,
 	gitHubAppTestLayer,
 } from "../utils/action-doubles.js";
+import { silentLogger } from "../utils/fixtures.js";
 
 interface Fixtures {
 	stateState: ActionStateRecording;
@@ -47,10 +48,12 @@ const provisionToken = (fixtures: Fixtures): Promise<void> =>
 	GitHubToken.provision({ appId: "test-client-id", privateKey: Redacted.make("test-private-key") }).pipe(
 		Effect.provide(fixtures.layer),
 		Effect.asVoid,
+		Effect.provide(silentLogger),
 		Effect.runPromise,
 	);
 
-const runPost = (fixtures: Fixtures): Promise<void> => post.pipe(Effect.provide(fixtures.layer), Effect.runPromise);
+const runPost = (fixtures: Fixtures): Promise<void> =>
+	post.pipe(Effect.provide(fixtures.layer), Effect.provide(silentLogger), Effect.runPromise);
 
 describe("post", () => {
 	it("revokes the installation token provisioned by pre", async () => {

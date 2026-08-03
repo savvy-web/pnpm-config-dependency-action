@@ -6,14 +6,43 @@
 
 import { PullRequest, PullRequestInfo } from "@effected/github";
 import { DEFAULT_REGISTRY, NpmRegistry } from "@effected/npm";
-import type { Layer } from "effect";
-import { Effect, Option } from "effect";
+import type { Logger } from "effect";
+import { Effect, Layer, Option, References } from "effect";
 import type {
 	ChangesetFile,
 	DependencyUpdateResult,
 	LockfileChange,
 	PullRequestResult,
 } from "../../src/schemas/domain.js";
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Logging
+// ══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Installs an empty logger set, silencing Effect's default logger.
+ *
+ * The services under test log their decisions at info by design — that log
+ * stream is the run's decision record in production, but under test it is
+ * noise on stdout that `run_tests` flags as a console leak. Providing an empty
+ * `CurrentLoggers` set drops the messages at the logger, the same seam the
+ * capturing loggers in `program.inner.test.ts` and `runtime-upgrade.test.ts`
+ * use to collect them.
+ *
+ * Only apply this to a suite that does not assert on its own log output; a
+ * suite that captures its logs provides its own logger and must not be
+ * silenced.
+ *
+ * `TEST_LOGS=1` makes this a no-op, restoring the default logger. Note that
+ * reinstalling the logger is not by itself enough to *see* the lines: the
+ * vitest-agent plugin routes console output per its `console` config in
+ * `vitest.config.ts` (which is why a leak surfaces as a `consoleLeaks` signal
+ * rather than raw lines, and why even a bare `console.log` in a test prints
+ * nothing). Pair it with a passthrough console mode to read the output.
+ */
+export const silentLogger: Layer.Layer<never> = process.env.TEST_LOGS
+	? Layer.empty
+	: Layer.succeed(References.CurrentLoggers, new Set<Logger.Logger<unknown, unknown>>());
 
 // ══════════════════════════════════════════════════════════════════════════════
 // DependencyUpdateResult fixtures
@@ -155,7 +184,9 @@ export interface FakePullRequest {
 	title: string;
 	state: "open" | "closed";
 	head: string;
+	headSha: string;
 	base: string;
+	baseSha: string;
 	draft: boolean;
 	merged: boolean;
 	autoMerge: "merge" | "squash" | "rebase" | undefined;
@@ -178,7 +209,9 @@ const toInfo = (pr: FakePullRequest): PullRequestInfo =>
 		title: pr.title,
 		state: pr.state,
 		head: pr.head,
+		headSha: pr.headSha,
 		base: pr.base,
+		baseSha: pr.baseSha,
 		draft: pr.draft,
 		merged: pr.merged,
 		mergedAt: Option.none(),
@@ -210,7 +243,9 @@ export const pullRequestTestLayer = (state: PullRequestTestState): Layer.Layer<P
 					title: input.title,
 					state: "open",
 					head: input.head,
+					headSha: `head${state.nextNumber}`.padEnd(40, "0"),
 					base: input.base,
+					baseSha: `base${state.nextNumber}`.padEnd(40, "0"),
 					draft: input.draft ?? false,
 					merged: false,
 					autoMerge: undefined,
