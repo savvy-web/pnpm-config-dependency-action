@@ -193,6 +193,17 @@ export interface FakePullRequest {
 	body: string;
 }
 
+/**
+ * A deterministic, syntactically valid 40-character hex commit SHA.
+ *
+ * `headSha` / `baseSha` are plain strings in `PullRequestInfo`, so nothing
+ * rejects a non-hex placeholder — but a double that emits something no real
+ * GitHub response could contain invites a consumer to depend on the shape of
+ * the fixture rather than the shape of the API.
+ */
+export const fakeSha = (kind: "head" | "base", n = 1): string =>
+	`${kind === "head" ? "a" : "b"}${n.toString(16)}`.padEnd(40, "0");
+
 export interface PullRequestTestState {
 	prs: Array<FakePullRequest>;
 	nextNumber: number;
@@ -243,9 +254,9 @@ export const pullRequestTestLayer = (state: PullRequestTestState): Layer.Layer<P
 					title: input.title,
 					state: "open",
 					head: input.head,
-					headSha: `head${state.nextNumber}`.padEnd(40, "0"),
+					headSha: fakeSha("head", state.nextNumber),
 					base: input.base,
-					baseSha: `base${state.nextNumber}`.padEnd(40, "0"),
+					baseSha: fakeSha("base", state.nextNumber),
 					draft: input.draft ?? false,
 					merged: false,
 					autoMerge: undefined,

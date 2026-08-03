@@ -44,6 +44,7 @@ catalogs:
 
 overrides:
   '@microsoft/api-extractor>typescript': ^6.0.3
+  '@effect/platform-node-shared': 4.0.0-beta.101
 
 pnpmfileChecksum: sha256-bQ8dOj9Ao82gSNmY7WlH8KnSb1YNN1Mhfgz9faQGkxA=
 
@@ -395,11 +396,11 @@ packages:
     resolution: {integrity: sha512-TzlTVpKPjaqW6qOYjQcYUDuGsLCNsvFHVBXkYGTAnf5V37jCWrE5haKNXzz0WZUtVHjrpV76L1buANjwXMfT8w==}
     engines: {node: '>=22'}
 
-  '@effect/platform-node-shared@4.0.0-beta.102':
-    resolution: {integrity: sha512-gVd793I72MrkX4dXo7eYtRKfNj0RW4eMRfVEKEJI16h2+mBDCzQ+gqMrog2hSTHQnaIbvbYShNQ4TVGuRCYZeQ==}
+  '@effect/platform-node-shared@4.0.0-beta.101':
+    resolution: {integrity: sha512-g4L7XiyJSNJLJVhlslyg2zBCQsoKQf1y1gd+Yfd+3wD9ymC+m7ymbd/5FGqnT1aXV6E2AwRr4D/R1eyRUikvWQ==}
     engines: {node: '>=18.0.0'}
     peerDependencies:
-      effect: ^4.0.0-beta.102
+      effect: ^4.0.0-beta.101
 
   '@effect/platform-node@4.0.0-beta.101':
     resolution: {integrity: sha512-pClk7dmMtHgM6Byu7CzGfrPvZ1/4BwmrRlCg2Op+iJozMkwVUxq8v4beK8b9SvxsliJjHZFznjvkVLX7LQjBqw==}
@@ -3805,7 +3806,7 @@ snapshots:
 
   '@conventional-changelog/template@1.2.1': {}
 
-  '@effect/platform-node-shared@4.0.0-beta.102(effect@4.0.0-beta.101)':
+  '@effect/platform-node-shared@4.0.0-beta.101(effect@4.0.0-beta.101)':
     dependencies:
       '@types/ws': 8.18.1
       effect: 4.0.0-beta.101
@@ -3816,7 +3817,7 @@ snapshots:
 
   '@effect/platform-node@4.0.0-beta.101(effect@4.0.0-beta.101)(ioredis@5.11.1(supports-color@7.2.0))':
     dependencies:
-      '@effect/platform-node-shared': 4.0.0-beta.102(effect@4.0.0-beta.101)
+      '@effect/platform-node-shared': 4.0.0-beta.101(effect@4.0.0-beta.101)
       effect: 4.0.0-beta.101
       ioredis: 5.11.1(supports-color@7.2.0)
       mime: 4.1.0

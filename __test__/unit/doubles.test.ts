@@ -15,7 +15,7 @@ import { ActionState } from "@effected/github-actions";
 import { Effect, Option, Schema } from "effect";
 import { describe, expect, it, vi } from "vitest";
 import { actionStateTestLayer, emptyActionState } from "../utils/action-doubles.js";
-import { configUpdate, regularUpdate, silentLogger } from "../utils/fixtures.js";
+import { configUpdate, fakeSha, regularUpdate, silentLogger } from "../utils/fixtures.js";
 
 describe("fixtures", () => {
 	it("exports valid fixture types", () => {
@@ -72,5 +72,15 @@ describe("silentLogger", () => {
 		} finally {
 			spy.mockRestore();
 		}
+	});
+});
+
+describe("fakeSha", () => {
+	it("produces 40-character hex strings that differ by kind and number", () => {
+		for (const sha of [fakeSha("head"), fakeSha("base", 10), fakeSha("head", 255)]) {
+			expect(sha).toMatch(/^[0-9a-f]{40}$/);
+		}
+		expect(fakeSha("head", 1)).not.toBe(fakeSha("base", 1));
+		expect(fakeSha("head", 1)).not.toBe(fakeSha("head", 2));
 	});
 });
