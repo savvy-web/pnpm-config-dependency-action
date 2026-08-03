@@ -17,7 +17,12 @@ import { Effect, Layer } from "effect";
 import { describe, expect, it } from "vitest";
 import { captureLockfileState, compareLockfiles } from "../../src/services/lockfile.js";
 import type { SupportedPm } from "../../src/services/package-manager.js";
+import { silentLogger } from "../utils/fixtures.js";
 import { loadFixture } from "./utils/load-fixture.js";
+
+/** Run an effect with the default logger silenced. See `silentLogger`. */
+const runSilent = <A, E>(effect: Effect.Effect<A, E>): Promise<A> =>
+	Effect.runPromise(effect.pipe(Effect.provide(silentLogger)));
 
 const platform = NodeServices.layer;
 
@@ -34,14 +39,12 @@ const discoveryLayerFor = (cwd: string) =>
  */
 const captureAndCompare = async (fixturePath: string, pm: SupportedPm, lockfileName: string) => {
 	copyFileSync(join(fixturePath, `${lockfileName}.before`), join(fixturePath, lockfileName));
-	const before = await Effect.runPromise(captureLockfileState(pm, fixturePath));
+	const before = await runSilent(captureLockfileState(pm, fixturePath));
 
 	copyFileSync(join(fixturePath, `${lockfileName}.after`), join(fixturePath, lockfileName));
-	const after = await Effect.runPromise(captureLockfileState(pm, fixturePath));
+	const after = await runSilent(captureLockfileState(pm, fixturePath));
 
-	return Effect.runPromise(
-		compareLockfiles(before, after, fixturePath).pipe(Effect.provide(discoveryLayerFor(fixturePath))),
-	);
+	return runSilent(compareLockfiles(before, after, fixturePath).pipe(Effect.provide(discoveryLayerFor(fixturePath))));
 };
 
 describe("Lockfile.compare integration - pnpm", () => {
@@ -50,12 +53,12 @@ describe("Lockfile.compare integration - pnpm", () => {
 
 		// The pnpm fixture predates the shared naming, so stage it by hand.
 		copyFileSync(join(fixture.path, "pnpm-lock.before.yaml"), join(fixture.path, "pnpm-lock.yaml"));
-		const before = await Effect.runPromise(captureLockfileState("pnpm", fixture.path));
+		const before = await runSilent(captureLockfileState("pnpm", fixture.path));
 
 		copyFileSync(join(fixture.path, "pnpm-lock.after.yaml"), join(fixture.path, "pnpm-lock.yaml"));
-		const after = await Effect.runPromise(captureLockfileState("pnpm", fixture.path));
+		const after = await runSilent(captureLockfileState("pnpm", fixture.path));
 
-		const changes = await Effect.runPromise(
+		const changes = await runSilent(
 			compareLockfiles(before, after, fixture.path).pipe(Effect.provide(discoveryLayerFor(fixture.path))),
 		);
 

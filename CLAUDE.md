@@ -130,11 +130,18 @@ path, so `dev` then only installs with the sibling repos checked out — the
 accepted trade-off. Commits must be GPG-signed with the verified key for
 `C. Spencer Beggs <spencer@savvyweb.systems>`.
 
-**Currently active:** nothing is linked — no `overrides` block, every first-party
-dep on its published registry version (see `package.json`; `@effect/vitest` pinned
-exactly in lockstep with `effect`). Duplicate resolutions of `@effected/workspaces`
-(0.8.0) and `@effected/npm` (0.4.0) come entirely from the `@vitest-agent/plugin`
-devDependency tree, never reach the shipped artifact, and clear when it bumps.
+**Currently active:** nothing is **linked** — every first-party dep is on its
+published registry version (see `package.json`; `@effect/vitest` pinned exactly in
+lockstep with `effect`). There **is** one `overrides` entry, unrelated to
+dogfooding: `@effect/platform-node-shared` is held at `4.0.0-beta.101`, because
+`@effect/platform-node@4.0.0-beta.101` depends on it at `^4.0.0-beta.101` and a
+caret on a prerelease admits `beta.102`, whose peer range (`effect
+^4.0.0-beta.102`) the `catalog:effect` pin does not satisfy. It is bundled into
+`dist`, so the skew is not academic. Drop the override once
+`@effected/pnpm-plugin-effect` ships a catalog on `beta.102`. Duplicate
+resolutions of `@effected/workspaces` (0.8.0) and `@effected/npm` (0.4.0) come
+entirely from the `@vitest-agent/plugin` devDependency tree, never reach the
+shipped artifact, and clear when it bumps.
 
 ## Development & Release Cycle
 

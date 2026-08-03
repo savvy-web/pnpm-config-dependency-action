@@ -4,7 +4,7 @@ import { Cause, Effect, Layer, References } from "effect";
 import type { CatalogDelta } from "../../../src/schemas/domain.js";
 import { Report, ReportLive } from "../../../src/services/report.js";
 import type { PullRequestTestState } from "../../utils/fixtures.js";
-import { emptyPullRequestState, pnpmUpgradeUpdate, pullRequestTestLayer } from "../../utils/fixtures.js";
+import { emptyPullRequestState, fakeSha, pnpmUpgradeUpdate, pullRequestTestLayer } from "../../utils/fixtures.js";
 
 /** Every resource method resolves `Repo` per call, so tests provide one. */
 const repoLayer = Repo.layer(RepoRef.make({ owner: "test", repo: "repo" }));
@@ -68,7 +68,9 @@ describe("createOrUpdatePR", () => {
 				title: "chore(deps): Update Silk Dependencies",
 				state: "open",
 				head: "pnpm/config",
+				headSha: fakeSha("head", 10),
 				base: "main",
+				baseSha: fakeSha("base", 10),
 				draft: false,
 				merged: false,
 				autoMerge: undefined,
@@ -101,7 +103,9 @@ describe("createOrUpdatePR", () => {
 				title: "old title",
 				state: "open",
 				head: "pnpm/config",
+				headSha: fakeSha("head", 10),
 				base: "main",
+				baseSha: fakeSha("base", 10),
 				draft: false,
 				merged: false,
 				autoMerge: undefined,
@@ -145,7 +149,9 @@ describe("createOrUpdatePR", () => {
 				title: "old title",
 				state: "open",
 				head: "pnpm/config",
+				headSha: fakeSha("head", 10),
 				base: "main",
+				baseSha: fakeSha("base", 10),
 				draft: false,
 				merged: false,
 				autoMerge: undefined,
