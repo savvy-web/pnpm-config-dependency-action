@@ -1,8 +1,15 @@
 import { readFileSync } from "node:fs";
 import { ActionOutputs } from "@effected/github-actions";
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
 import { describe, expect, it } from "vitest";
-import { OUTPUT_NAMES, emitOutputs, initialOutputs } from "../../../src/schema/outputs.js";
+import { RunResultDocument } from "../../../src/schema/domain.js";
+import {
+	OUTPUT_NAMES,
+	emitOutputs,
+	emptyRunResult,
+	encodeRunResult,
+	initialOutputs,
+} from "../../../src/schema/outputs.js";
 
 /**
  * The output names `action.yml` declares, read straight from the manifest.
@@ -39,7 +46,33 @@ describe("initialOutputs", () => {
 			"pr-url": "",
 			"updates-count": "0",
 			"has-changes": "false",
+			result: encodeRunResult(emptyRunResult),
 		});
+	});
+
+	it("makes `result` parseable unconditionally, not an empty string", () => {
+		// The whole point of a structured output: a consumer runs
+		// `fromJSON(steps.x.outputs.result)` without guarding. A baseline of "" would
+		// force every reader to branch, which is the same defect as an unset scalar
+		// output wearing a different hat.
+		expect(initialOutputs.result).not.toBe("");
+		expect(() => JSON.parse(initialOutputs.result)).not.toThrow();
+	});
+
+	it("publishes a baseline `result` that decodes against the schema", () => {
+		// A baseline that serializes but does not decode would be a document the
+		// action promises and its own schema rejects.
+		const decoded = Schema.decodeUnknownSync(RunResultDocument)(JSON.parse(initialOutputs.result));
+		expect(decoded.hasChanges).toBe(false);
+		expect(decoded.schemaVersion).toBe(1);
+		expect(decoded.pullRequest).toBeNull();
+		// Null, not a placeholder: a run that ended before detection has no package
+		// manager, and a value that decodes and is false is worse than an absent one.
+		expect(decoded.packageManager).toBeNull();
+		for (const key of ["updates", "catalogDeltas", "lockfileChanges", "changesets"] as const) {
+			// Arrays are empty rather than omitted, so a consumer can index without guarding.
+			expect(decoded[key]).toEqual([]);
+		}
 	});
 });
 

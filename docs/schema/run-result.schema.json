@@ -1,0 +1,312 @@
+{
+	"$schema": "http://json-schema.org/draft-07/schema#",
+	"$id": "https://raw.githubusercontent.com/savvy-web/silk-update-action/main/docs/schema/run-result.schema.json",
+	"$ref": "#/$defs/RunResultDocument",
+	"$defs": {
+		"DependencyUpdateResult": {
+			"type": "object",
+			"properties": {
+				"dependency": {
+					"type": "string",
+					"allOf": [
+						{
+							"minLength": 1
+						}
+					]
+				},
+				"from": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"to": {
+					"type": "string",
+					"allOf": [
+						{
+							"minLength": 1
+						}
+					]
+				},
+				"type": {
+					"type": "string",
+					"enum": ["config", "dependency", "devDependency", "peerDependency", "optionalDependency", "runtime"]
+				},
+				"package": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					]
+				}
+			},
+			"required": ["dependency", "from", "to", "type", "package"],
+			"additionalProperties": false,
+			"title": "Dependency Update Result"
+		},
+		"CatalogDelta": {
+			"type": "object",
+			"properties": {
+				"catalog": {
+					"type": "string",
+					"allOf": [
+						{
+							"minLength": 1
+						}
+					]
+				},
+				"dependency": {
+					"type": "string",
+					"allOf": [
+						{
+							"minLength": 1
+						}
+					]
+				},
+				"from": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"to": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"action": {
+					"type": "string",
+					"enum": ["added", "updated", "removed", "kept"]
+				}
+			},
+			"required": ["catalog", "dependency", "from", "to", "action"],
+			"additionalProperties": false,
+			"title": "Catalog Delta"
+		},
+		"LockfileChange": {
+			"type": "object",
+			"properties": {
+				"type": {
+					"type": "string",
+					"enum": ["config", "dependency", "devDependency", "peerDependency", "optionalDependency", "runtime"]
+				},
+				"dependency": {
+					"type": "string",
+					"allOf": [
+						{
+							"minLength": 1
+						}
+					]
+				},
+				"from": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"to": {
+					"type": "string",
+					"allOf": [
+						{
+							"minLength": 1
+						}
+					]
+				},
+				"affectedPackages": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					}
+				}
+			},
+			"required": ["type", "dependency", "from", "to", "affectedPackages"],
+			"additionalProperties": false,
+			"title": "Lockfile Change"
+		},
+		"ChangesetFile": {
+			"type": "object",
+			"properties": {
+				"id": {
+					"type": "string",
+					"allOf": [
+						{
+							"minLength": 1,
+							"description": "Unique changeset identifier"
+						}
+					]
+				},
+				"packages": {
+					"type": "array",
+					"description": "Packages affected by this changeset",
+					"items": {
+						"type": "string"
+					}
+				},
+				"type": {
+					"type": "string",
+					"enum": ["patch", "minor", "major"]
+				},
+				"summary": {
+					"type": "string",
+					"allOf": [
+						{
+							"minLength": 1,
+							"description": "Human-readable summary of changes"
+						}
+					]
+				}
+			},
+			"required": ["id", "packages", "type", "summary"],
+			"additionalProperties": false,
+			"title": "Changeset File"
+		},
+		"PullRequestResult": {
+			"type": "object",
+			"properties": {
+				"number": {
+					"type": "integer",
+					"allOf": [
+						{
+							"exclusiveMinimum": 0
+						}
+					]
+				},
+				"url": {
+					"type": "string",
+					"allOf": [
+						{
+							"pattern": "^https:\\/\\/"
+						}
+					]
+				},
+				"created": {
+					"type": "boolean"
+				},
+				"nodeId": {
+					"type": "string"
+				}
+			},
+			"required": ["number", "url", "created", "nodeId"],
+			"additionalProperties": false,
+			"title": "Pull Request Result"
+		},
+		"RunResultDocument": {
+			"type": "object",
+			"properties": {
+				"schemaVersion": {
+					"type": "number",
+					"enum": [1],
+					"description": "Document format version. Incremented only on a breaking change to this shape."
+				},
+				"hasChanges": {
+					"type": "boolean",
+					"description": "Whether the run produced any committable change."
+				},
+				"dryRun": {
+					"type": "boolean",
+					"description": "Whether the run was a rehearsal that skipped commit, push and PR."
+				},
+				"packageManager": {
+					"anyOf": [
+						{
+							"type": "string",
+							"enum": ["pnpm", "bun", "npm"]
+						},
+						{
+							"type": "null"
+						}
+					],
+					"description": "The package manager detected for this run, or null when the run ended before detection. Null rather than a placeholder: a value that decodes and is false is worse than an absent one, because a consumer branching on it has no way to know it is branching on a lie."
+				},
+				"workspaceRoot": {
+					"type": "string",
+					"description": "Absolute path of the workspace root every step read and wrote at."
+				},
+				"branch": {
+					"type": "string",
+					"description": "The update branch this run wrote to."
+				},
+				"targetBranch": {
+					"type": "string",
+					"description": "The branch the pull request targets."
+				},
+				"updates": {
+					"type": "array",
+					"description": "Every dependency, runtime and package-manager change, one entry per (path, dependency, section).",
+					"items": {
+						"$ref": "#/$defs/DependencyUpdateResult"
+					}
+				},
+				"catalogDeltas": {
+					"type": "array",
+					"description": "Per-catalog merge outcomes. Non-empty only under bun's compat-catalog mode.",
+					"items": {
+						"$ref": "#/$defs/CatalogDelta"
+					}
+				},
+				"lockfileChanges": {
+					"type": "array",
+					"description": "Resolved-version movements observed between the before and after lockfile snapshots.",
+					"items": {
+						"$ref": "#/$defs/LockfileChange"
+					}
+				},
+				"changesets": {
+					"type": "array",
+					"description": "Changesets written by the changeset step.",
+					"items": {
+						"$ref": "#/$defs/ChangesetFile"
+					}
+				},
+				"pullRequest": {
+					"anyOf": [
+						{
+							"$ref": "#/$defs/PullRequestResult"
+						},
+						{
+							"type": "null"
+						}
+					],
+					"description": "The pull request opened or updated, or null on a dry run or a degraded PR failure."
+				}
+			},
+			"required": [
+				"schemaVersion",
+				"hasChanges",
+				"dryRun",
+				"packageManager",
+				"workspaceRoot",
+				"branch",
+				"targetBranch",
+				"updates",
+				"catalogDeltas",
+				"lockfileChanges",
+				"changesets",
+				"pullRequest"
+			],
+			"additionalProperties": false,
+			"title": "Silk Update Action Run Result",
+			"description": "The complete outcome of one silk-update-action run, published as the `result` output."
+		}
+	}
+}

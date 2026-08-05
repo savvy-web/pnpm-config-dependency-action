@@ -13,10 +13,19 @@ import { ActionEnvironment, ActionOutputs } from "@effected/github-actions";
 import { Duration, Effect, References } from "effect";
 import { resultLines, runContextLines } from "./format.js";
 import { makeAppLayer } from "./layers/app.js";
+import type {
+	CatalogDelta,
+	ChangesetFile,
+	DependencyUpdateResult,
+	LockfileChange,
+	PullRequestResult,
+	RunResultDocument,
+} from "./schema/domain.js";
 import type { InnerProgramInputs } from "./schema/inputs.js";
 import { readInputs } from "./schema/inputs.js";
-import { emitOutputs, initialOutputs } from "./schema/outputs.js";
+import { emitOutputs, encodeRunResult, initialOutputs } from "./schema/outputs.js";
 import { LOCKFILE_NAMES, compareLockfiles } from "./services/lockfile.js";
+import type { DetectedPm } from "./services/package-manager.js";
 import { Report } from "./services/report.js";
 import { readWorkspaceYaml } from "./services/workspace-yaml.js";
 import { branchStep } from "./steps/branch.js";
@@ -33,6 +42,39 @@ import { peerSyncStep } from "./steps/peer-sync.js";
 import { regularDependenciesStep } from "./steps/regular-dependencies.js";
 import { upgradePackageManagerStep } from "./steps/upgrade-package-manager.js";
 import { upgradeRuntimesStep } from "./steps/upgrade-runtimes.js";
+
+/**
+ * Assemble the structured `result` document from the run's own values.
+ *
+ * Built from the same records that drive the scalar outputs and the PR body —
+ * not a parallel reporting shape — so the two cannot disagree about what
+ * happened.
+ */
+const buildRunResult = (params: {
+	readonly hasChanges: boolean;
+	readonly dryRun: boolean;
+	readonly detected: DetectedPm;
+	readonly branch: string;
+	readonly targetBranch: string;
+	readonly updates: ReadonlyArray<DependencyUpdateResult>;
+	readonly deltas: ReadonlyArray<CatalogDelta>;
+	readonly lockfileChanges: ReadonlyArray<LockfileChange>;
+	readonly changesets: ReadonlyArray<ChangesetFile>;
+	readonly pullRequest: PullRequestResult | null;
+}): RunResultDocument => ({
+	schemaVersion: 1,
+	hasChanges: params.hasChanges,
+	dryRun: params.dryRun,
+	packageManager: params.detected.pm,
+	workspaceRoot: params.detected.root,
+	branch: params.branch,
+	targetBranch: params.targetBranch,
+	updates: params.updates,
+	catalogDeltas: params.deltas,
+	lockfileChanges: params.lockfileChanges,
+	changesets: params.changesets,
+	pullRequest: params.pullRequest,
+});
 
 /**
  * Main action program (the `main` phase).
@@ -355,6 +397,23 @@ export const innerProgram = (
 						yield* outputs.set("pr-number", String(pr.number));
 						yield* outputs.set("pr-url", pr.url);
 					}
+					yield* outputs.set(
+						"result",
+						encodeRunResult(
+							buildRunResult({
+								hasChanges: true,
+								dryRun,
+								detected,
+								branch: inputs.branch,
+								targetBranch: inputs.targetBranch,
+								updates: allUpdates,
+								deltas: configDeltas,
+								lockfileChanges: changes,
+								changesets: changesetFiles,
+								pullRequest: pr,
+							}),
+						),
+					);
 
 					// Write job summary
 					const jobSummaryLines = ["# Dependency Updates"];

@@ -138,7 +138,7 @@ export type ChangesetFile = typeof ChangesetFile.Type;
  * Pull request information.
  */
 export const PullRequestResult = Schema.Struct({
-	number: Schema.Number.check(Schema.isGreaterThan(0)),
+	number: Schema.Int.check(Schema.isGreaterThan(0)),
 	url: Schema.String.check(Schema.isStartsWith("https://")),
 	created: Schema.Boolean,
 	nodeId: Schema.String,
@@ -181,3 +181,70 @@ export const LockfileChange = Schema.Struct({
 });
 
 export type LockfileChange = typeof LockfileChange.Type;
+
+// ══════════════════════════════════════════════════════════════════════════════
+// The structured `result` output
+// ══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * The whole run, as one machine-readable document.
+ *
+ * Published as the `result` action output alongside — never instead of — the
+ * four scalar outputs, which stay byte-for-byte what they were. This is
+ * **additive**: a workflow reading `has-changes` keeps working untouched.
+ *
+ * @remarks
+ * Composed entirely from the schemas the run already produces, rather than a
+ * parallel reporting shape: {@link DependencyUpdateResult}, {@link CatalogDelta},
+ * {@link LockfileChange}, {@link ChangesetFile} and {@link PullRequestResult}.
+ * That is deliberate — a second shape would drift from the first, and the drift
+ * would be invisible because both would still serialize.
+ *
+ * Every field is required and non-nullable except `pullRequest`, which is
+ * genuinely absent on a dry run or after a degraded PR failure. Arrays are empty
+ * rather than omitted, so a consumer can index without guarding.
+ */
+export const RunResultDocument = Schema.Struct({
+	schemaVersion: Schema.Literal(1).annotate({
+		description: "Document format version. Incremented only on a breaking change to this shape.",
+	}),
+	hasChanges: Schema.Boolean.annotate({
+		description: "Whether the run produced any committable change.",
+	}),
+	dryRun: Schema.Boolean.annotate({
+		description: "Whether the run was a rehearsal that skipped commit, push and PR.",
+	}),
+	packageManager: Schema.NullOr(Schema.Literals(["pnpm", "bun", "npm"])).annotate({
+		description:
+			"The package manager detected for this run, or null when the run ended before detection. " +
+			"Null rather than a placeholder: a value that decodes and is false is worse than an absent one, " +
+			"because a consumer branching on it has no way to know it is branching on a lie.",
+	}),
+	workspaceRoot: Schema.String.annotate({
+		description: "Absolute path of the workspace root every step read and wrote at.",
+	}),
+	branch: Schema.String.annotate({ description: "The update branch this run wrote to." }),
+	targetBranch: Schema.String.annotate({ description: "The branch the pull request targets." }),
+	updates: Schema.Array(DependencyUpdateResult).annotate({
+		description: "Every dependency, runtime and package-manager change, one entry per (path, dependency, section).",
+	}),
+	catalogDeltas: Schema.Array(CatalogDelta).annotate({
+		description: "Per-catalog merge outcomes. Non-empty only under bun's compat-catalog mode.",
+	}),
+	lockfileChanges: Schema.Array(LockfileChange).annotate({
+		description: "Resolved-version movements observed between the before and after lockfile snapshots.",
+	}),
+	changesets: Schema.Array(ChangesetFile).annotate({
+		description: "Changesets written by the changeset step.",
+	}),
+	pullRequest: Schema.NullOr(PullRequestResult).annotate({
+		description: "The pull request opened or updated, or null on a dry run or a degraded PR failure.",
+	}),
+}).annotate({
+	identifier: "RunResultDocument",
+	title: "Silk Update Action Run Result",
+	description: "The complete outcome of one silk-update-action run, published as the `result` output.",
+});
+
+/** The decoded {@link RunResultDocument} type. */
+export type RunResultDocument = typeof RunResultDocument.Type;

@@ -150,6 +150,12 @@ outputs:
     description: Number of dependencies updated
   has-changes:
     description: Whether any dependencies were updated
+  result:
+    description: >-
+      The complete run as a JSON document (schema: docs/schema/run-result.schema.json).
+      Always valid JSON on every exit path, including a failure — a run that did
+      nothing emits an empty-run document rather than an empty string, so it can be
+      parsed unconditionally with fromJSON() without guarding.
 runs:
   using: node24
   pre: dist/pre.js

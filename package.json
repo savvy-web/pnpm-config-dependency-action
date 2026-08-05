@@ -25,6 +25,7 @@
 		"ci:build": "CI=\"true\" turbo run build:prod --log-order=grouped --output-logs=full --log-prefix=none",
 		"ci:test": "CI=\"true\" vitest run --coverage",
 		"claude": "claude --plugin-dir=../../spencerbeggs/effected/plugin",
+		"generate-schema": "tsx lib/scripts/generate-schema.ts",
 		"lint": "biome check --max-diagnostics=none",
 		"lint:fix": "biome check --write --max-diagnostics=none",
 		"lint:fix:unsafe": "biome check --write --unsafe --max-diagnostics=none",
@@ -54,9 +55,11 @@
 	},
 	"devDependencies": {
 		"@effect/vitest": "4.0.0-beta.101",
+		"@effected/schemastore": "0.2.1",
 		"@savvy-web/github-action-builder": "^2.2.2",
 		"@savvy-web/silk": "^3.4.0",
-		"@vitest-agent/plugin": "^2.0.13"
+		"@vitest-agent/plugin": "^2.0.13",
+		"tsx": "^4.23.5"
 	},
 	"packageManager": "pnpm@11.20.0+sha512.9a6f330a95b66446ea088faf1521405a8a01f07fde7124cc9958dfed52d4bb436737e65b08f85f37b46fcba375092558ac51262b816844b22f63406ed166bfee",
 	"engines": {

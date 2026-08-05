@@ -92,6 +92,9 @@ importers:
       '@effect/vitest':
         specifier: 4.0.0-beta.101
         version: 4.0.0-beta.101(effect@4.0.0-beta.101)(vitest@4.1.10)
+      '@effected/schemastore':
+        specifier: 0.2.1
+        version: 0.2.1(effect@4.0.0-beta.101)
       '@savvy-web/github-action-builder':
         specifier: ^2.2.2
         version: 2.2.2(@types/node@26.1.2)(ioredis@5.11.1(supports-color@7.2.0))(typescript@7.0.2)
@@ -101,6 +104,9 @@ importers:
       '@vitest-agent/plugin':
         specifier: ^2.0.13
         version: 2.0.13(@effected/glob@0.2.2(effect@4.0.0-beta.101))(@effected/jsonc@0.5.2(effect@4.0.0-beta.101))(@vitest/coverage-istanbul@4.1.10)(@vitest/coverage-v8@4.1.10)(ioredis@5.11.1(supports-color@7.2.0))(supports-color@7.2.0)(typescript@7.0.2)(vitest@4.1.10)
+      tsx:
+        specifier: ^4.23.5
+        version: 4.23.5
 
 packages:
 
@@ -514,6 +520,12 @@ packages:
 
   '@effected/sbom@0.2.3':
     resolution: {integrity: sha512-dMuTI66fW3wnZnyDUkLC4ul93IeqYra6V5Z8NpUuIq8kbGfo+Y/rXC+9v5Kgt4otaWrehLLDdQpjqUN2T1wEGQ==}
+    engines: {node: '>=24.11.0'}
+    peerDependencies:
+      effect: 4.0.0-beta.101
+
+  '@effected/schemastore@0.2.1':
+    resolution: {integrity: sha512-ZE9+sD9CBBWRlQe5fAKYVky4kixahMDtxycJCbPdLRDU1S7XkSReVEhEVKb8b2MO2XclHHiZlVoynpuaqauBRg==}
     engines: {node: '>=24.11.0'}
     peerDependencies:
       effect: 4.0.0-beta.101
@@ -3911,6 +3923,12 @@ snapshots:
     transitivePeerDependencies:
       - kerberos
       - supports-color
+
+  '@effected/schemastore@0.2.1(effect@4.0.0-beta.101)':
+    dependencies:
+      '@effected/semver': 0.3.2(effect@4.0.0-beta.101)
+      ajv: 8.20.0
+      effect: 4.0.0-beta.101
 
   '@effected/semver@0.3.2(effect@4.0.0-beta.101)':
     dependencies:
