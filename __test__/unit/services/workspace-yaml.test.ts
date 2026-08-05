@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "@effect/vitest";
 import { Effect, References } from "effect";
 
 import type { PnpmWorkspaceContent } from "../../../src/services/workspace-yaml.js";
-import { WorkspaceYaml, WorkspaceYamlLive, sortContent } from "../../../src/services/workspace-yaml.js";
+import { formatWorkspaceYaml, readWorkspaceYaml, sortContent } from "../../../src/services/workspace-yaml.js";
 
 describe("sortContent", () => {
 	it("sorts top-level keys alphabetically with packages first", () => {
@@ -94,7 +94,7 @@ describe("sortContent", () => {
 	});
 });
 
-describe("WorkspaceYaml.format", () => {
+describe("formatWorkspaceYaml", () => {
 	let tempDir: string;
 
 	beforeEach(() => {
@@ -113,16 +113,15 @@ describe("WorkspaceYaml.format", () => {
 			);
 
 			yield* Effect.gen(function* () {
-				const ws = yield* WorkspaceYaml;
-				yield* ws.format(tempDir);
-				const result = yield* ws.read(tempDir);
+				yield* formatWorkspaceYaml(tempDir);
+				const result = yield* readWorkspaceYaml(tempDir);
 				expect(result).not.toBeNull();
 				// After formatting, packages should be first and sorted
 				const keys = Object.keys(result ?? {});
 				expect(keys[0]).toBe("packages");
 				expect(result?.packages).toEqual(["apps/*", "pkgs/*"]);
 				expect(result?.onlyBuiltDependencies).toEqual(["argon2", "sharp"]);
-			}).pipe(Effect.provide(WorkspaceYamlLive), Effect.provideService(References.MinimumLogLevel, "None"));
+			}).pipe(Effect.provideService(References.MinimumLogLevel, "None"));
 		}),
 	);
 
@@ -133,9 +132,8 @@ describe("WorkspaceYaml.format", () => {
 			writeFileSync(filepath, `packages:\n  - .\nconfigDependencies:\n  '@parcel/watcher': 2.0.0\n`);
 
 			yield* Effect.gen(function* () {
-				const ws = yield* WorkspaceYaml;
-				yield* ws.format(tempDir);
-			}).pipe(Effect.provide(WorkspaceYamlLive), Effect.provideService(References.MinimumLogLevel, "None"));
+				yield* formatWorkspaceYaml(tempDir);
+			}).pipe(Effect.provideService(References.MinimumLogLevel, "None"));
 
 			const afterFirst = readFileSync(filepath, "utf-8");
 			// The scoped key must round-trip as DOUBLE-quoted, never single-quoted —
@@ -145,9 +143,8 @@ describe("WorkspaceYaml.format", () => {
 
 			// Idempotent: a second format must not change the bytes.
 			yield* Effect.gen(function* () {
-				const ws = yield* WorkspaceYaml;
-				yield* ws.format(tempDir);
-			}).pipe(Effect.provide(WorkspaceYamlLive), Effect.provideService(References.MinimumLogLevel, "None"));
+				yield* formatWorkspaceYaml(tempDir);
+			}).pipe(Effect.provideService(References.MinimumLogLevel, "None"));
 			expect(readFileSync(filepath, "utf-8")).toBe(afterFirst);
 		}),
 	);
@@ -155,9 +152,8 @@ describe("WorkspaceYaml.format", () => {
 	it.effect("handles missing pnpm-workspace.yaml gracefully", () =>
 		Effect.gen(function* () {
 			yield* Effect.gen(function* () {
-				const ws = yield* WorkspaceYaml;
-				yield* ws.format(tempDir);
-			}).pipe(Effect.provide(WorkspaceYamlLive), Effect.provideService(References.MinimumLogLevel, "None"));
+				yield* formatWorkspaceYaml(tempDir);
+			}).pipe(Effect.provideService(References.MinimumLogLevel, "None"));
 		}),
 	);
 
@@ -166,9 +162,8 @@ describe("WorkspaceYaml.format", () => {
 			writeFileSync(join(tempDir, "pnpm-workspace.yaml"), ": invalid: yaml: {{{}");
 
 			const result = yield* Effect.gen(function* () {
-				const ws = yield* WorkspaceYaml;
-				return yield* ws.format(tempDir).pipe(Effect.result);
-			}).pipe(Effect.provide(WorkspaceYamlLive), Effect.provideService(References.MinimumLogLevel, "None"));
+				return yield* formatWorkspaceYaml(tempDir).pipe(Effect.result);
+			}).pipe(Effect.provideService(References.MinimumLogLevel, "None"));
 
 			expect(result._tag).toBe("Failure");
 		}),
@@ -181,9 +176,8 @@ describe("WorkspaceYaml.format", () => {
 			chmodSync(filepath, 0o000);
 
 			const result = yield* Effect.gen(function* () {
-				const ws = yield* WorkspaceYaml;
-				return yield* ws.format(tempDir).pipe(Effect.result);
-			}).pipe(Effect.provide(WorkspaceYamlLive), Effect.provideService(References.MinimumLogLevel, "None"));
+				return yield* formatWorkspaceYaml(tempDir).pipe(Effect.result);
+			}).pipe(Effect.provideService(References.MinimumLogLevel, "None"));
 
 			expect(result._tag).toBe("Failure");
 			// Restore perms for cleanup
@@ -199,9 +193,8 @@ describe("WorkspaceYaml.format", () => {
 			chmodSync(filepath, 0o444);
 
 			const result = yield* Effect.gen(function* () {
-				const ws = yield* WorkspaceYaml;
-				return yield* ws.format(tempDir).pipe(Effect.result);
-			}).pipe(Effect.provide(WorkspaceYamlLive), Effect.provideService(References.MinimumLogLevel, "None"));
+				return yield* formatWorkspaceYaml(tempDir).pipe(Effect.result);
+			}).pipe(Effect.provideService(References.MinimumLogLevel, "None"));
 
 			expect(result._tag).toBe("Failure");
 			// Restore perms for cleanup
@@ -210,7 +203,7 @@ describe("WorkspaceYaml.format", () => {
 	);
 });
 
-describe("WorkspaceYaml.read", () => {
+describe("readWorkspaceYaml", () => {
 	let tempDir: string;
 
 	beforeEach(() => {
@@ -229,9 +222,8 @@ describe("WorkspaceYaml.read", () => {
 			);
 
 			const result = yield* Effect.gen(function* () {
-				const ws = yield* WorkspaceYaml;
-				return yield* ws.read(tempDir);
-			}).pipe(Effect.provide(WorkspaceYamlLive), Effect.provideService(References.MinimumLogLevel, "None"));
+				return yield* readWorkspaceYaml(tempDir);
+			}).pipe(Effect.provideService(References.MinimumLogLevel, "None"));
 
 			expect(result).not.toBeNull();
 			expect(result?.packages).toEqual(["pkgs/*"]);
@@ -242,9 +234,8 @@ describe("WorkspaceYaml.read", () => {
 	it.effect("returns null when file does not exist", () =>
 		Effect.gen(function* () {
 			const result = yield* Effect.gen(function* () {
-				const ws = yield* WorkspaceYaml;
-				return yield* ws.read(tempDir);
-			}).pipe(Effect.provide(WorkspaceYamlLive), Effect.provideService(References.MinimumLogLevel, "None"));
+				return yield* readWorkspaceYaml(tempDir);
+			}).pipe(Effect.provideService(References.MinimumLogLevel, "None"));
 			expect(result).toBeNull();
 		}),
 	);

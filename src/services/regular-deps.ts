@@ -17,7 +17,7 @@ import { WorkspaceDiscovery } from "@effected/workspaces";
 import { Context, Effect, Layer } from "effect";
 
 import { FileSystemError } from "../errors/errors.js";
-import type { DependencyUpdateResult } from "../schemas/domain.js";
+import type { DependencyUpdateResult } from "../schema/domain.js";
 import { matchesPattern, parseSpecifier } from "../utils/deps.js";
 import { detectIndent } from "../utils/pnpm.js";
 import { resolutionRangeForSpecifier, resolveLatestSatisfying } from "../utils/semver.js";
@@ -38,24 +38,31 @@ export class RegularDeps extends Context.Service<
 		 */
 		readonly updateRegularDeps: (
 			patterns: ReadonlyArray<string>,
-			workspaceRoot?: string,
+			workspaceRoot: string,
 			exclude?: ReadonlySet<string>,
 		) => Effect.Effect<ReadonlyArray<DependencyUpdateResult>>;
 	}
->()("RegularDeps") {}
-
-export const RegularDepsLive = Layer.effect(
-	RegularDeps,
-	Effect.gen(function* () {
-		const registry = yield* NpmRegistry;
-		const discovery = yield* WorkspaceDiscovery;
-		const releaseAge = yield* ReleaseAge;
-		return {
-			updateRegularDeps: (patterns, workspaceRoot = process.cwd(), exclude) =>
-				updateRegularDepsImpl(patterns, registry, discovery, releaseAge, workspaceRoot, exclude),
-		};
-	}),
-);
+>()("RegularDeps") {
+	/**
+	 * Live layer.
+	 *
+	 * Declared IN the class body, which is load-bearing rather than stylistic: a
+	 * member attached by post-class assignment is tree-shaken out of the bundled
+	 * `dist`, and that fails only in production because vitest runs the source.
+	 */
+	static readonly layer = Layer.effect(
+		this,
+		Effect.gen(function* () {
+			const registry = yield* NpmRegistry;
+			const discovery = yield* WorkspaceDiscovery;
+			const releaseAge = yield* ReleaseAge;
+			return {
+				updateRegularDeps: (patterns, workspaceRoot, exclude) =>
+					updateRegularDepsImpl(patterns, registry, discovery, releaseAge, workspaceRoot, exclude),
+			};
+		}),
+	);
+}
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Internal Helpers

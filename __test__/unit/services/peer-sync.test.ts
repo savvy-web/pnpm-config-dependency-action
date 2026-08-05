@@ -5,7 +5,7 @@ import type { WorkspacePackage } from "@effected/workspaces";
 import { WorkspaceDiscovery, WorkspaceDiscoveryError } from "@effected/workspaces";
 import { Effect, Layer, References } from "effect";
 import { describe, expect, it, vi } from "vitest";
-import type { DependencyUpdateResult } from "../../../src/schemas/domain.js";
+import type { DependencyUpdateResult } from "../../../src/schema/domain.js";
 import { computePeerRange, syncPeers } from "../../../src/services/peer-sync.js";
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -66,10 +66,9 @@ const runSyncPeers = (
 	config: { lock: string[]; minor: string[] },
 	devUpdates: DependencyUpdateResult[],
 	workspacesLayer: Layer.Layer<WorkspaceDiscovery>,
-	workspaceRoot: string,
 ) =>
 	Effect.runPromise(
-		syncPeers(config, devUpdates, workspaceRoot).pipe(
+		syncPeers(config, devUpdates).pipe(
 			Effect.provideService(References.MinimumLogLevel, "None"),
 			Effect.provide(workspacesLayer),
 		),
@@ -238,7 +237,7 @@ describe("syncPeers", () => {
 			},
 		];
 
-		const results = await runSyncPeers({ lock: ["effect"], minor: [] }, devUpdates, workspacesLayer, tmpDir);
+		const results = await runSyncPeers({ lock: ["effect"], minor: [] }, devUpdates, workspacesLayer);
 
 		expect(results).toHaveLength(1);
 		expect(results[0].to).toBe("^3.12.5");
@@ -275,7 +274,7 @@ describe("syncPeers", () => {
 			},
 		];
 
-		const results = await runSyncPeers({ lock: [], minor: ["effect"] }, devUpdates, workspacesLayer, tmpDir);
+		const results = await runSyncPeers({ lock: [], minor: ["effect"] }, devUpdates, workspacesLayer);
 
 		expect(results).toHaveLength(0);
 
@@ -312,7 +311,7 @@ describe("syncPeers", () => {
 			},
 		];
 
-		const results = await runSyncPeers({ lock: [], minor: ["effect"] }, devUpdates, workspacesLayer, tmpDir);
+		const results = await runSyncPeers({ lock: [], minor: ["effect"] }, devUpdates, workspacesLayer);
 
 		expect(results).toHaveLength(1);
 		expect(results[0].to).toBe("^3.13.0");
@@ -349,7 +348,7 @@ describe("syncPeers", () => {
 			},
 		];
 
-		const results = await runSyncPeers({ lock: ["effect"], minor: [] }, devUpdates, workspacesLayer, tmpDir);
+		const results = await runSyncPeers({ lock: ["effect"], minor: [] }, devUpdates, workspacesLayer);
 
 		expect(results).toHaveLength(0);
 	});
@@ -370,7 +369,7 @@ describe("syncPeers", () => {
 			},
 		];
 
-		const results = await runSyncPeers({ lock: ["effect"], minor: [] }, devUpdates, workspacesLayer, tmpDir);
+		const results = await runSyncPeers({ lock: ["effect"], minor: [] }, devUpdates, workspacesLayer);
 
 		// Should still return results for packages it can resolve
 		// Root package path is resolved independently of workspace-tools
@@ -393,7 +392,7 @@ describe("syncPeers", () => {
 			},
 		];
 
-		const results = await runSyncPeers({ lock: ["effect"], minor: [] }, devUpdates, workspacesLayer, tmpDir);
+		const results = await runSyncPeers({ lock: ["effect"], minor: [] }, devUpdates, workspacesLayer);
 
 		expect(results).toHaveLength(0);
 	});
@@ -423,7 +422,7 @@ describe("syncPeers", () => {
 			},
 		];
 
-		const results = await runSyncPeers({ lock: ["effect"], minor: [] }, devUpdates, workspacesLayer, tmpDir);
+		const results = await runSyncPeers({ lock: ["effect"], minor: [] }, devUpdates, workspacesLayer);
 
 		expect(results).toHaveLength(0);
 

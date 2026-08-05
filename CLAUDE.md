@@ -9,9 +9,12 @@ This is a **GitHub Action** that updates config dependencies, regular and peer
 dependencies, the package manager itself, and `devEngines.runtime` entries
 (node/deno/bun). It runs as **three phases**: `src/pre.ts` provisions the GitHub
 App token (`GitHubToken.provision`), `src/main.ts` is a thin `Action.run(program)`
-wrapper, `src/post.ts` reports duration and revokes the token. The testable Effect
-program (`readInputs`, `program`, `innerProgram`, `runCommands`, `runInstall`)
-lives in `src/program.ts`; cross-phase state in `src/state.ts`.
+wrapper, `src/post.ts` reports duration and revokes the token. `src/program.ts`
+holds `program` / `innerProgram` as **pure composition** — read inputs, run the
+steps in order, fold their results into outputs, report; each step's body lives
+in its own module under `src/steps/`, input reading in `src/schema/inputs.ts`
+(`readInputs`), log rendering in `src/format.ts`. Cross-phase state in
+`src/state.ts`.
 
 It runs on **Effect v4** (`effect@4.0.0-beta.101` via `catalog:effect`, injected
 by the `@effected/pnpm-plugin-effect` config dependency) and the **`@effected/*`
@@ -39,6 +42,8 @@ pnpm run typecheck                 # tsc via Turbo
 pnpm run test / test:watch         # Vitest
 pnpm run test:coverage             # Coverage (see the gate caveat below)
 pnpm run build / build:prod        # Bundle via github-action-builder
+pnpm run generate-schema           # Regenerate docs/schema/run-result.schema.json
+pnpm run lint:md                   # markdownlint-cli2 (docs + this file)
 
 pnpm vitest run __test__/unit/services/regular-deps.test.ts   # single file
 pnpm vitest run --testNamePattern="parsePnpmVersion"          # by name
@@ -51,11 +56,19 @@ pnpm vitest run --testNamePattern="parsePnpmVersion"          # by name
 - Single-package GitHub Action (not a monorepo); no barrel re-exports — direct
   imports everywhere
 - **Entry points**: `src/pre.ts`, `src/main.ts`, `src/post.ts` (derived from
-  `action.config.ts` by the builder); orchestration in `src/program.ts`
+  `action.config.ts` by the builder); composition in `src/program.ts`
+- **Steps**: `src/steps/` — one module per orchestration unit (14: `branch`,
+  `changesets`, `commit-and-pr`, `config-dependencies`, `custom-commands`,
+  `detect-changes`, `detect-package-manager`, `format-workspace`, `install`,
+  `lockfile-snapshot`, `peer-sync`, `regular-dependencies`,
+  `upgrade-package-manager`, `upgrade-runtimes`). Each declares its own result
+  type, an explicit requirement channel, and a tagged error **only if it can
+  actually fail** — four carry `never`
 - **Services**: `src/services/` — `Context.Service` + `Layer`, plus stateless
-  helper modules; **Layers**: `src/layers/app.ts`; **Schemas**:
-  `src/schemas/domain.ts`; **Errors**: `src/errors/errors.ts`; **Utils**:
-  `src/utils/` (pure helpers)
+  helper modules; **Layers**: `src/layers/app.ts`; **Schema**: `src/schema/`
+  (singular — `domain.ts`, `inputs.ts`, `outputs.ts`); **Rendering**:
+  `src/format.ts` (the run's log surface — pure, no services); **Errors**:
+  `src/errors/errors.ts`; **Utils**: `src/utils/` (pure helpers)
 - **Tests**: `__test__/unit/**` mirrors `src/`; `__test__/integration/**` for
   real-IO suites; `__test__/utils/**` for shared helpers (see Gotchas)
 - **Shared configs**: `lib/configs/`; **Build**: Turbo; `typecheck` needs `build`
@@ -63,28 +76,43 @@ pnpm vitest run --testNamePattern="parsePnpmVersion"          # by name
 ### Effect-TS Patterns
 
 - **Kit services**: `@effected/github-actions` (`Action`, `ActionInput`,
-  `ActionEnvironment`, `ActionOutputs`, `ActionState`, `DryRun`, `GitHubToken`);
+  `ActionEnvironment`, `ActionOutputs`, `ActionState`, `DryRun`, `GitHubToken`,
+  **`GitHubMarkdown`** — the GFM writer, capital H; `GithubMarkdown` was a
+  *rename*, not a removal, and this repo hand-rolled a copy for a release on
+  that misreading. The local copy (`src/utils/github-markdown.ts`) is now
+  **deleted**; only `bold`/`rule` have no kit equivalent and they stay in
+  `src/utils/markdown.ts`);
   `@effected/github` (`GitHubApp`, `Repo`, `GitBranch`, `GitCommit`, `CheckRun`,
   `PullRequest` — all failing with a single `GitHubError`, discriminated by
   `hasKind`); `@effected/commands` (`Run` free functions over core
-  `ChildProcessSpawner` — no `CommandRunner` service); `@effected/npm`,
-  `workspaces`, `lockfiles`, `runtimes`, `semver`, `yaml`. Layers are `.layer` /
+  `ChildProcessSpawner` — no `CommandRunner` service); `@effected/git`
+  (`Git.status` / `Git.configSet` only — the mutating tier is declined);
+  `@effected/npm`, `workspaces`, `lockfiles`, `runtimes`, `semver`, `yaml`.
+  Layers are `.layer` /
   `.layer(opts)` **statics on the service class**, not `*Live` constants; services
   expose companion `*Shape` interfaces; workspace layers are **root-bound at
   build**, so their methods are arg-less.
 - **Domain services**: `BranchManager`, `PackageManagerUpgrade`, `ConfigDeps`,
   `CatalogConfigDeps`, `RegularDeps`, `ReleaseAge`, `RuntimeUpgrade`, `Lockfile`,
-  `Changesets`, `Report`; stateless helpers `detectPackageManager`, `syncPeers`,
-  `fetchModuleCatalogs`, `WorkspaceYaml`.
+  `Changesets`, `Report` — **every one wired as a `static layer` on the class**,
+  the same convention as the kit, declared *in* the class body (a member attached
+  after the class is tree-shaken out of `dist` and fails only in production). No
+  `*Live` constant survives in `src/services/`. Stateless helpers:
+  `detectPackageManager`, `syncPeers`, `fetchModuleCatalogs`, and the
+  `workspace-yaml` functions — the `WorkspaceYaml` **tag and layer were deleted**,
+  since nothing in `src/` wired them and their only consumer was their own test.
 - **Changesets**: `services/changesets.ts` is a thin adapter over
   `Changesets.DepsRegen` (`@savvy-web/silk-effects`, wired as `DepsRegenDefault`),
   which owns the cumulative `merge-base(base) → worktree` diff, consolidation and
   versionable-minus-ignored gating — this repo computes none of it. `plan`
   refreshes workspace discovery, so it sees manifests edited earlier in the run.
-- **Errors actually raised**: `InvalidInputError` (inputs, branch refs,
-  yarn/no-workspace), `FileSystemError`, `ChangesetError`, `LockfileError`, plus
-  kit `GitHubError` and `CommandFailedError`/`CommandOutputError`. `GitHubApiError`
-  and `PnpmError` remain in the union but are **no longer constructed**.
+- **Errors**: the `ActionError` union is exactly `InvalidInputError` (inputs,
+  branch refs, yarn/no-workspace), `FileSystemError`, `ChangesetError` and
+  `LockfileError` — every member has a construction site. Kit failures arrive as
+  `GitHubError` and `CommandFailedError`/`CommandOutputError`. `GitHubApiError`,
+  `GitError`, `PnpmError` and `DependencyUpdateFailures` were **deleted** for
+  having none; `__test__/unit/errors/errors.test.ts` pins the exported set, so
+  re-adding one fails a test.
 - **Effect v4 spellings**: `Context.Service`; `NodeServices.layer`;
   `FileSystem`/`Path` from `effect`, `HttpClient`/`FetchHttpClient` from
   `effect/unstable/http`, `ChildProcess`/`ChildProcessSpawner` from
@@ -195,8 +223,12 @@ Composite builds with project references, strict mode, ES2022/ES2023.
 ### Testing
 
 - **Framework**: Vitest with v8 coverage, forks pool (Effect compatibility).
-  `@effect/vitest` is pinned exactly to `effect`'s beta and must move in lockstep;
-  a few suites use `it.effect`, real-IO suites deliberately do not.
+  Current suite: **573 tests**. `@effect/vitest` is pinned exactly to `effect`'s
+  beta and must move in lockstep; a few suites use `it.effect`, real-IO suites
+  deliberately do not.
+- **Schema drift**: `__test__/unit/generate-schema.test.ts` fails when
+  `docs/schema/run-result.schema.json` no longer matches `RunResultDocument`; fix
+  by running `pnpm generate-schema`, not by editing the JSON.
 - **Config**: `vitest.config.ts` is an async factory loading `@vitest-agent/plugin`
   — `AgentPlugin.discover()` supplies `projects`/`tags`, `AgentPlugin({...})` is
   registered in `plugins`.
@@ -223,7 +255,17 @@ Composite builds with project references, strict mode, ES2022/ES2023.
   rehearsal performs a live run. `ActionInput.list` owns the multi-value grammar
   (`src/utils/input.ts` / `parseMultiValueInput` are **deleted**) and **fails on
   absent and empty**, so `Config.withDefault([])` on each list read is load-bearing.
-  `readInputs` is extracted and pinned by `INPUT_*`-keyed tests.
+  `readInputs` lives in `src/schema/inputs.ts` (beside the `INPUT_NAMES` tuple)
+  and is pinned by `INPUT_*`-keyed tests.
+- **The `result` output is the whole run as JSON** (`RunResultDocument`, composed
+  from the existing domain schemas rather than a parallel reporting shape),
+  emitted **on every exit path** as an empty-run document — never an empty
+  string, so a consumer parses unconditionally. Its JSON Schema is **generated**
+  into `docs/schema/run-result.schema.json` by `lib/scripts/generate-schema.ts`
+  (via `@effected/schemastore`, pinned exactly at `0.2.1`, run under `tsx` — now
+  a declared devDependency, previously transitive-only); change it by editing the
+  domain types and running `pnpm generate-schema`. The four scalar outputs are
+  unchanged.
 - **Tests are not co-located**: every unit suite lives in `__test__/unit/**`
   mirroring `src/`. `__test__/utils/**` is **reserved by AgentPlugin for helpers and
   excluded from collection** — a `.test.ts` there silently never runs; keep helpers
@@ -247,7 +289,9 @@ Composite builds with project references, strict mode, ES2022/ES2023.
   manage it). `upgrade()` never returns `null` — it returns an outcome whose `kind`
   explains the skip, and `unsatisfiable` (a range typed for a different manager)
   is the only one logged at **warning**. A successful upgrade opens the install gate
-- `runInstall` **regenerates** the lockfile rather than repairing it (pnpm:
+- `runInstall` (`src/steps/install.ts`; `runCommands` is in
+  `src/steps/custom-commands.ts`) **regenerates** the lockfile rather than
+  repairing it (pnpm:
   `pnpm clean --lockfile` + `pnpm install --frozen-lockfile=false`, needs pnpm 11+;
   bun: `bun install --force`; npm: unlink `package-lock.json` via `node:fs` then
   `npm install`) — the action mutates all three resolution inputs, so a repair-only
@@ -259,11 +303,18 @@ Composite builds with project references, strict mode, ES2022/ES2023.
   **npm** is skipped — no `catalog:` protocol
 - `ConfigDeps`/`RegularDeps` mirror pnpm's `minimumReleaseAge` gate at resolution
   time via `ReleaseAge.filterVersions`, so the action never proposes a version pnpm
-  would reject (`ERR_PNPM_NO_MATURE_MATCHING_VERSION`). The gate combines inline
-  `pnpm-workspace.yaml` keys **and** a node-subprocess replay of config-dependency
-  pnpmfile hooks (`pnpm config get` never sees hook-injected values, and the rspack
-  bundle cannot host the in-process dynamic import); publish times come from
-  `NpmRegistry.publishTimes`. The whole path **fails open**. Depth in
+  would reject (`ERR_PNPM_NO_MATURE_MATCHING_VERSION`). **Gate discovery is the
+  kit's**, not this repo's: `WorkspaceCatalogs.releaseAgeGate()` over
+  `layerWithConfigDependenciesSubprocess()` combines inline `pnpm-workspace.yaml`
+  keys with the replayed config-dependency pnpmfile hooks (`pnpm config get` never
+  sees hook-injected values). The **subprocess** variant is mandatory — rspack
+  miscompiles the in-process computed dynamic `import()` into a context module —
+  and it is what unblocked this adoption. Publish times come from
+  `NpmRegistry.publishTimes`. **What stays local is the fail-open posture**: the
+  kit fails typed with `CatalogAssemblyFailure`, correct for a library, and this
+  action degrades it to "no gate" with a warning in a one-line `Effect.catch` at
+  the single call site in `ReleaseAge.layer`, because pnpm re-enforces the gate at
+  install. Depth in
   `@./.claude/design/silk-update-action/05-module-library.md`
 - Runtime bumps (`upgrade-runtime-*`) **upgrade only, never add** — in *every*
   mode — and always write the **bare exact** resolved version (the range only
@@ -274,12 +325,47 @@ Composite builds with project references, strict mode, ES2022/ES2023.
 - `@effected/workspaces`' `PackageManagerDetector` recognizes bun/pnpm from the
   **lockfile conjoined with the manifest**, not `devEngines.packageManager` alone —
   a repo naming a manager only in `devEngines` with no lockfile detects as **npm**
-- **`Run.text` trims**, which corrupts column-aligned output: read
-  `git status --porcelain` with `Run.collect` (see `gitRaw` in `services/branch.ts`).
-  Status is always queried with `-c core.fileMode=false` — exec-bit-only flips do
-  not survive the content-based API commit and would produce an empty commit
+- **`git status` is read through `@effected/git`'s `Git.status(cwd)`**, which
+  returns typed `StatusEntry` values (`x`, `y`, `path`, `origPath`). Both readers
+  use it — `services/branch.ts` (commit file list) and `steps/detect-changes.ts`
+  (change verdict). `parseStatusLine` and the `gitRaw`/`Run.collect` helper it
+  needed are **deleted**; `Run.text` still trims, but nothing here parses
+  column-aligned text any more
+- **`core.fileMode=false` is set once on the checkout, not per command.**
+  `steps/configure-status.ts` writes it via `Git.configSet` right after detection,
+  before any status read — exec-bit-only flips do not survive the content-based
+  API commit at mode 100644 and would produce an empty commit and a spurious PR.
+  Repository scope, so it also applies to silk's DepsRegen commands in that
+  checkout (benign, and stated in the design docs rather than assumed)
 - Auto-merge requires GraphQL (no REST endpoint) and is a **separate**
   `setAutoMerge` call whose failure degrades to a warning
+- **`@effected/package-json` was evaluated and DECLINED on evidence — do not
+  re-propose it.** `Package.decode` requires `name` + a strict-semver `version`,
+  so it **rejects the private workspace root** this action must edit, and its
+  write path reorders keys in a manifest the action then commits to someone
+  else's repo (upstream spencerbeggs/effected#286)
+- **`@effected/git` is adopted for `status` only.** The mutating tier is still
+  declined — it covers 2 of the 9 local git operations `services/branch.ts`
+  performs, so seven stay on `Run` (spencerbeggs/effected#279). The earlier
+  blanket decline rested on "`-c core.fileMode=false` cannot be scoped", which
+  was **wrong**: that enumerated per-command and process-global and treated the
+  list as exhaustive, when repository config is a third scope and the ordinary
+  one. Worth remembering as a shape — every individual claim in that ruling was
+  true. Detail and the "what would change the answer" conditions live in
+  `@./.claude/design/silk-update-action/09-project-status.md`
+- **A caret on a `0.x` dependency pins the minor.** `^0.9.5` does **not** admit
+  `0.10.0`; `^0.2.1` does not admit `0.3.0`. A plain `pnpm update` therefore
+  leaves a `0.x` kit package on the old minor while code calls the new surface —
+  the install succeeds and the failure shows up later. Bump the declared range
+  explicitly when a `0.x` kit package releases a minor. This is not theoretical:
+  `@effected/workspaces` and `@effected/commands` both crossed a `0.x` minor
+  during this branch and needed exactly that hand-edit (now at `^0.10.0` /
+  `^0.3.0`)
+- **`src/services/lockfile.ts` once held a raw NUL byte** (the `depKey`
+  separator, since replaced by the `\0` escape). `file(1)` reported it as `data`
+  and **grep silently skipped all 531 lines**, returning something
+  indistinguishable from a clean no-match. Any pre-fix claim about that file may
+  rest on no data at all; re-verify rather than cite
 - `action.config.ts`: `build.nativeDynamicImports` lists
   `@changesets/apply-release-plan` only, so rspack preserves its fully dynamic
   `await import()`. `@effected/workspaces`' `ConfigDependencyHooks` has the same

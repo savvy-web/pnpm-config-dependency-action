@@ -112,13 +112,264 @@ rather than silently performing a package-manager-only run.
   which came in transitively through the deleted `github-action-effects` and no
   longer appears in the lockfile at all. Harmless, but the comment there still
   describes the old provenance.
-- `GitHubApiError` and `PnpmError` remain in `src/errors/errors.ts` and in the
-  `ActionError` union but are no longer constructed anywhere; GitHub failures are
-  the kit's `GitHubError` and subprocess failures are `@effected/commands`' error
-  types.
 - Two duplicate resolutions (`@effected/workspaces` 0.8.0, `@effected/npm` 0.4.0)
   come entirely from the `@vitest-agent/plugin` devDependency tree and clear when
   that plugin bumps; neither reaches the shipped artifact.
+- **`@effected/package-json` is deliberately NOT adopted** (upstream
+  spencerbeggs/effected#286), and the reason is
+  measured rather than stylistic. `Package.decode` requires both `name` and
+  `version`, with `version` a strict semver — so it rejects a private monorepo
+  root (`{ "private": true, "packageManager": …, "devEngines": … }`), which is
+  exactly the file `RuntimeUpgrade` and `PackageManagerUpgrade` edit. It also
+  rejects a caret `packageManager` pin (`pnpm@^11.20.0`), a form `parsePnpmVersion`
+  supports and `PackageManagerUpgrade` reads as a reference. Separately, the
+  write path sorts keys canonically, so adopting it would reformat unrelated
+  regions of a manifest the action then commits to someone else's repo; the
+  current surgical edit (mutate the parsed object, `JSON.stringify` with
+  `detectIndent`) preserves key order exactly.
+
+  Four helpers therefore stay, each a **deliberate divergence with its own
+  reason** — recorded so the next audit does not re-propose them:
+
+  | helper | why it stays |
+  | --- | --- |
+  | `parsePnpmVersion` / `formatPnpmVersion` | `PackageManager.FromString` rejects the caret pin (`pnpm@^11.20.0`) these accept and `PackageManagerUpgrade` documents |
+  | `findRuntimeEntry` | returns the **live object** inside `devEngines`, so assigning `.version` rewrites in place and preserves the entry's other keys; `DevEngine` decoding yields a detached copy |
+  | `detectIndent` | serves the surgical write path that `PackageIndent` would replace only if the kit's writer were adopted |
+  | `corepackHashFromIntegrity` | the kit has no SRI (`sha512-<base64>`) → corepack (`sha512.<hex>`) converter — upstream #281 |
+
+- **`@effected/git` is adopted for `status`, not for the mutating tier**
+  (upstream spencerbeggs/effected#279; local ruling
+  savvy-web/silk-update-action#246). Both status readers use `Git.status`, and
+  `Git.configSet` writes the `core.fileMode` pin; the other seven local git
+  operations stay on `Run`. Detail and the corrected reasoning are in the
+  settled-decisions section below — **the earlier "deliberately NOT adopted"
+  ruling was overturned in part**, and the reason it was overturned matters more
+  than the verdict.
+- **Raw `node:fs` / `node:path` use is pervasive and unresolved.** Core
+  `FileSystem` / `Path` are ambient (they are members of `ActionServices`), so
+  these are drift rather than necessity — the kit's rule is that a raw `node:`
+  import is sanctioned only inside `@effected/github-actions` itself. The
+  current, **NUL-safe recount** is 14 modules: `format.ts`, `utils/deps.ts`,
+  `steps/install.ts`, and `services/{changesets, peer-sync,
+  package-manager-upgrade, config-deps, workspace-yaml, catalog-config-deps,
+  regular-deps, runtime-upgrade, branch, module-catalogs, lockfile}.ts`.
+  `module-catalogs.ts` is the one defensible case (`node:crypto` / `os` / `url`
+  for tarball extraction).
+  - **Correction to the original audit.** That finding claimed "14 modules" while
+    enumerating only 12, and the enumeration omitted `services/lockfile.ts`
+    because the grep it came from silently skipped that file — see the
+    NUL-byte note below. The count, the list, and each other all disagreed. The
+    conclusion — that the drift is pervasive — was right; the evidence presented
+    as exhaustive was not. Do not cite the original enumeration.
+- **Resolved, worth keeping:** `services/lockfile.ts` used to carry a **raw NUL
+  byte** — the separator in `` `${dep.name}\0${dep.depType}` ``, written as a
+  literal `U+0000` rather than the `\0` escape. The NUL itself is correct (a
+  package name cannot contain one, so it is a safe composite-key separator); the
+  raw encoding was not. `file(1)` reported the source as `data`, and **grep
+  treated the whole 531-line file as binary and silently skipped it** — returning
+  what looks exactly like a clean no-match.
+  - That is why the audit enumeration above was wrong, and it is worth
+    remembering as a class rather than an incident: a search that returns nothing
+    because it could not read the file is indistinguishable, at the call site,
+    from a search that returns nothing because there was nothing to find.
+  - Fixed by replacing the raw byte with the `\0` escape. The runtime string is
+    unchanged — verified both by an escape-equivalence probe
+    (`\0` === `String.fromCharCode(0)`) and by `dist/main.js` rebuilding
+    **byte-identical**. Note that the test suite could *not* have caught a broken
+    escape here: `depKey` is used symmetrically on both sides of every
+    comparison, so a wrong separator would still compare equal to itself.
+
+## Settled decisions — do not re-propose without new evidence
+
+These were investigated, rejected on measurement, and are the half of this
+record that a fresh audit will otherwise re-derive from scratch. Each names what
+would change the answer.
+
+### `@effected/package-json` — not adopted (upstream #286)
+
+Probed before migrating anything, which is why nothing was half-migrated:
+
+- `Package.decode` **requires both `name` and `version`**, so it rejects a
+  private monorepo root (`{ "private": true, "packageManager": …,
+  "devEngines": … }`) — precisely the manifest `RuntimeUpgrade` and
+  `PackageManagerUpgrade` edit. Adoption would turn "edits your manifest" into
+  "refuses your repo."
+- It also rejects a caret `packageManager` pin (`pnpm@^11.20.0`), a form
+  `parsePnpmVersion` supports and this action documents.
+- The write path **sorts keys canonically**, so adopting it would reformat
+  unrelated regions of a file the action then commits to someone else's repo.
+
+**What would change the answer:** a lenient decode for the workspace-root shape,
+and an order-preserving single-field edit. Both are asked for in #286.
+
+**Trap for the next auditor:** this repo's own `package.json` is already sorted
+by lint-staged, so the reordering is a no-op *here*. Checking only against this
+repo would have made it look safe.
+
+### `@effected/git` — adopted for `status`, declined for the mutating tier (upstream #279)
+
+**This entry previously read "not adopted", and that ruling was overturned in
+part.** The verdict still holds for the seven mutating operations. It was wrong
+about `status`, and *how* it was wrong is the durable lesson — so the original
+argument is reproduced rather than quietly replaced.
+
+**What the original ruling said.** `@effected/git` covers 2 of the 9 local git
+operations `services/branch.ts` performs. Missing: `-c core.fileMode=false` on
+`status`, an explicit-refspec `fetch` (load-bearing on a single-branch
+`actions/checkout`, which otherwise never materializes `origin/<branch>`),
+`fetch --unshallow`, `checkout -B`, `reset --hard`, `branch -f`, and
+`rev-parse --is-shallow-repository`. Adopting for the covered two would leave two
+subprocess mechanisms in one module while fixing nothing. On the config flag it
+said: the `GIT_CONFIG_COUNT` / `KEY_n` / `VALUE_n` env route *does* reach the
+child (`GitCommand` spawns with `extendEnv: true`, verified against a real repo),
+but only process-globally — rejected on blast radius.
+
+**Where it was wrong.** That argument treats *per-command* and *process-global*
+as the only two scopes. There is a third: `git config core.fileMode false`
+writes the **repository's own** config. It is scoped to the checkout, persists
+for the job, and needs no per-command seam — so the flag was never the blocker
+it was recorded as. The enumeration was complete about what the kit lacked and
+incomplete about what git offers, which is a harder error to notice than a
+factual one: every individual claim in it was true.
+
+**What adoption bought.** `parseStatusLine` is deleted. `StatusEntry` models the
+two porcelain columns separately and carries `origPath`, so the three defects
+that had shipped in that parser — a dropped rename, an `AD`/`RD` deletion read as
+a modification, and a copy deleting its own origin — become *unrepresentable*
+rather than merely fixed. `-z` also removes git's path-quoting layer, retiring a
+known octal-escape gap. Their tests survive, re-pointed at the commit payload.
+
+**What it cost, stated because it is real.** Two subprocess mechanisms for git
+now live in `services/branch.ts` — precisely the outcome the original ruling was
+avoiding. Accepted deliberately: deleting a parser with three shipped silent
+wrong answers outweighs mechanism uniformity. And the config write applies to
+every git command in that checkout for the rest of the job, including silk's
+DepsRegen — benign, since a mode flip is not a dependency change and cannot
+survive a content-based API commit regardless, but not nothing.
+
+**What would change the remaining answer:** refspec support on `fetch`,
+`-B`/force on `checkout`, `reset`, `--unshallow`, `branch -f`, and the boolean
+`rev-parse` queries. A per-command config override is **no longer on that list**.
+
+### `format.ts` and `services/report.ts` stay separate
+
+Two rendering modules, split by sink: `format.ts` renders the **run's** log
+output (pure, no services); `report.ts` renders the **PR's** body, summary and
+commit message (a `Context.Service` over `PullRequest`). The
+single-rendering-surface rule exists to stop rendering scattering through step
+bodies — which it does not. Merging them would drag a service dependency into a
+pure module or strand `Report`'s statics.
+
+### `lockfile-snapshot` fail-open — argued, not acted on
+
+There is a real argument that a lockfile snapshot is diagnostic (`git status` is
+the run's actual change signal) and that `LockfileError` should degrade to
+`null` rather than fail the run. It was **deliberately not applied**, because it
+surfaced mid-restructure and a behavior change folded into a behavior-preserving
+move is unreviewable. The argument is recorded in the step's module doc. It may
+well be correct; it needs to land as its own decision.
+
+### `@effected/workspaces` release-age discovery — adopted, with one known gap
+
+`WorkspaceCatalogs.releaseAgeGate()` over `layerWithConfigDependenciesSubprocess`
+replaced the discovery half of `release-age.ts` (304 → 179 lines). Blocked until
+`0.10.0` because the in-process hook loader's computed dynamic `import()` is what
+rspack miscompiles; the subprocess variant passes a static script via argv.
+
+The **fail-open posture stayed ours** as an `Effect.catch` — the kit fails typed,
+which is correct for a library and wrong for this action, since pnpm re-enforces
+the gate at install.
+
+**Known gap (upstream spencerbeggs/effected#292), measured not assumed:** the kit
+frames its child's payload with
+`Run.jsonLine`, which reads the **last non-empty stdout line**. A hook that
+writes *after* the payload (`process.on("exit", …)`) therefore breaks the parse,
+and our wrapper degrades it to no gate. A hook that logs *during* execution — the
+ordinary case, and the one the shipped bug was about — survives. Evidence is a
+controlled pair in `release-age.int.test.ts` differing only in *when* the hook
+logs. The deleted local implementation handled both, because scanning from the
+end for a sentinel beats last-line parsing exactly here.
+
+**How this was nearly mis-filed:** the first reproduction used a hand-built
+fixture and returned the inert gate — apparently damning. A **silent-hook control
+on the same fixture** returned the inert gate too, proving the fixture was simply
+wrong and the reproduction worthless. Only the repo's own fixture helper, where
+the quiet and chatty cases differ in one line, is real evidence. A reproduction
+without a control is an anecdote.
+
+## How to read the claims in these documents
+
+Several confident assertions in this record turned out to be false, and the
+pattern is worth naming because it recurs:
+
+- "The kit deliberately ships no `GithubMarkdown` successor" — asserted across
+  **five design docs plus the module doc it lived in** — `01`, `02`, `05`, `07`,
+  `09`, and `src/utils/github-markdown.ts`; never `CLAUDE.md`. It ships
+  `GitHubMarkdown`; the rename was three characters. *Re-derive with*
+  `git grep -in 'successor|consumer policy' 697bbab -- '*.md' 'src/**'`, then
+  keep only the hits naming `GithubMarkdown` or "report shaping" — the same
+  search also returns four hits for an unrelated and **true** claim, that the kit
+  has no `ActionInputError` successor. Conflating the two is how this count was
+  first miscorrected: a grep for "no successor" alone returns both, and a grep
+  for the exact phrasing returns neither `01` nor `02`, which word it
+  differently.
+- "`Range.parse` is tree-shaken out of the bundled dist" — true once, fixed
+  upstream, and left asserting a hazard that no longer existed.
+- The raw-`node:` enumeration claimed 14 modules, listed 12, and the true count
+  was 13 — the number, the list, and each other all disagreed.
+- **A control proves the wrong half.** Three tests were written for the peer-glob
+  rejection, one of them deliberately a control — and all three asserted only
+  `Exit.isFailure`, which the bug they were meant to catch *also* satisfies (it
+  failed, naming the wrong input). The control established that a valid scoped
+  name is still accepted, which was true and beside the point. **A control makes
+  a test non-vacuous about the property it controls for; it does not make the
+  test non-vacuous generally.** Having written one is not evidence the assertion
+  discriminates.
+- **The mutant has to be aimed at the assertion, not the code.** Three defects
+  shipped in one review round, two of them tests that could not fail, and all
+  three from the same habit: running a mutant against the *code* that changed and
+  not against the *new assertion*. The glob case is the clean illustration — the
+  fix was correct, the test was decoration, and only a mutant aimed at the
+  assertion could have shown it. Applying that rule in the next round caught a
+  gap nobody had listed.
+- **A false justification is worse than none**, because it stops the next reader
+  checking. A test carried the comment "the double would die if `upgrade` were
+  called"; the double was a plain `Layer.succeed` and would have answered
+  happily. The comment is why nobody re-examined an assertion that could not
+  fail.
+- "`-c core.fileMode=false` cannot be scoped" — the ruling that kept
+  `@effected/git` out for a release. **Every individual claim in it was true**,
+  which is what made it hard to see: the kit really has no per-command config
+  seam, and the `GIT_CONFIG_*` env route really is process-global. The argument
+  failed by *enumerating two options and treating the list as exhaustive*.
+  Repository config is a third scope, and it is the ordinary one. A complete
+  survey of what a dependency lacks is not a survey of what is possible — when a
+  decision rests on "the only ways to do X are A and B", the load-bearing part is
+  the word *only*, and it is the part no amount of checking A and B will verify.
+
+Each read as evidence and was an author's account of a property. **Where a
+document here asserts that something is load-bearing, it should say what would
+falsify the claim, or say plainly that it is unverified.** "We believe X, and
+here is what would show us wrong" survives being wrong; a confident claim does
+not. The concrete habit: *before trusting a green signal, ask what specific
+change would have turned it red — if the answer is "nothing", the signal is
+decoration.*
+
+The companion habit, for when a signal is *not* green: **when a tool reports
+something inconsistent with what you believe, the discrepancy is the finding —
+investigate the tool, not just the symptom.** Three instances here. A typecheck
+error on an import a `grep -rl` had said was clean was patched without asking
+why the grep missed the file (it was unreadable — see the NUL note above). A
+background notification described this repo's own outbound mail as *inbound*
+from the counterpart, and the anomaly was explained away rather than read as the
+direction error it was. A `Write` reporting success on a file that was later
+absent was taken as an unreliable write path, when a concurrent actor had moved
+it.
+
+The scope of "tool" is the part that keeps getting drawn too small: a monitor
+notification, a linter's path list and a success message are all tool output,
+and each of the three above was misfiled as noise, configuration or a given.
 
 **Next steps:**
 
@@ -164,8 +415,10 @@ Splitting into focused kit packages made each surface independently versionable
 and let the shapes improve: one `GitHubError` instead of per-service error classes,
 `upsert` instead of exists/delete/create, `Run` free functions instead of a
 `CommandRunner` service, `ActionInput` accessors that actually know the runner's
-`INPUT_*` mangling. The one deliberate non-successor is `GithubMarkdown`: report
-shaping is consumer policy, so those builders live in `src/utils/`.
+`INPUT_*` mangling, and `GithubMarkdown` → `GitHubMarkdown` (capital H), which is
+a rename rather than a removal. This repo spent a release believing the kit
+shipped no markdown writer and hand-rolled one; only `bold` and `rule` genuinely
+have no kit equivalent.
 
 ### Why Three-Phase (Pre/Main/Post)?
 

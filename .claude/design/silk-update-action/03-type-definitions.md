@@ -18,7 +18,7 @@ implementation-plans: []
 
 ## Overview
 
-Types are defined using Effect Schema (v4) in `src/schemas/domain.ts`. Error
+Types are defined using Effect Schema (v4) in `src/schema/domain.ts`. Error
 types use `Schema.TaggedErrorClass` in `src/errors/errors.ts`. Module-level
 types (e.g. `PackageManagerUpgradeOutcome`, `DetectedPm`) are defined in their
 respective service files.
@@ -30,9 +30,9 @@ Effect v4 Schema spellings used throughout: literal unions are
 `.check(...)` (e.g. `Schema.String.check(Schema.isMinLength(1))`) rather than
 `.pipe(Schema.…)`.
 
-## Domain Schemas (src/schemas/domain.ts)
+## Domain Schemas (src/schema/domain.ts)
 
-See `src/schemas/domain.ts` for the full set of `Schema.Struct` definitions
+See `src/schema/domain.ts` for the full set of `Schema.Struct` definitions
 (`BranchResult`, `DependencyChange`, `ChangedPackage`, `ChangesetFile`,
 `PullRequestResult`, `CatalogDelta`, `LockfileChange`). Each schema derives its
 TypeScript type via `typeof Schema.Type`.
@@ -88,6 +88,75 @@ export const CatalogDelta = Schema.Struct({
  action: Schema.Literals(["added", "updated", "removed", "kept"]),
 });
 ```
+
+## The structured `result` output (src/schema/domain.ts)
+
+`RunResultDocument` is the whole run as one machine-readable document, published
+as the `result` action output **alongside — never instead of** — the four scalar
+outputs, which are unchanged.
+
+```typescript
+export const RunResultDocument = Schema.Struct({
+ schemaVersion: Schema.Literal(1),
+ hasChanges: Schema.Boolean,
+ dryRun: Schema.Boolean,
+ packageManager: Schema.NullOr(Schema.Literals(["pnpm", "bun", "npm"])),
+ workspaceRoot: Schema.String,
+ branch: Schema.String,
+ targetBranch: Schema.String,
+ updates: Schema.Array(DependencyUpdateResult),
+ catalogDeltas: Schema.Array(CatalogDelta),
+ lockfileChanges: Schema.Array(LockfileChange),
+ changesets: Schema.Array(ChangesetFile),
+ pullRequest: Schema.NullOr(PullRequestResult),
+});
+```
+
+Three properties are load-bearing, each with what would falsify it:
+
+- **Composed from the schemas the run already produces**, not a parallel
+  reporting shape. Two shapes would drift, and the drift would be invisible
+  because both would still serialize. *Falsified if* a field here stops
+  referencing a domain schema and starts restating one.
+- **The baseline is an empty-run document, not an empty string** — so a consumer
+  runs `fromJSON(...)` unconditionally rather than guarding. Pinned by
+  `__test__/unit/schema/outputs.test.ts`, which asserts it parses **and decodes
+  against this schema**. *Falsified if* `initialOutputs.result` becomes `""`.
+- **`packageManager` is nullable, not a placeholder.** A run that ended before
+  detection has no package manager, and a value that decodes, serializes and is
+  false is worse than an absent one: a consumer branching on it cannot tell it is
+  branching on a lie. `pullRequest: null` already establishes absence-is-null here.
+
+`PullRequestResult.number` is `Schema.Int`, not `Schema.Number`. The ajv strict
+gate forced this and was right — `Schema.Number` renders as an `anyOf` modelling
+`NaN`/`Infinity` as strings, so the `> 0` refinement landed in a typeless
+`allOf` branch. We had been modelling a PR number as possibly `NaN`.
+
+### The generated JSON Schema
+
+`lib/scripts/generate-schema.ts` serializes `RunResultDocument` to
+`docs/schema/run-result.schema.json` via `@effected/schemastore` (a
+**devDependency pinned exactly at `0.2.1`**, not a caret range — it is build
+tooling, not shipped code), using its
+`SchemaPipeline.run` (structural lint + ajv strict gate + content-compare write).
+It lives in `lib/scripts/` rather than `scripts/` because that path is
+cache-invalidating for turbo. Run with `pnpm generate-schema`.
+
+`__test__/unit/generate-schema.test.ts` imports the generator's **own exported
+`targets`** and runs `SchemaPipeline.check` — the identical walk without writing.
+Importing the same constant is the point: a test that rebuilt its own target list
+would pass while the generator wrote something else. It asserts three things, and
+two exist because `wouldWrite: false` alone is not sufficient evidence:
+
+| assertion | what it catches |
+| --- | --- |
+| `targets.length > 0` | `check([])` trivially reports no drift |
+| `wouldWrite === false` | the actual staleness |
+| `blocked === false` | a schema so broken it can *never* generate also reports no pending write |
+
+The pipeline classifies a write as `contract` (consumer-visible break) or
+`annotations` (documentation only) — verified end to end by driving the
+generator, since vitest truncates the message before it renders.
 
 ## Package-Manager Types (src/services/package-manager.ts)
 
@@ -232,26 +301,32 @@ metadata. The local `ActionError` union covers:
   `program.ts`, the branch-ref preflight in `services/branch.ts`, and the
   yarn/no-workspace rejection in `services/package-manager.ts` all raise this
   local error instead.
-- `GitHubApiError` — `{ operation, statusCode?, message }`; exposes
-  `isRateLimited` (429), `isServerError` (>= 500) and `isRetryable`.
-- `GitError` — `{ operation, exitCode, stderr }`; `isRetryable` for `fetch`/`push`.
-- `PnpmError` — `{ command, dependency?, exitCode, stderr }`; `isRetryable` for
-  `install`.
 - `ChangesetError` — `{ reason, packages? }`.
 - `FileSystemError` — `{ operation, path, reason }`.
 - `LockfileError` — `{ operation, reason }`.
-- `DependencyUpdateFailures` — aggregate `{ failures, successful }` for
-  partial-success batch updates; exposes `partialSuccess`.
 
-`isRetryableError(error)` and `getErrorMessage(error)` are exported helpers over
-the union.
+`getErrorMessage(error)` is the one exported helper over the union.
 
-**Which of these are actually raised today:** `InvalidInputError` (program,
-branch, package-manager), `FileSystemError` (every manifest/YAML writer),
-`ChangesetError` and `GitError` (the changesets adapter's error mapping) and
-`LockfileError` (lockfile capture/compare). `GitHubApiError` and `PnpmError` are
-no longer constructed anywhere in `src/` — GitHub failures now arrive as the
-kit's single `GitHubError` (discriminated with `hasKind`) and subprocess failures
-as `@effected/commands`' `CommandFailedError` / `CommandOutputError`. They remain
-in the union with their retry predicates; treat them as vestigial rather than as
-a description of current behavior.
+**Four members were deleted**, along with `isRetryableError` and the
+`GitOperation` schema in `schemas/domain.ts` that only `GitError` consumed:
+`GitHubApiError`, `GitError`, `PnpmError` and `DependencyUpdateFailures`. None
+had a construction site anywhere in `src/` — the only code that ever built one
+was the test suite asserting on its retry predicates, so the tests passed
+precisely because they were the sole callers. `isRetryableError` dispatched only
+on those three tags and had no caller in `src/` either.
+
+`__test__/unit/errors/errors.test.ts` now pins the exported error set, so
+re-adding a class without a construction site fails a test rather than passing
+silently.
+
+**Every member of the union is raised.** `InvalidInputError` (program, branch,
+package-manager), `FileSystemError` (every manifest/YAML writer), `ChangesetError`
+(the changesets adapter's error mapping) and `LockfileError` (lockfile
+capture/compare). Failures the action does not define itself arrive as the kit's
+types: GitHub failures as the single `GitHubError` (discriminated with `hasKind`)
+and subprocess failures as `@effected/commands`' `CommandFailedError` /
+`CommandOutputError`.
+
+Keep it that way: an error channel with no construction site is a claim the type
+system will carry indefinitely and no test can falsify. Demonstrate the failure
+path with a test, or leave it out of the signature.

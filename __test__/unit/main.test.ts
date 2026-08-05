@@ -1,6 +1,6 @@
 import { Effect, Layer } from "effect";
 import { describe, expect, it } from "vitest";
-import { Report, ReportLive } from "../../src/services/report.js";
+import { Report } from "../../src/services/report.js";
 import { cleanVersion, npmUrl } from "../../src/utils/markdown.js";
 import {
 	configUpdate,
@@ -22,7 +22,7 @@ import {
  */
 const withReport = <A>(fn: (report: Effect.Success<typeof Report>) => A): Promise<A> => {
 	const state = emptyPullRequestState();
-	const layer = ReportLive.pipe(Layer.provide(pullRequestTestLayer(state)));
+	const layer = Report.layer.pipe(Layer.provide(pullRequestTestLayer(state)));
 	return Effect.runPromise(
 		Effect.gen(function* () {
 			const report = yield* Report;

@@ -3,8 +3,8 @@ status: current
 module: silk-update-action
 category: architecture
 created: 2026-02-06
-updated: 2026-07-26
-last-synced: 2026-07-26
+updated: 2026-08-05
+last-synced: 2026-08-05
 completeness: 95
 related: []
 dependencies: []
@@ -20,6 +20,8 @@ The `silk-update-action` is a GitHub Action that automates updates to pnpm confi
 The action is built on **Effect v4** and the first-party **`@effected/*` kit** (`github`, `github-actions`, `commands`, `npm`, `workspaces`, `lockfiles`, `runtimes`, `semver`, `yaml`) plus `@savvy-web/silk-effects`. The previous all-in-one `@savvy-web/github-action-effects` library is **deleted** — its surface was split across the kit packages (see @./01-dependencies.md).
 
 The package manager is **detected once per run** (`detectPackageManager`, over `@effected/workspaces`' `PackageManagerDetector`) and every dispatch point — config dependencies, install, package-manager upgrade, workspace formatting — routes on that one value. pnpm, bun and npm are supported; yarn is rejected with a clear error.
+
+The `main` phase is organized as **composition over steps**: `src/program.ts` reads inputs, runs the steps in order, folds their results into outputs and reports, while each step's body lives in its own module under `src/steps/`. `program.ts` issues no I/O primitive and builds no strings of its own — log rendering is `src/format.ts`, the input and output contracts are `src/schema/`. It does still call two helpers that read from disk (`readWorkspaceYaml`, `compareLockfiles`); see @./04-module-entry-points.md for why the stronger "performs no I/O" is false and why a grep for primitives cannot detect that.
 
 **Key Features:**
 
@@ -37,6 +39,7 @@ The package manager is **detected once per run** (`detectPackageManager`, over `
 - Manages a dedicated update branch via `GitBranch.upsert` (create when absent, force-reset to the source ref when present)
 - Creates verified/signed commits via GitHub API (`GitCommit.commitFiles`)
 - Creates detailed PR summaries with dependency changes
+- Publishes the whole run as a structured **`result`** output — one JSON document (`RunResultDocument`) alongside, never instead of, the four scalar outputs. Every declared output has a value on **every** exit path, and `result` is always parseable: a run that did nothing emits an empty-run document rather than an empty string. The JSON Schema is generated from the same Effect Schema into `docs/schema/run-result.schema.json` and guarded against drift by a test
 
 ## Purpose and Goals
 
@@ -63,12 +66,25 @@ Load sections based on what you are working on. Do not load all sections at once
 
 | Work Context | Section | File |
 | --- | --- | --- |
-| Runtime deps, key packages | Dependencies | @./01-dependencies.md |
+| Runtime deps, key packages, build tooling | Dependencies | @./01-dependencies.md |
 | Module structure, data flow, pre/main/post execution | Architecture | @./02-architecture.md |
-| Core interfaces, Effect error types | Type Definitions | @./03-type-definitions.md |
-| pre/main/post + program.ts entry points | Entry Points | @./04-module-entry-points.md |
-| Domain services, layer composition, pure helpers | Services & Utilities | @./05-module-library.md |
+| Core interfaces, Effect error types, the `result` schema | Type Definitions | @./03-type-definitions.md |
+| pre/main/post entry points, input/output contracts, `steps/` | Entry Points | @./04-module-entry-points.md |
+| Domain services, layer composition, `format.ts`, pure helpers | Services & Utilities | @./05-module-library.md |
 | Service architecture, error handling, retry, resource mgmt | Effect Patterns | @./06-effect-patterns.md |
 | Auth, branch mgmt, check runs, PR management | GitHub Integration | @./07-github-integration.md |
 | Unit/integration tests, fixtures, coverage | Testing | @./08-testing.md |
-| Implementation plan, current state, rationale, related docs | Project Status | @./09-project-status.md |
+| Current state, settled decisions, rationale, related docs | Project Status | @./09-project-status.md |
+
+**Where a given piece of code is documented**, since the layout has three layers
+that are easy to confuse:
+
+| code | documented in |
+| --- | --- |
+| `src/program.ts` — composition only | @./04-module-entry-points.md |
+| `src/steps/*.ts` — one module per workflow unit | @./04-module-entry-points.md |
+| `src/schema/{inputs,outputs}.ts` — the I/O contracts | @./04-module-entry-points.md |
+| `src/schema/domain.ts` — domain + `RunResultDocument` | @./03-type-definitions.md |
+| `src/services/*.ts` — capabilities | @./05-module-library.md |
+| `src/format.ts` — the log rendering surface | @./05-module-library.md |
+| `src/utils/*.ts` — pure helpers | @./05-module-library.md |

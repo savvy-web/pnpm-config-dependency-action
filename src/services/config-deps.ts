@@ -16,7 +16,7 @@ import { Yaml } from "@effected/yaml";
 import { Context, Effect, Layer, Option } from "effect";
 
 import { FileSystemError } from "../errors/errors.js";
-import type { DependencyUpdateResult } from "../schemas/domain.js";
+import type { DependencyUpdateResult } from "../schema/domain.js";
 import { parseConfigEntry } from "../utils/deps.js";
 import { configDepUpgradeRange, resolveLatestSatisfying } from "../utils/semver.js";
 import { ReleaseAge } from "./release-age.js";
@@ -31,22 +31,28 @@ export class ConfigDeps extends Context.Service<
 	{
 		readonly updateConfigDeps: (
 			deps: ReadonlyArray<string>,
-			workspaceRoot?: string,
+			workspaceRoot: string,
 		) => Effect.Effect<ReadonlyArray<DependencyUpdateResult>>;
 	}
->()("ConfigDeps") {}
-
-export const ConfigDepsLive = Layer.effect(
-	ConfigDeps,
-	Effect.gen(function* () {
-		const registry = yield* NpmRegistry;
-		const releaseAge = yield* ReleaseAge;
-		return {
-			updateConfigDeps: (deps, workspaceRoot = process.cwd()) =>
-				updateConfigDepsImpl(deps, registry, releaseAge, workspaceRoot),
-		};
-	}),
-);
+>()("ConfigDeps") {
+	/**
+	 * Live layer.
+	 *
+	 * Declared IN the class body, which is load-bearing rather than stylistic: a
+	 * member attached by post-class assignment is tree-shaken out of the bundled
+	 * `dist`, and that fails only in production because vitest runs the source.
+	 */
+	static readonly layer = Layer.effect(
+		this,
+		Effect.gen(function* () {
+			const registry = yield* NpmRegistry;
+			const releaseAge = yield* ReleaseAge;
+			return {
+				updateConfigDeps: (deps, workspaceRoot) => updateConfigDepsImpl(deps, registry, releaseAge, workspaceRoot),
+			};
+		}),
+	);
+}
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Internal Helpers

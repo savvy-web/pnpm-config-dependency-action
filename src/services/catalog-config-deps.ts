@@ -33,7 +33,7 @@ import type { HttpClient } from "effect/unstable/http";
 import type { ChildProcessSpawner } from "effect/unstable/process";
 
 import { FileSystemError } from "../errors/errors.js";
-import type { CatalogDelta, DependencyUpdateResult } from "../schemas/domain.js";
+import type { CatalogDelta, DependencyUpdateResult } from "../schema/domain.js";
 import type { CatalogMap } from "../utils/catalogs.js";
 import { readManifestCatalogs, threeWayMergeCatalogs, writeManifestCatalogs } from "../utils/catalogs.js";
 import { parseSpecifier } from "../utils/deps.js";
@@ -56,30 +56,33 @@ export class CatalogConfigDeps extends Context.Service<
 	{
 		readonly update: (
 			deps: ReadonlyArray<string>,
-			workspaceRoot?: string,
+			workspaceRoot: string,
 		) => Effect.Effect<CatalogConfigDepsResult, FileSystemError>;
 	}
->()("CatalogConfigDeps") {}
-
-export const CatalogConfigDepsLive: Layer.Layer<
-	CatalogConfigDeps,
-	never,
-	NpmRegistry | LockfileReader | HttpClient.HttpClient | ChildProcessSpawner.ChildProcessSpawner
-> = Layer.effect(
-	CatalogConfigDeps,
-	Effect.gen(function* () {
-		// The implementation yields `fetchModuleCatalogs`, which carries its own
-		// requirements (NpmRegistry, HttpClient, ChildProcessSpawner). Capturing the
-		// context here and re-providing it keeps the service method's R = never
-		// without threading each service through by hand.
-		const context = yield* Effect.context<
-			NpmRegistry | LockfileReader | HttpClient.HttpClient | ChildProcessSpawner.ChildProcessSpawner
-		>();
-		return {
-			update: (deps, workspaceRoot = process.cwd()) => updateImpl(deps, workspaceRoot).pipe(Effect.provide(context)),
-		};
-	}),
-);
+>()("CatalogConfigDeps") {
+	/**
+	 * Live layer.
+	 *
+	 * Declared IN the class body, which is load-bearing rather than stylistic: a
+	 * member attached by post-class assignment is tree-shaken out of the bundled
+	 * `dist`, and that fails only in production because vitest runs the source.
+	 */
+	static readonly layer = Layer.effect(
+		this,
+		Effect.gen(function* () {
+			// The implementation yields `fetchModuleCatalogs`, which carries its own
+			// requirements (NpmRegistry, HttpClient, ChildProcessSpawner). Capturing the
+			// context here and re-providing it keeps the service method's R = never
+			// without threading each service through by hand.
+			const context = yield* Effect.context<
+				NpmRegistry | LockfileReader | HttpClient.HttpClient | ChildProcessSpawner.ChildProcessSpawner
+			>();
+			return {
+				update: (deps, workspaceRoot) => updateImpl(deps, workspaceRoot).pipe(Effect.provide(context)),
+			};
+		}),
+	);
+}
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Internal Helpers

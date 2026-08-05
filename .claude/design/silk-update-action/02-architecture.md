@@ -23,12 +23,31 @@ src/
 ├── pre.ts                 # Pre-phase entry — GitHubToken.provision + start time
 ├── main.ts                # Main-phase entry — Action.run(program)
 ├── post.ts                # Post-phase entry — duration report + GitHubToken.dispose
-├── program.ts             # readInputs + program + innerProgram + runCommands + runInstall
+├── program.ts             # PURE COMPOSITION: read inputs → run steps → fold outputs → report
+├── format.ts              # the run's rendering surface (run-context/result blocks, tallies)
 ├── state.ts               # StartTimeState (Schema.Class) + STATE_KEYS cross-phase state
 ├── errors/
-│   └── errors.ts          # Schema.TaggedErrorClass definitions
-├── schemas/
-│   └── domain.ts          # Effect Schema definitions (domain types)
+│   └── errors.ts          # Schema.TaggedErrorClass definitions (4 live classes; see 03)
+├── schema/
+│   ├── domain.ts          # Effect Schema definitions + RunResultDocument (`result` output)
+│   ├── inputs.ts          # INPUT_NAMES tuple + readInputs + InnerProgramInputs
+│   └── outputs.ts         # OUTPUT_NAMES tuple + initialOutputs + emitOutputs
+├── steps/                 # one module per orchestration unit; each declares its own
+│   ├── detect-package-manager.ts   #   result type, an explicit requirement channel, and
+│   ├── configure-status.ts         #   pins core.fileMode=false on the checkout, once
+│   ├── branch.ts                   #   a tagged error ONLY if it can actually fail
+│   ├── lockfile-snapshot.ts        #   (four carry `never`)
+│   ├── upgrade-package-manager.ts
+│   ├── upgrade-runtimes.ts
+│   ├── config-dependencies.ts      #   owns the pnpm/bun/npm dispatch
+│   ├── regular-dependencies.ts
+│   ├── peer-sync.ts
+│   ├── install.ts                  #   runInstall lives here
+│   ├── format-workspace.ts
+│   ├── custom-commands.ts          #   runCommands; returns failures, does NOT conclude
+│   ├── detect-changes.ts           #   Git.status; the last I/O primitive out of program.ts
+│   ├── changesets.ts
+│   └── commit-and-pr.ts            #   one module: the PR must describe a commit that exists
 ├── layers/
 │   └── app.ts             # makeAppLayer(dryRun, { runtimeLive }) - layer composition
 ├── services/
@@ -51,19 +70,18 @@ src/
     ├── catalogs.ts        # CatalogMap, normalize/read/write/threeWayMergeCatalogs
     ├── commit-subject.ts  # buildUpdateSubject (PR title / commit subject)
     ├── deps.ts            # parseConfigEntry, matchesPattern, parseSpecifier
-    ├── github-markdown.ts # GithubMarkdown builders (local; no kit successor)
-    ├── markdown.ts        # npmUrl, cleanVersion
+    ├── markdown.ts        # bold, rule (the 2 builders the kit lacks), npmUrl, cleanVersion
     ├── pnpm.ts            # parsePnpmVersion, formatPnpmVersion, detectIndent, corepackHashFromIntegrity
     ├── runtime.ts         # isStaticVersion, findRuntimeEntry
     └── semver.ts          # resolveLatestSatisfying, configDepUpgradeRange, …
 
 __test__/
 ├── unit/                  # mirrors src/ — every unit suite lives here, not beside the source
-│   ├── program.inputs.test.ts   # INPUT_*-keyed tests for readInputs
-│   ├── program.inner.test.ts    # orchestration/log-stream tests for innerProgram
-│   ├── program.install.test.ts  # runInstall command dispatch
+│   ├── program.inner.test.ts    # THE log-stream contract suite (see @./08-testing.md)
+│   ├── format.test.ts           # shape of the decision record; wording owned by the above
+│   ├── generate-schema.test.ts  # JSON Schema drift guard
 │   ├── doubles.test.ts          # self-tests for the shared doubles
-│   ├── services/…  utils/…  schemas/…  errors/…
+│   ├── schema/…  steps/…  services/…  utils/…  errors/…
 ├── integration/           # real-IO suites (workspaces, lockfile compare, changesets, runtimes)
 └── utils/                 # RESERVED helper modules — excluded from collection (see 08-testing)
     ├── action-doubles.ts  # in-memory ActionState / GitHubApp / ActionOutputs doubles
@@ -76,7 +94,9 @@ __test__/
   provisions the GitHub App installation token; `main.ts` is a thin wrapper
   that calls `Action.run(program)`; `post.ts` reports total duration and revokes
   the token. The testable Effect program lives in `program.ts` so tests can
-  import it without triggering module-level execution. The build
+  import it without triggering module-level execution — and every entry point
+  carries the same `process.env.GITHUB_ACTIONS` guard, so importing one never
+  runs it. The build
   (`@savvy-web/github-action-builder`) takes the three entry points from
   `action.config.ts`.
 - **Effect v4 / `@effected` kit:** the action runs on Effect v4 and the
@@ -122,7 +142,8 @@ graph TD
     B --> D[makeAppLayer dryRun runtimeLive: Build All Layers, GitHubToken.clientLayer]
     D --> E[CheckRun.withCheckRun]
     E --> PM[detectPackageManager: root + pm, yarn rejected]
-    PM --> EV[BranchManager.validateBranches source/target: fail fast if missing]
+    PM --> CFG[configureStatusStep: git config core.fileMode=false at the root]
+    CFG --> EV[BranchManager.validateBranches source/target: fail fast if missing]
     EV --> F[BranchManager.manage: GitBranch.upsert from source-branch]
     F --> J[captureLockfileState Before]
     J --> J2{upgrade-package-manager?}
@@ -149,7 +170,7 @@ graph TD
     P --> R{Commands Succeed?}
     R -->|No| S[conclude failure + fail]
     R -->|Yes| Q
-    Q --> T[compareLockfiles + git status --porcelain]
+    Q --> T[compareLockfiles + Git.status]
     T --> T2{Changes Detected?}
     T2 -->|No| U[conclude neutral + exit early]
     T2 -->|Yes| V{changesets input AND .changeset/ dir?}
@@ -177,7 +198,14 @@ Node process. `pre.ts` provisions the installation token (`GitHubToken.provision
 with a fail-fast scope check) and records the start time to `ActionState`;
 `post.ts` reports total duration and revokes the token (`GitHubToken.dispose`,
 guarded so it never fails the workflow). The dependency-update workflow below
-runs entirely in the `main` phase, implemented in `src/program.ts`.
+runs entirely in the `main` phase. `src/program.ts` **composes** it — it reads
+inputs, runs the steps in order, folds their results into outputs and reports —
+while each step's body lives in its own module under `src/steps/`. `program.ts`
+issues no I/O primitive and builds no strings of its own; code doing either is
+the signal it belongs in `steps/` or `format.ts`. The stronger claim — that it
+performs no I/O at all — is **false**: it still calls `readWorkspaceYaml` and
+`compareLockfiles`, which read from disk. See @./04-module-entry-points.md for
+why a grep for primitives cannot detect that.
 
 **Steps are named, not numbered.** Once the package-manager, config-dependency
 and install steps each dispatch on the detected package manager there is no
@@ -243,11 +271,28 @@ const appLayer = makeAppLayer(dryRun, { runtimeLive });
   `LockfileReader.layer()` (all root-bound at build).
 - `Changesets.DepsRegenDefault` from `@savvy-web/silk-effects` over the platform
   layer.
-- Domain layers: `BranchManagerLive`, `PackageManagerUpgradeLive`,
-  `ConfigDepsLive`, `CatalogConfigDepsLive`, `RegularDepsLive`, `ChangesetsLive`,
-  `ReportLive`, `RuntimeUpgradeLive`.
-- `ReleaseAgeLive()` over `NodeServices.layer` + `NpmRegistry`, provided to
-  `ConfigDepsLive` and `RegularDepsLive`.
+- Domain layers, all on the kit's `static layer` convention: `BranchManager.layer`,
+  `PackageManagerUpgrade.layer`, `ConfigDeps.layer`, `CatalogConfigDeps.layer`,
+  `RegularDeps.layer`, `Changesets.layer`, `Report.layer`, `RuntimeUpgrade.layer`.
+  **No `*Live` constant survives** — the migration is complete rather than
+  partial, which matters because two-of-eleven reads as an abandoned convention
+  and invites the same review comment on every later pass.
+  - Every one is declared **in the class body** (`static readonly layer =
+    Layer.effect(this, …)`). That placement is load-bearing, not stylistic: a
+    member attached by post-class assignment is tree-shaken out of the bundled
+    `dist`, and it fails only in production because vitest runs the source.
+  - `WorkspaceYamlLive` was **deleted rather than renamed**: nothing in `src/`
+    wired it, so its only consumer was its own test suite. See
+    @./05-module-library.md.
+  - `PreLive` / `PostLive` in the entry points are untouched. They are aliases
+    for `GitHubApp.layer`, not service layers, so the convention does not apply.
+- `ReleaseAge.layer` over `WorkspaceCatalogs` + `NpmRegistry`, provided to
+  `ConfigDeps.layer` and `RegularDeps.layer`; `ReleaseAge.layerNoop` is the inert
+  variant unit tests and non-pnpm paths wire.
+- `Git.layer` (from `@effected/git`) over the platform layer — read-mostly here:
+  `status` for the change verdict and the commit file list, `configSet` once for
+  the `core.fileMode` pin. Everything that mutates history still goes through the
+  GitHub API so the commit verifies.
 - Runtime resolver layers: `*Resolver.layerOffline` (default) or `*Resolver.layer`
   (live), selected by `runtimeLive`.
 
@@ -268,6 +313,17 @@ const appLayer = makeAppLayer(dryRun, { runtimeLive });
   source of truth.
 - Every subsequent step reads and writes at `detected.root`, not `process.cwd()`:
   the action can legitimately be invoked from a subdirectory of the workspace.
+
+### Step 4b: Pin `core.fileMode` on the Checkout
+
+- `configureStatusStep(detected.root)` writes `core.fileMode=false` into the
+  checkout's **local** git config, once, before anything reads status.
+- It runs here — after detection, before the branch is touched — because both
+  status readers (the change verdict and the commit file list) depend on it and
+  neither carries a per-command flag.
+- Failure propagates. A write that did not take leaves every later status read
+  reporting exec-bit flips as changes, and the run's whole change verdict is
+  wrong in a way nothing downstream can detect.
 
 ### Step 5: Branch Management
 
@@ -357,7 +413,10 @@ const appLayer = makeAppLayer(dryRun, { runtimeLive });
 
 ### Step 11: Sync Peer Dependencies
 
-- `syncPeers(config, regularUpdates, root)` — `peer-lock` syncs the peer range on
+- `syncPeers(config, regularUpdates)` — takes **no** workspace root:
+  `WorkspaceDiscovery` binds its root when the layer is built, so a root
+  parameter could only be ignored, and it was — silently, which is the problem.
+  `peer-lock` syncs the peer range on
   every version bump, `peer-minor` only on minor+ bumps (flooring patch to `.0`).
   Produces `peerDependency`-typed results that flow into reporting only; the
   changeset step derives its own content from git.
@@ -386,10 +445,23 @@ const appLayer = makeAppLayer(dryRun, { runtimeLive });
 
 ### Step 14: Run Custom Commands (if specified)
 
-- `runCommands` executes each `run` entry sequentially via `Run.collect` on
-  `sh -c …`. A non-zero exit is a **result**, not an error channel failure, so the
-  failure branch is driven by the exit code; the catch covers only a genuine spawn
+The `allUpdates` aggregation happens **above** this step, not below it. Every
+source is resolved by now, and this step's failure exit has to describe them: a
+run that bumped five dependencies and then failed `pnpm test` did that work, and
+it is still in the working tree. `updates-count` reports the same number the
+`result` document does, so the scalar and the document cannot disagree about one
+run — `has-changes` stays `false`, because that flag means "a commit was made and
+a PR opened", which did not happen.
+
+- `runCommands(commands, root)` executes each `run` entry sequentially via
+  `Run.collect` on `sh -c …`, **anchored at the detected workspace root**. A
+  non-zero exit is a **result**, not an error channel failure, so the failure
+  branch is driven by the exit code; the catch covers only a genuine spawn
   failure. All commands are attempted, errors collected.
+- The cwd is load-bearing and was missing: a command inheriting the process
+  directory lints, tests or builds a different tree than the run just edited when
+  the action is invoked from a subdirectory — and passes, which is a green signal
+  about the wrong tree rather than a failure.
 - If any command failed, the check run is concluded `failure`, outputs are set to
   no-changes, and the program fails.
 
@@ -398,11 +470,27 @@ const appLayer = makeAppLayer(dryRun, { runtimeLive });
 - `compareLockfiles(before, after, root)` produces `LockfileChange[]` (one record
   per catalog change × consuming importer × dep section, each carrying the precise
   type).
-- `git -c core.fileMode=false status --porcelain` supplies the file-level signal.
-  `core.fileMode=false` is deliberate: executable-bit-only flips (e.g. husky
-  chmod-ing hooks during a `run` command) do not survive the content-based GitHub
-  API commit, so counting them would produce an empty commit and a spurious PR.
-  `BranchManager.commitChanges` queries status the same way.
+- `Git.status(root)` from `@effected/git` supplies the file-level signal, as a
+  list of typed `StatusEntry` values rather than porcelain text this repo parses.
+  **`detectChangesStep` returns those entries unnarrowed**, even though only the
+  count is read today. Flattening them to `{ path }` at that boundary would keep
+  the rename/`AD`/`RD` fix while discarding the property that makes those
+  defects unrepresentable — a thin consumer is a fact about the consumer, not a
+  reason for the step to narrow its own contract.
+  `BranchManager.commitChanges` reads the same way, which is what keeps the run's
+  verdict and the commit's contents from disagreeing.
+- `core.fileMode=false` is **not** a per-command flag any more. It is written
+  once into the checkout's own git config by `configureStatusStep`, immediately
+  after detection and before any status read. The reason for the setting is
+  unchanged — executable-bit-only flips (husky chmod-ing hooks during a `run`
+  command) do not survive the content-based GitHub API commit at mode 100644, so
+  counting them produces an empty commit and a spurious PR. What changed is that
+  there is now one place to get it right instead of two call sites that could
+  drift, and no way for a third reader to be added without it.
+- The cost, stated because it is real: the setting applies to every git command
+  in that checkout for the rest of the job, including silk's DepsRegen. Benign —
+  a mode flip is not a dependency change and cannot survive the API commit
+  regardless — and scoped to the workspace, not the runner.
 - `allUpdates` is the concatenation of the package-manager, runtime, config,
   regular and peer updates. No changes → conclude `neutral` and exit early.
 

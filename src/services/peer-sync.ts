@@ -13,7 +13,7 @@ import { WorkspaceDiscovery } from "@effected/workspaces";
 import { Effect } from "effect";
 
 import { FileSystemError } from "../errors/errors.js";
-import type { DependencyUpdateResult } from "../schemas/domain.js";
+import type { DependencyUpdateResult } from "../schema/domain.js";
 import { parseSpecifier } from "../utils/deps.js";
 import { detectIndent } from "../utils/pnpm.js";
 
@@ -67,7 +67,6 @@ export const computePeerRange = (params: {
 export const syncPeers = (
 	config: PeerSyncConfig,
 	devUpdates: ReadonlyArray<DependencyUpdateResult>,
-	_workspaceRoot: string = process.cwd(),
 ): Effect.Effect<ReadonlyArray<DependencyUpdateResult>, FileSystemError, WorkspaceDiscovery> =>
 	Effect.gen(function* () {
 		if (config.lock.length === 0 && config.minor.length === 0) return [];

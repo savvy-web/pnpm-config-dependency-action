@@ -3,8 +3,8 @@ status: current
 module: silk-update-action
 category: architecture
 created: 2026-02-20
-updated: 2026-07-26
-last-synced: 2026-07-26
+updated: 2026-08-05
+last-synced: 2026-08-05
 completeness: 95
 related:
   - ./_index.md
@@ -16,6 +16,14 @@ implementation-plans: []
 
 [Back to index](./_index.md)
 
+**Scope note.** This document covers the *reusable* layer: domain services
+(`src/services/`), layer composition (`src/layers/app.ts`), the rendering surface
+(`src/format.ts`) and the pure helpers (`src/utils/`). The **orchestration**
+layer — `src/steps/`, one module per workflow unit — is documented in
+@./04-module-entry-points.md alongside the composition that calls it. The split
+follows the code: a service is a capability, a step is a decision about when to
+use one.
+
 ## Domain Services (src/services/)
 
 All domain logic is wrapped as Effect services with `Context.Service` + `Layer`,
@@ -26,6 +34,31 @@ service form is
 needs typing without being yielded, the kit exposes a companion `*Shape`
 interface (e.g. `NpmRegistryShape`, `WorkspaceDiscoveryShape`, `GitBranchShape`,
 `PullRequestShape`).
+
+**The workspace root is a required parameter everywhere it appears — every
+service method AND every standalone helper.** There is no `process.cwd()` default
+left anywhere in `src/`.
+
+This is the branch's most-repeated bug closed structurally rather than one site
+at a time. Four separate instances were found — `commitChanges`,
+`ensureBaseHistory`, `steps/detect-changes.ts` and `steps/custom-commands.ts` —
+in four separate rounds, three of them by reviewers rather than by us. **Every
+one entered through a parameter that quietly defaulted to `process.cwd()`.** The
+action can legitimately be invoked from a subdirectory, so the default does not
+fail: it reads a different tree, succeeds, and reports a confident wrong answer.
+
+While the defaults existed the same bug could reappear at any new call site with
+nothing to say so. Required parameters turn every future instance into a compile
+error, which is the whole point — it converts a class of silent wrong-directory
+reads into something the type checker refuses.
+
+Worth recording what the change actually cost: **`src/` needed no edits at all.**
+Every production caller already passed a root explicitly, so the defaults were
+pure hazard providing nothing. Three test call sites were relying on them, each
+silently reading the runner's cwd — and two of those were `chdir`-ing the test
+process into a temp directory *specifically to reach the default*, which is
+global mutable state in a test suite. They now pass the root, which is both what
+production does and the stronger assertion.
 
 ### Workspace discovery (via @effected/workspaces)
 
@@ -66,20 +99,36 @@ export const detectPackageManager = (
 ### src/services/branch.ts - BranchManager
 
 Branch management and commit operations over `GitBranch` / `GitCommit` (from
-`@effected/github`) for the API half, and `@effected/commands`' `Run` for the
-local git half.
+`@effected/github`) for the API half, `@effected/git`'s `Git.status` for reading
+the working tree, and `@effected/commands`' `Run` for the remaining local git
+commands.
+
+**Two subprocess mechanisms for git live in this one module, deliberately.** That
+is the outcome the earlier "decline `@effected/git`" ruling was trying to avoid,
+and it was accepted anyway — see the settled-decisions note in
+@./09-project-status.md for why deleting a parser that had shipped three silent
+wrong answers outweighs mechanism uniformity.
 
 ```typescript
 export class BranchManager extends Context.Service<BranchManager, {
  readonly manage: (branchName: string, defaultBranch?: string) =>
   Effect.Effect<BranchResult, GitHubError | GitRunError, Repo>;
- readonly commitChanges: (message: string, branchName: string) =>
-  Effect.Effect<void, GitHubError | GitRunError, Repo>;
+ readonly commitChanges: (message: string, branchName: string, workspaceRoot: string) =>
+  Effect.Effect<void, GitHubError | GitRunError | GitServiceError, Repo>;
  readonly validateBranches: (source: string, target: string) =>
   Effect.Effect<void, GitHubError | InvalidInputError, Repo>;
- readonly ensureBaseHistory: (base: string) => Effect.Effect<void, GitRunError>;
-}>()("BranchManager") {}
+ readonly ensureBaseHistory: (base: string, workspaceRoot: string) =>
+  Effect.Effect<void, GitRunError>;
+}>()("BranchManager") {
+ // `static readonly layer`, declared IN the class body — see the layer note below.
+}
 ```
+
+**Both git-touching methods take the workspace root explicitly.** `commitChanges`
+has for a while; `ensureBaseHistory` gained it in `6d101bc`. Neither defaults to
+`process.cwd()`, because the action can be invoked from a subdirectory of the
+workspace and git resolves everything — `--porcelain` paths, `merge-base`, the
+recovery fetches — relative to the directory it actually ran in.
 
 **`Repo` stays in `R`, deliberately.** The layer resolves the `ChildProcessSpawner`
 once (ambient infrastructure) but does **not** resolve `Repo` — keeping it in each
@@ -110,17 +159,52 @@ just-committed working-copy state.
 - `core.fileMode=false` is load-bearing: executable-bit-only flips (e.g. husky
   chmod-ing hooks during a `run` command) do not survive a content-based API
   commit at mode 100644, so counting them would create an empty commit and a
-  spurious PR. `program.ts`'s change detection queries status the same way.
-- Status output is read through a local `gitRaw` helper using `Run.collect`, not
-  `Run.text`: **`Run.text` trims**, and `--porcelain`'s two-character status field
-  is column-aligned, so trimming a leading space shifts every `substring` index.
+  spurious PR. **It is no longer a per-command flag**: `steps/configure-status.ts`
+  writes it into the checkout's own git config once per run, before any status
+  read. Two readers depend on it — this one and `steps/detect-changes.ts` — and
+  one config write is a thing a reviewer can check, whereas two call sites
+  carrying the same flag is a thing that drifts.
+- **The status read goes through `Git.status(cwd)`**, which returns typed
+  `StatusEntry` values rather than porcelain text. The local `gitRawIn` helper and
+  the `Run.collect`-not-`Run.text` reasoning it existed for are **gone**: they
+  were about reading column-aligned text safely, and this module no longer reads
+  text. (`Run.text` still trims; that is now a fact about `@effected/commands`,
+  not a constraint on this module.)
+- **`parseStatusLine` is deleted.** The format is `XY PATH`, or `XY ORIG -> PATH`
+  for a rename or copy, and **both** status columns are significant — which the
+  original parser got wrong twice, reading `substring(3)` as the whole path and
+  testing `substring(0, 2).trim() === "D"`. That produced two silent data-loss
+  bugs: a rename yielded the unreadable path `"old.ts -> new.ts"`, so the file
+  never reached the commit at all; and a deletion whose columns disagreed (`AD`,
+  `RD`) was treated as a modification and dropped the same way.
+  - `StatusEntry` models `x`, `y` and `origPath` separately, so **both defects
+    become unrepresentable** rather than merely fixed. The mapping onto commit
+    members stays here and is still tested: a rename emits a `FileDeletion` for
+    the origin plus a `FileContent` at the destination — the commit is an
+    explicit change set, not a diff, so a tree that only adds the new path leaves
+    the old one behind — while a **copy** carries an origin that must *not* be
+    deleted, which is why the two are distinguished rather than both treated as
+    "has an origPath".
+  - Quoting and git's octal `\NNN` form for non-ASCII bytes are the kit's
+    problem now, not this repo's; `Git.status` reads `--porcelain -z`, which
+    sidesteps the quoting layer entirely.
 
-**Base-history preflight.** `ensureBaseHistory(base)` probes
+**Base-history preflight.** `ensureBaseHistory(base, workspaceRoot)` probes
 `git merge-base <base> HEAD` (via `Run.succeeds`); if it resolves — the
 `fetch-depth: 0` case — it is a no-op. Otherwise it best-effort fetches the base
 ref, unshallows a shallow clone, materializes a local ref, and warns non-fatally
 if the merge-base is still missing. Required because DepsRegen diffs
 `merge-base(base) → worktree`.
+
+Every command in it runs at `workspaceRoot` via a `gitRunIn(cwd, …)` helper.
+Until `6d101bc` they ran at `process.cwd()`, which was **a silent wrong answer
+rather than an error**: invoked from a subdirectory, the merge-base probe and
+its recovery fetches resolved against the wrong directory, the preflight
+concluded there was nothing to do, and the changeset step then diffed against a
+base it could not see. Nothing failed — there were simply no changesets, which
+looks identical to "no versionable changes." That is the same defect class as
+the `commitChanges` cwd bug fixed earlier in the branch, and it had been
+recorded here as a deferred fix before it was applied.
 
 ### src/services/workspace-yaml.ts - WorkspaceYaml
 
@@ -132,11 +216,20 @@ alphabetically but keep `packages` first, and stringify with `indent: 2`,
 `lineWidth: 0`, `singleQuote: false`.
 
 **Exported helpers:** `formatWorkspaceYaml(workspaceRoot?)`,
-`readWorkspaceYaml(workspaceRoot?)`, `sortContent(content)`, `STRINGIFY_OPTIONS`,
-plus a `WorkspaceYaml` tag/`WorkspaceYamlLive` that the program does not wire (the
-standalone helpers are what `program.ts`, `ConfigDeps` and `ReleaseAge` use).
-Parsing/stringifying goes through `@effected/yaml`, whose `Yaml.parse` /
-`Yaml.stringify` return Effects, mapped into `FileSystemError`.
+`readWorkspaceYaml(workspaceRoot?)`, `sortContent(content)` and
+`STRINGIFY_OPTIONS`. Parsing/stringifying goes through `@effected/yaml`, whose
+`Yaml.parse` / `Yaml.stringify` return Effects, mapped into `FileSystemError`.
+
+**There is no `WorkspaceYaml` tag or layer — both were deleted**, and the reason
+generalizes. They were a pure pass-through to the same `*Impl` functions the
+standalone helpers call, and **nothing in `src/` ever wired them**: the only code
+that resolved the tag was this module's own test suite, so those tests passed
+precisely because they were the sole callers. That is the same argument that
+removed four unconstructed error classes from `errors/errors.ts`, and renaming
+the layer to the kit's `static layer` convention would only have produced tidier
+dead code. The suite now drives the standalone helpers, which is what
+`ConfigDeps`, `ReleaseAge` and the config-dependency step actually call — so it
+exercises the production path rather than a parallel one.
 
 ### src/services/package-manager-upgrade.ts - PackageManagerUpgrade
 
@@ -149,7 +242,7 @@ construction).
 
 ```typescript
 export class PackageManagerUpgrade extends Context.Service<PackageManagerUpgrade, {
- readonly upgrade: (mode: string, pm: SupportedPm, workspaceRoot?: string) =>
+ readonly upgrade: (mode: string, pm: SupportedPm, workspaceRoot: string) =>
   Effect.Effect<PackageManagerUpgradeOutcome, FileSystemError>;
 }>()("PackageManagerUpgrade") {}
 ```
@@ -197,19 +290,57 @@ export class ReleaseAge extends Context.Service<ReleaseAge, {
 }>()("ReleaseAge") {}
 ```
 
-**Gate discovery** (two sources, combined strictest-wins via
-`ReleaseAgeGate.combine`, assembled once and `Effect.cached` for the layer
-lifetime):
+**Gate discovery belongs to `@effected/workspaces`.**
+`WorkspaceCatalogs.releaseAgeGate()` combines the inline `pnpm-workspace.yaml`
+keys with the replayed config-dependency `pnpmfile` hooks, strictest-wins, off
+the same single read it uses for the catalog set. This module no longer reads
+the workspace at all — `readInlineReleaseAge`, `replayHookReleaseAge`,
+`REPLAY_SCRIPT`, `REPLAY_SENTINEL` and `extractReplayPayload` are **deleted**
+(304 → 176 lines).
 
-- `readInlineReleaseAge(workspaceRoot?)` — the keys declared inline in
-  `pnpm-workspace.yaml`.
-- `replayHookReleaseAge(workspaceRoot?)` — replays the workspace's
-  config-dependency pnpmfile `updateConfig` hooks in a **node subprocess** via
-  `@effected/commands`' `Run` (script passed via argv; `pnpmfile.mjs` first then
-  `.cjs`, mirroring pnpm 11's loader order). A subprocess because `pnpm config get`
-  never sees hook-injected values, and the rspack bundle cannot host an in-process
-  computed dynamic import (see @./01-dependencies.md). Best-effort: any failure
-  degrades to no contribution with a warning.
+The layer must be **`layerWithConfigDependenciesSubprocess`**, not
+`layerWithConfigDependencies`: the in-process variant loads each pnpmfile with a
+computed dynamic `import()`, which rspack compiles into a context module and
+breaks in the bundled `dist` (see @./01-dependencies.md). The subprocess variant
+passes a static script via argv, so nothing computed enters the bundle graph —
+which is precisely what blocked this adoption until `@effected/workspaces@0.10.0`.
+
+**What stays local is the fail-open posture, and that is now the whole point of
+the wrapper.** The kit fails **typed** (`CatalogAssemblyFailure` =
+`CatalogAssemblyError | WorkspaceRootNotFoundError`), which is the right contract
+for a library. This action instead degrades to "no gate" with a warning, because
+pnpm re-enforces the gate at install, so missing data lands on exactly the
+pre-gate behavior — whereas aborting a dependency-update run over one broken
+plugin would be strictly worse. That `Effect.catch` lives at the single call site
+in `ReleaseAge.layer`.
+
+`release-age.int.test.ts` pins **both halves** of that split: that the kit's own
+surface fails typed on a throwing pnpmfile, *and* that `ReleaseAge.layer` turns
+that into the inert gate. Asserting only the outcome would still pass if someone
+deleted the wrapper.
+
+### Two bounds the subprocess layer imposes, and one known gap
+
+`layerSubprocess` documents two bounds `layerLive` cannot have: the replay gets
+**30 seconds** (a pnpmfile that loops fails typed rather than hanging the
+memoized assemble pass — a subprocess is killable, an in-process synchronous
+hook call is not), and the child's stdout is captured under `Run.jsonLine`'s
+**16 MiB** ceiling, above which it fails typed as `tooLarge`.
+
+**Known gap, verified here rather than assumed** (upstream
+[spencerbeggs/effected#292](https://github.com/spencerbeggs/effected/issues/292))**:**
+`Run.jsonLine` reads the
+**last non-empty line** of stdout, so a hook that writes *after* the payload —
+`process.on("exit", () => console.log(…))`, i.e. cleanup logging — makes the
+parse fail, and our fail-open wrapper then degrades it to no gate. A hook that
+logs *during* execution, which is the ordinary case and the one the shipped #9
+bug was about, survives fine.
+
+The evidence is a controlled pair in `release-age.int.test.ts`: the same fixture
+helper, two hooks differing only in *when* they log. The deleted local
+implementation handled both, because scanning from the end for a sentinel beats
+last-line parsing exactly here. Reported upstream; the trade was accepted because
+the ordinary case works and the alternative was keeping ~125 lines for one edge.
 
 **Publish times** come from `NpmRegistry.publishTimes(pkg)` — the kit absorbed
 this repo's former hand-rolled `npm view <pkg> time --json` shell-out —
@@ -222,12 +353,14 @@ minimatch), or publish times are unavailable. Otherwise the upstream pure
 **fails open**: the worst case of missing data is exactly the pre-gate behavior,
 and pnpm still enforces the gate at install.
 
-**Layers:** `ReleaseAgeLive(workspaceRoot?)` is a parameterized factory (root
-bound at build) requiring `ChildProcessSpawner` **and** `NpmRegistry`; both are
-resolved once inside the layer so every member's `R` is `never` — which is what
-keeps `filterVersions` callable from `ConfigDeps` / `RegularDeps` without
-threading requirements. `ReleaseAgeNoop` is the inert layer (zero gate, identity
-filtering) for unit tests and non-pnpm paths.
+**Layers:** `ReleaseAge.layer` — a `static readonly layer` on the class, not a
+`ReleaseAgeLive()` factory, and **no longer parameterized by a workspace root**:
+the root is bound when `WorkspaceCatalogs`' layer is built, so a root parameter
+here could only be ignored. It requires `WorkspaceCatalogs` **and**
+`NpmRegistry`; both are resolved once inside the layer so every member's `R` is
+`never`, which is what keeps `filterVersions` callable from `ConfigDeps` /
+`RegularDeps` without threading requirements. `ReleaseAge.layerNoop` is the inert
+layer (zero gate, identity filtering) for unit tests and non-pnpm paths.
 
 ### src/services/config-deps.ts - ConfigDeps (pnpm)
 
@@ -237,7 +370,7 @@ under `catalogMode: strict`). Depends on `NpmRegistry` and `ReleaseAge`.
 
 ```typescript
 export class ConfigDeps extends Context.Service<ConfigDeps, {
- readonly updateConfigDeps: (deps: ReadonlyArray<string>, workspaceRoot?: string) =>
+ readonly updateConfigDeps: (deps: ReadonlyArray<string>, workspaceRoot: string) =>
   Effect.Effect<ReadonlyArray<DependencyUpdateResult>>;
 }>()("ConfigDeps") {}
 ```
@@ -266,7 +399,7 @@ is where bun reads them from. A nested `workspaces.catalog(s)` copy is still rea
 
 ```typescript
 export class CatalogConfigDeps extends Context.Service<CatalogConfigDeps, {
- readonly update: (deps: ReadonlyArray<string>, workspaceRoot?: string) =>
+ readonly update: (deps: ReadonlyArray<string>, workspaceRoot: string) =>
   Effect.Effect<CatalogConfigDepsResult, FileSystemError>;
 }>()("CatalogConfigDeps") {}
 ```
@@ -326,7 +459,7 @@ which promotes deps to catalogs under `catalogMode: strict`). Depends on
 export class RegularDeps extends Context.Service<RegularDeps, {
  readonly updateRegularDeps: (
   patterns: ReadonlyArray<string>,
-  workspaceRoot?: string,
+  workspaceRoot: string,
   exclude?: ReadonlySet<string>,
  ) => Effect.Effect<ReadonlyArray<DependencyUpdateResult>>;
 }>()("RegularDeps") {}
@@ -367,8 +500,13 @@ by `program.ts`. Yields `WorkspaceDiscovery` to resolve package paths and uses t
 standalone `parseValidSemVer` from `@effected/semver`.
 
 - `computePeerRange(params)` — compute the new range for a strategy.
-- `syncPeers(config, devUpdates, workspaceRoot?)` —
+- `syncPeers(config, devUpdates)` —
   `Effect<readonly DependencyUpdateResult[], FileSystemError, WorkspaceDiscovery>`.
+  **No workspace root**, at either this level or `peerSyncStep`'s:
+  `WorkspaceDiscovery` binds its root when the layer is built, so the parameter
+  both used to take could only be ignored — and was, silently. A caller passing
+  the wrong root saw no error and no effect, while a reader would reasonably
+  conclude the root was honoured.
 - `lock`: sync on every version bump. `minor`: sync only on minor+ bumps, flooring
   patch to `.0`.
 
@@ -380,9 +518,9 @@ normalizes `pnpm-lock.yaml`, `bun.lock` and `package-lock.json` into one model v
 
 ```typescript
 export class Lockfile extends Context.Service<Lockfile, {
- readonly capture: (pm: SupportedPm, workspaceRoot?: string) =>
+ readonly capture: (pm: SupportedPm, workspaceRoot: string) =>
   Effect.Effect<LockfileModel | null, LockfileError>;
- readonly compare: (before, after, workspaceRoot?) =>
+ readonly compare: (before, after, workspaceRoot) =>
   Effect.Effect<ReadonlyArray<LockfileChange>, LockfileError, WorkspaceDiscovery>;
 }>()("Lockfile") {}
 ```
@@ -405,7 +543,7 @@ failures are caught and skipped per-runtime, never fatal.
 
 ```typescript
 export class RuntimeUpgrade extends Context.Service<RuntimeUpgrade, {
- readonly upgrade: (config: RuntimeUpgradeConfig, workspaceRoot?: string) =>
+ readonly upgrade: (config: RuntimeUpgradeConfig, workspaceRoot: string) =>
   Effect.Effect<readonly RuntimeUpgradeResult[], FileSystemError>;
 }>()("RuntimeUpgrade") {}
 ```
@@ -472,7 +610,8 @@ exists (`hasChangesets(workspaceRoot?)`, also exported for the skip messaging).
 ### src/services/report.ts - Report
 
 PR management and report generation over the kit's `PullRequest` service, using
-the local `GithubMarkdown` builders.
+the kit's `GitHubMarkdown` writer (plus `bold` / `rule` from `utils/markdown.ts`,
+the only two builders it does not ship).
 
 ```typescript
 export class Report extends Context.Service<Report, {
@@ -500,8 +639,17 @@ export class Report extends Context.Service<Report, {
 `makeAppLayer(dryRun, { runtimeLive })` wires every kit and domain layer. The
 whole function body is `/* v8 ignore */`-d as pure wiring, exercised indirectly.
 
+**Every domain layer is a `static layer` on its service class** — `Report.layer`,
+`Changesets.layer`, `ConfigDeps.layer` and the rest — matching the kit's own
+convention. No `*Live` constant survives. Each is declared *in* the class body,
+which is load-bearing: a member attached by post-class assignment is tree-shaken
+out of the bundled `dist`, and that fails only in production because vitest runs
+the source. The sketch below is illustrative, not a transcript — read
+`src/layers/app.ts` for the current wiring.
+
 ```typescript
 import { NodeServices } from "@effect/platform-node";
+import { Git } from "@effected/git";
 import { CheckRun, GitBranch, GitCommit, PullRequest, Repo } from "@effected/github";
 import { DryRun, GitHubToken } from "@effected/github-actions";
 import { NpmRegistry } from "@effected/npm";
@@ -523,7 +671,8 @@ export const makeAppLayer = (dryRun: boolean, options: { runtimeLive: boolean } 
 
  // GraphQL is a member of GitHubClient in the kit — no separate service.
  const npmRegistry = NpmRegistry.layer.pipe(Layer.provide(FetchHttpClient.layer));
- const releaseAge = ReleaseAgeLive().pipe(Layer.provide(Layer.merge(NodeServices.layer, npmRegistry)));
+ // ReleaseAge.layer, not a factory: the root is bound by WorkspaceCatalogs.
+ const releaseAge = ReleaseAge.layer.pipe(Layer.provide(Layer.merge(workspaceCatalogs, npmRegistry)));
  const gitBranch = GitBranch.layer.pipe(Layer.provide(githubClient));
  const gitCommit = GitCommit.layer.pipe(Layer.provide(githubClient));
  const prLayer = PullRequest.layer.pipe(Layer.provide(githubClient));
@@ -546,22 +695,25 @@ export const makeAppLayer = (dryRun: boolean, options: { runtimeLive: boolean } 
   CheckRun.layer.pipe(Layer.provide(githubClient)),
   prLayer, npmRegistry,
   NodeServices.layer,
+  // Read-mostly: status for the change verdict and commit file list, configSet
+  // once for the core.fileMode pin. History still moves through the API.
+  Git.layer,
   DryRun.layerFrom(dryRun),
   FetchHttpClient.layer,
  );
 
  const domainLayers = Layer.mergeAll(
   workspaceRoot, workspaceDiscovery, packageManagerDetector,
-  ChangesetsLive.pipe(Layer.provide(depsRegen)),
-  BranchManagerLive.pipe(Layer.provide(Layer.mergeAll(gitBranch, gitCommit, NodeServices.layer))),
-  PackageManagerUpgradeLive.pipe(Layer.provide(npmRegistry)),
-  ConfigDepsLive.pipe(Layer.provide(Layer.merge(npmRegistry, releaseAge))),
-  CatalogConfigDepsLive.pipe(
+  Changesets.layer.pipe(Layer.provide(depsRegen)),
+  BranchManager.layer.pipe(Layer.provide(Layer.mergeAll(gitBranch, gitCommit, Git.layer))),
+  PackageManagerUpgrade.layer.pipe(Layer.provide(npmRegistry)),
+  ConfigDeps.layer.pipe(Layer.provide(Layer.merge(npmRegistry, releaseAge))),
+  CatalogConfigDeps.layer.pipe(
    Layer.provide(Layer.mergeAll(npmRegistry, lockfileReader, FetchHttpClient.layer, NodeServices.layer)),
   ),
-  RegularDepsLive.pipe(Layer.provide(Layer.mergeAll(npmRegistry, workspaceDiscovery, releaseAge))),
-  ReportLive.pipe(Layer.provide(prLayer)),
-  RuntimeUpgradeLive.pipe(Layer.provide(makeRuntimeResolvers(options.runtimeLive))),
+  RegularDeps.layer.pipe(Layer.provide(Layer.mergeAll(npmRegistry, workspaceDiscovery, releaseAge))),
+  Report.layer.pipe(Layer.provide(prLayer)),
+  RuntimeUpgrade.layer.pipe(Layer.provide(makeRuntimeResolvers(options.runtimeLive))),
  );
 
  return Layer.provideMerge(domainLayers, libraryLayers);
@@ -575,6 +727,62 @@ Deno/Bun over `@effected/runtimes`' `GitHubClient.layerDefault`, which pre-wires
 auth + `FetchHttpClient` so the live graph is self-contained (`E = never`). Each
 live resolver falls back to the bundled snapshot on a fetch failure, logging a
 warning.
+
+## The Rendering Surface (src/format.ts)
+
+Every human-readable string the run produces that is not a step's own inline skip
+reason is built in `src/format.ts`. It is **pure and service-free** — every
+function takes data and returns a string (or an array of them), so every line is
+testable without a runtime.
+
+| export | purpose |
+| --- | --- |
+| `runContextLines(context)` | the opening Run-context block, header included |
+| `resultLines(result)` | the closing Result block, including the skipped-summary |
+| `groupCatalogDeltas(deltas)` | per-catalog tally of a merge's delta actions |
+| `formatCatalogCounts(counts)` | verbose tally, for the config-dependencies step log |
+| `formatCatalogCountsCompact(counts)` | compact `+/~/-` tally, for the Result block |
+| `INSTALL_LABEL` | the command line each package manager's install runs, for logging |
+| `describePmEvidence(detected)` | best-effort re-derivation of the detection signal |
+
+The rule the module exists to enforce is that **the same fact must not be worded
+two different ways in two different places.** `formatCatalogCounts` and
+`formatCatalogCountsCompact` are the same tally rendered for two audiences, and
+they sit side by side precisely so that stays visible.
+
+Both block builders **return lines rather than logging**, so the module stays
+pure and the caller emits them in order. The Run-context block includes its own
+`"Run context"` header for the same reason a commit is an explicit change set:
+the block is emitted as one unit and cannot drift apart.
+
+`describePmEvidence` is explicitly **not a source of truth** and says so in its
+own doc comment. `DetectedPm` does not carry the detector's reasoning — upstream
+logs it internally at debug level, on one branch only, and does not return it —
+so this is a cheap re-check of the same signals in the same priority order, for
+one log line. Any read failure degrades to `null`; it never invents an answer.
+
+### The boundary with `services/report.ts` — settled
+
+**`format.ts` renders the run's log output; `report.ts` renders the PR's.** Two
+named rendering modules, split by sink:
+
+| | `format.ts` | `services/report.ts` |
+| --- | --- | --- |
+| sink | the runner log / decision record | the PR body, job summary, commit message |
+| lifetime | written once, scrolls | upserted and re-rendered across runs |
+| shape | pure functions, no services | a `Context.Service` over `PullRequest` |
+
+The single-rendering-surface rule exists to stop rendering being scattered
+through step bodies — which it is not. Merging the two would drag a service
+dependency into a pure module, or strand `Report`'s statics. Two named modules
+with a clear split satisfies the rule rather than violating it. See the
+settled-decisions section of @./09-project-status.md.
+
+**On authority over exact wording:** `program.inner.test.ts` asserts on the
+literal log text and is authoritative over it; `format.test.ts` asserts the
+*shape* of the decision record. That division matters — a wording change should
+fail one suite, not both, and the one it fails should be the one that models the
+log as a contract.
 
 ## Pure Helpers (src/utils/)
 
@@ -621,29 +829,52 @@ Pure catalog-map helpers behind `CatalogConfigDeps`:
 - `parseSpecifier(specifier)` — parse a version specifier; `null` for
   `catalog:`/`workspace:`.
 
-### src/utils/github-markdown.ts
+### src/utils/github-markdown.ts — DELETED
 
-The GitHub-flavored Markdown builders for PR bodies, job summaries and check-run
-output: `heading`, `code`, `bold`, `link`, `rule`, `list`, `codeBlock`, `details`,
-`table`, plus the `GithubMarkdown` namespace object matching the destructuring
-call style `Report` uses.
+The GFM writer is **`GitHubMarkdown` from `@effected/github-actions`** (note the
+capital H). `Report` imports it directly and destructures its statics, which are
+self-contained (no `this`), so destructuring is safe.
 
-These replace `GithubMarkdown` from the deleted `@savvy-web/github-action-effects`.
-The kit deliberately ships **no successor**: report shaping is consumer policy, so
-the strings a given action emits belong to that action. They are pure string
-builders with no service dependency, which is why they live in `utils/` rather
-than `services/`. Two details worth keeping: `table` escapes only `\` and `|` and
-returns an empty string when there are no rows (so a caller can push
-unconditionally); `codeBlock` grows its fence past any backtick run in the content
-so an embedded fence cannot terminate the block early.
+**This module existed on a misreading, and the misreading is worth recording so
+it is not repeated.** The router skill's absence list says the kit ships "no
+report-shaping construct — report shaping is consumer policy," and that was read
+here as "no markdown writer," which became settled fact in five documents. The
+kit does ship the writer; only the *arrangement* of a report is consumer policy.
+`GithubMarkdown` → `GitHubMarkdown` is a **rename**, not a removal.
+
+The kit's writer is also strictly better than what it replaced: it renders
+through `@effected/markdown`'s node classes and serializer rather than string
+joining, so a cell cannot corrupt the table around it.
+
+**Verified output-identical before the swap.** A full PR body and job summary
+were rendered with both writers over fixtures carrying pipes, backslashes,
+underscores, tildes, embedded fences and multi-package grouping. The documents
+were byte-for-byte identical except one cell: a literal backslash, which the old
+builder double-escaped (`a\\b`) and the kit escapes minimally (`a\b`). The kit is
+correct, and a backslash in a dependency name or version is not reachable in
+practice.
+
+Two behavioral notes carried over from the old module:
+
+- `codeBlock` still grows its fence past any backtick run in the content
+  (verified identical).
+- **`table` no longer returns `""` for zero rows** — the kit renders a
+  headers-only table. Every call site is inside a loop over a non-empty map, so
+  zero rows is unreachable today; a future caller that can pass an empty row set
+  must guard it itself.
+
+`bold` and `rule` are the only two builders the kit does not ship. They live in
+`src/utils/markdown.ts` as literal one-liners with no escaping and no structure —
+deliberately not a second writer.
 
 ### src/utils/input.ts — DELETED
 
 `parseMultiValueInput` and its module are gone. `ActionInput.list` from
 `@effected/github-actions` owns that grammar now (see @./04-module-entry-points.md);
 the five call sites read `ActionInput.list(name).pipe(Config.withDefault([]))`. The
-grammar itself is still pinned locally by `INPUT_*`-keyed tests in
-`__test__/unit/program.inputs.test.ts`.
+grammar itself is still pinned locally by `INPUT_*`-keyed tests, now in
+`__test__/unit/schema/inputs.test.ts` (the suite moved with `readInputs` into
+`src/schema/inputs.ts`).
 
 ### src/utils/markdown.ts
 

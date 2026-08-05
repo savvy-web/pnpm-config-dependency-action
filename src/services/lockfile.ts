@@ -18,7 +18,7 @@ import { Lockfile as LockfileModel } from "@effected/lockfiles";
 import { WorkspaceDiscovery } from "@effected/workspaces";
 import { Context, Effect, Layer } from "effect";
 import { LockfileError } from "../errors/errors.js";
-import type { LockfileChange } from "../schemas/domain.js";
+import type { LockfileChange } from "../schema/domain.js";
 import type { SupportedPm } from "./package-manager.js";
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -28,19 +28,26 @@ import type { SupportedPm } from "./package-manager.js";
 export class Lockfile extends Context.Service<
 	Lockfile,
 	{
-		readonly capture: (pm: SupportedPm, workspaceRoot?: string) => Effect.Effect<LockfileModel | null, LockfileError>;
+		readonly capture: (pm: SupportedPm, workspaceRoot: string) => Effect.Effect<LockfileModel | null, LockfileError>;
 		readonly compare: (
 			before: LockfileModel | null,
 			after: LockfileModel | null,
-			workspaceRoot?: string,
+			workspaceRoot: string,
 		) => Effect.Effect<ReadonlyArray<LockfileChange>, LockfileError, WorkspaceDiscovery>;
 	}
->()("Lockfile") {}
-
-export const LockfileLive = Layer.succeed(Lockfile, {
-	capture: (pm, workspaceRoot = process.cwd()) => captureLockfileStateImpl(pm, workspaceRoot),
-	compare: (before, after, workspaceRoot = process.cwd()) => compareLockfilesImpl(before, after, workspaceRoot),
-});
+>()("Lockfile") {
+	/**
+	 * Live layer.
+	 *
+	 * Declared IN the class body, which is load-bearing rather than stylistic: a
+	 * member attached by post-class assignment is tree-shaken out of the bundled
+	 * `dist`, and that fails only in production because vitest runs the source.
+	 */
+	static readonly layer = Layer.succeed(this, {
+		capture: (pm, workspaceRoot) => captureLockfileStateImpl(pm, workspaceRoot),
+		compare: (before, after, workspaceRoot) => compareLockfilesImpl(before, after, workspaceRoot),
+	});
+}
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Standalone Function Exports
@@ -63,7 +70,7 @@ export const LOCKFILE_NAMES: Record<SupportedPm, string> = {
  */
 export const captureLockfileState = (
 	pm: SupportedPm,
-	workspaceRoot: string = process.cwd(),
+	workspaceRoot: string,
 ): Effect.Effect<LockfileModel | null, LockfileError> => captureLockfileStateImpl(pm, workspaceRoot);
 
 /**
@@ -72,7 +79,7 @@ export const captureLockfileState = (
 export const compareLockfiles = (
 	before: LockfileModel | null,
 	after: LockfileModel | null,
-	workspaceRoot: string = process.cwd(),
+	workspaceRoot: string,
 ): Effect.Effect<ReadonlyArray<LockfileChange>, LockfileError, WorkspaceDiscovery> =>
 	compareLockfilesImpl(before, after, workspaceRoot);
 
@@ -461,7 +468,7 @@ const compareCatalogs = (
  * Key an importer dependency by (name, section), so a dep declared in more than
  * one section of the same package is compared section by section.
  */
-const depKey = (dep: ImporterDependency): string => `${dep.name} ${dep.depType}`;
+const depKey = (dep: ImporterDependency): string => `${dep.name}\0${dep.depType}`;
 
 const keyDependencies = (importer: LockfileImporter): Map<string, ImporterDependency> => {
 	const out = new Map<string, ImporterDependency>();

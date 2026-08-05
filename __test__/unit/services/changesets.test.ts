@@ -17,7 +17,7 @@ import { Changesets as SilkChangesets } from "@savvy-web/silk-effects";
 import { Effect, Layer } from "effect";
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { Changesets, ChangesetsLive } from "../../../src/services/changesets.js";
+import { Changesets } from "../../../src/services/changesets.js";
 import { silentLogger } from "../../utils/fixtures.js";
 
 type RegenPlan = SilkChangesets.RegenPlan;
@@ -53,7 +53,7 @@ const mockDepsRegen = (opts: {
 const run = (root: string, base: string, layer: Layer.Layer<SilkChangesets.DepsRegen>) =>
 	Effect.runPromise(
 		Effect.flatMap(Changesets, (c) => c.create(root, base)).pipe(
-			Effect.provide(ChangesetsLive.pipe(Layer.provide(layer))),
+			Effect.provide(Changesets.layer.pipe(Layer.provide(layer))),
 			Effect.provide(silentLogger),
 		),
 	);

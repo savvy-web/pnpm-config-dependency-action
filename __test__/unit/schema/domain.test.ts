@@ -8,7 +8,7 @@ import {
 	LockfileChange,
 	NonEmptyString,
 	PullRequestResult,
-} from "../../../src/schemas/domain.js";
+} from "../../../src/schema/domain.js";
 
 describe("NonEmptyString", () => {
 	const decode = Schema.decodeUnknownSync(NonEmptyString);

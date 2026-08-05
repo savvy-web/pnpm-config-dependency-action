@@ -35,7 +35,7 @@ import { Changesets as SilkChangesets } from "@savvy-web/silk-effects";
 import { Effect, Layer } from "effect";
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { Changesets, ChangesetsLive } from "../../src/services/changesets.js";
+import { Changesets } from "../../src/services/changesets.js";
 import { silentLogger } from "../utils/fixtures.js";
 
 // makeAppLayer wires `SilkChangesets.DepsRegenDefault`, which is bound to
@@ -45,7 +45,7 @@ import { silentLogger } from "../utils/fixtures.js";
 // `makeDepsRegenDefault({ cwd })` — the same root-binding discipline
 // @effected/workspaces requires (root is fixed at build, not passed per call).
 const changesetsLayerFor = (root: string) =>
-	ChangesetsLive.pipe(
+	Changesets.layer.pipe(
 		Layer.provide(SilkChangesets.makeDepsRegenDefault({ cwd: root }).pipe(Layer.provide(NodeServices.layer))),
 	);
 

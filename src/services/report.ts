@@ -12,11 +12,12 @@
 
 import type { GitHubError, GitHubGraphQLError, PullRequestShape, Repo } from "@effected/github";
 import { PullRequest as PullRequestTag } from "@effected/github";
+import { GitHubMarkdown } from "@effected/github-actions";
 import { Context, Effect, Layer } from "effect";
 
-import type { CatalogDelta, ChangesetFile, DependencyUpdateResult, PullRequestResult } from "../schemas/domain.js";
+import type { CatalogDelta, ChangesetFile, DependencyUpdateResult, PullRequestResult } from "../schema/domain.js";
 import { buildUpdateSubject } from "../utils/commit-subject.js";
-import { GithubMarkdown } from "../utils/github-markdown.js";
+import { bold, rule } from "../utils/markdown.js";
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Service Interface
@@ -47,25 +48,32 @@ export class Report extends Context.Service<
 		) => string;
 		readonly generateCommitMessage: (updates: ReadonlyArray<DependencyUpdateResult>, appSlug?: string) => string;
 	}
->()("Report") {}
+>()("Report") {
+	/**
+	 * Live layer.
+	 *
+	 * Declared IN the class body, which is load-bearing rather than stylistic: a
+	 * member attached by post-class assignment is tree-shaken out of the bundled
+	 * `dist`, and that fails only in production because vitest runs the source.
+	 */
+	static readonly layer = Layer.effect(
+		this,
+		Effect.gen(function* () {
+			const pullRequest = yield* PullRequestTag;
+			return {
+				createOrUpdatePR: (branch, base, updates, changesets, autoMerge, deltas) =>
+					createOrUpdatePRImpl(pullRequest, branch, base, updates, changesets, autoMerge, deltas),
+				generatePRBody: generatePRBodyImpl,
+				generateSummary: generateSummaryImpl,
+				generateCommitMessage: generateCommitMessageImpl,
+			};
+		}),
+	);
+}
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Live Layer
 // ══════════════════════════════════════════════════════════════════════════════
-
-export const ReportLive = Layer.effect(
-	Report,
-	Effect.gen(function* () {
-		const pullRequest = yield* PullRequestTag;
-		return {
-			createOrUpdatePR: (branch, base, updates, changesets, autoMerge, deltas) =>
-				createOrUpdatePRImpl(pullRequest, branch, base, updates, changesets, autoMerge, deltas),
-			generatePRBody: generatePRBodyImpl,
-			generateSummary: generateSummaryImpl,
-			generateCommitMessage: generateCommitMessageImpl,
-		};
-	}),
-);
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Implementation
@@ -149,7 +157,10 @@ const generatePRBodyImpl = (
 	changesets: ReadonlyArray<ChangesetFile>,
 	deltas: ReadonlyArray<CatalogDelta> = [],
 ): string => {
-	const { heading, table, link, code, details, codeBlock, bold, rule } = GithubMarkdown;
+	// `GitHubMarkdown`'s statics are self-contained (no `this`), so destructuring
+	// is safe. `bold`/`rule` come from `utils/markdown.js` — the two builders the
+	// kit's writer does not ship.
+	const { heading, table, link, code, details, codeBlock } = GitHubMarkdown;
 	const sections: string[] = [];
 
 	sections.push(heading("Dependency Updates", 2));
@@ -236,7 +247,7 @@ const generateSummaryImpl = (
 	dryRun: boolean,
 	deltas: ReadonlyArray<CatalogDelta> = [],
 ): string => {
-	const { heading, table, code, details, codeBlock, bold, list, link } = GithubMarkdown;
+	const { heading, table, code, details, codeBlock, list, link } = GitHubMarkdown;
 	const sections: string[] = [];
 
 	// Summary stats

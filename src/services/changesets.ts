@@ -27,7 +27,7 @@ import { Changesets as SilkChangesets } from "@savvy-web/silk-effects";
 import { Context, Effect, Layer } from "effect";
 
 import { ChangesetError } from "../errors/errors.js";
-import type { ChangesetFile } from "../schemas/domain.js";
+import type { ChangesetFile } from "../schema/domain.js";
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Service Interface
@@ -50,7 +50,24 @@ export class Changesets extends Context.Service<
 			base: string,
 		) => Effect.Effect<ReadonlyArray<ChangesetFile>, ChangesetError>;
 	}
->()("Changesets") {}
+>()("Changesets") {
+	/**
+	 * Live layer.
+	 *
+	 * Declared IN the class body, which is load-bearing rather than stylistic: a
+	 * member attached by post-class assignment is tree-shaken out of the bundled
+	 * `dist`, and that fails only in production because vitest runs the source.
+	 */
+	static readonly layer = Layer.effect(
+		this,
+		Effect.gen(function* () {
+			const depsRegen = yield* SilkChangesets.DepsRegen;
+			return {
+				create: (workspaceRoot, base) => createChangesetsImpl(workspaceRoot, base, depsRegen),
+			};
+		}),
+	);
+}
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Module-Level Exports
@@ -59,22 +76,11 @@ export class Changesets extends Context.Service<
 /**
  * Check if the repository uses changesets.
  */
-export const hasChangesets = (workspaceRoot: string = process.cwd()): boolean =>
-	existsSync(join(workspaceRoot, ".changeset"));
+export const hasChangesets = (workspaceRoot: string): boolean => existsSync(join(workspaceRoot, ".changeset"));
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Live Layer
 // ══════════════════════════════════════════════════════════════════════════════
-
-export const ChangesetsLive = Layer.effect(
-	Changesets,
-	Effect.gen(function* () {
-		const depsRegen = yield* SilkChangesets.DepsRegen;
-		return {
-			create: (workspaceRoot, base) => createChangesetsImpl(workspaceRoot, base, depsRegen),
-		};
-	}),
-);
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Implementation

@@ -1,15 +1,30 @@
 /**
- * WorkspaceYaml service for pnpm-workspace.yaml formatting and reading.
+ * `pnpm-workspace.yaml` formatting and reading.
  *
- * Formats the workspace file consistently to match @savvy-web/lint-staged PnpmWorkspace handler,
- * avoiding lint-staged hook changes after our action commits.
+ * Formats the workspace file consistently to match @savvy-web/lint-staged's
+ * PnpmWorkspace handler, avoiding lint-staged hook changes after our action
+ * commits.
+ *
+ * **Standalone functions, not a service.** There was a `WorkspaceYaml` tag and
+ * a `WorkspaceYamlLive` layer here; both were deleted because nothing in `src/`
+ * ever wired them — the only code that resolved the tag was this module's own
+ * test suite, so the tests passed precisely because they were the sole callers.
+ * That is the same reasoning that removed four unconstructed error classes from
+ * `errors/errors.ts` on this branch: a construct whose only consumer is its own
+ * test is indistinguishable from dead code, and renaming it to the kit's layer
+ * convention would only have made it tidier dead code.
+ *
+ * The suite now drives {@link formatWorkspaceYaml} / {@link readWorkspaceYaml}
+ * directly, which is what `program.ts`, `ConfigDeps` and the config-dependency
+ * step actually call — so it exercises the production path rather than a
+ * parallel one.
  *
  * @module services/workspace-yaml
  */
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { Yaml } from "@effected/yaml";
-import { Context, Effect, Layer } from "effect";
+import { Effect } from "effect";
 
 import { FileSystemError } from "../errors/errors.js";
 
@@ -98,23 +113,6 @@ export const sortContent = (content: PnpmWorkspaceContent): PnpmWorkspaceContent
 };
 
 // ══════════════════════════════════════════════════════════════════════════════
-// Service Interface
-// ══════════════════════════════════════════════════════════════════════════════
-
-export class WorkspaceYaml extends Context.Service<
-	WorkspaceYaml,
-	{
-		readonly format: (workspaceRoot?: string) => Effect.Effect<void, FileSystemError>;
-		readonly read: (workspaceRoot?: string) => Effect.Effect<PnpmWorkspaceContent | null, FileSystemError>;
-	}
->()("WorkspaceYaml") {}
-
-export const WorkspaceYamlLive = Layer.succeed(WorkspaceYaml, {
-	format: (workspaceRoot = process.cwd()) => formatWorkspaceYamlImpl(workspaceRoot),
-	read: (workspaceRoot = process.cwd()) => readWorkspaceYamlImpl(workspaceRoot),
-});
-
-// ══════════════════════════════════════════════════════════════════════════════
 // Implementation Functions
 // ══════════════════════════════════════════════════════════════════════════════
 
@@ -123,22 +121,15 @@ export const WorkspaceYamlLive = Layer.succeed(WorkspaceYaml, {
  *
  * Reads, sorts, formats, and writes back the workspace file.
  * This ensures consistency with the lint-staged handler.
- *
- * Standalone function exported for direct use by consumers that
- * haven't yet migrated to the WorkspaceYaml service.
  */
-export const formatWorkspaceYaml = (workspaceRoot: string = process.cwd()): Effect.Effect<void, FileSystemError> =>
+export const formatWorkspaceYaml = (workspaceRoot: string): Effect.Effect<void, FileSystemError> =>
 	formatWorkspaceYamlImpl(workspaceRoot);
 
 /**
  * Read pnpm-workspace.yaml content.
- *
- * Standalone function exported for direct use by consumers that
- * haven't yet migrated to the WorkspaceYaml service.
  */
-export const readWorkspaceYaml = (
-	workspaceRoot: string = process.cwd(),
-): Effect.Effect<PnpmWorkspaceContent | null, FileSystemError> => readWorkspaceYamlImpl(workspaceRoot);
+export const readWorkspaceYaml = (workspaceRoot: string): Effect.Effect<PnpmWorkspaceContent | null, FileSystemError> =>
+	readWorkspaceYamlImpl(workspaceRoot);
 
 const formatWorkspaceYamlImpl = (workspaceRoot: string): Effect.Effect<void, FileSystemError> =>
 	Effect.gen(function* () {

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { DEFAULT_REGISTRY, NpmRegistry, RegistryReadError } from "@effected/npm";
 import { Effect, Layer, References } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { PackageManagerUpgrade, PackageManagerUpgradeLive } from "../../../src/services/package-manager-upgrade.js";
+import { PackageManagerUpgrade } from "../../../src/services/package-manager-upgrade.js";
 import { seededRegistry } from "../../utils/fixtures.js";
 
 // A real sha512 integrity so corepackHashFromIntegrity produces a hash.
@@ -28,7 +28,7 @@ const runWith = <A>(
 			const service = yield* PackageManagerUpgrade;
 			return yield* fn(service);
 		}).pipe(
-			Effect.provide(PackageManagerUpgradeLive.pipe(Layer.provide(registryLayer))),
+			Effect.provide(PackageManagerUpgrade.layer.pipe(Layer.provide(registryLayer))),
 			Effect.provideService(References.MinimumLogLevel, "None"),
 		) as Effect.Effect<A, never, never>,
 	);
@@ -47,7 +47,7 @@ const runEither = <A, E>(
 				return yield* fn(service);
 			}),
 		).pipe(
-			Effect.provide(PackageManagerUpgradeLive.pipe(Layer.provide(registryLayer))),
+			Effect.provide(PackageManagerUpgrade.layer.pipe(Layer.provide(registryLayer))),
 			Effect.provideService(References.MinimumLogLevel, "None"),
 		),
 	);

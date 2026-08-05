@@ -1,4 +1,4 @@
-import type { CatalogDelta } from "../schemas/domain.js";
+import type { CatalogDelta } from "../schema/domain.js";
 
 /**
  * Catalogs keyed by catalog name, each mapping a dependency to a version range.

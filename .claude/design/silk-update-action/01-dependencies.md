@@ -3,8 +3,8 @@ status: current
 module: silk-update-action
 category: architecture
 created: 2026-02-20
-updated: 2026-07-26
-last-synced: 2026-07-26
+updated: 2026-08-05
+last-synced: 2026-08-05
 completeness: 95
 related:
   - ./_index.md
@@ -32,7 +32,7 @@ The action runs on **Effect v4** (`effect` / `@effect/platform-node` both resolv
 | `GitHubApp`, `GitHubClient`, `GitHubGraphQL`, `GitBranch`, `GitCommit`, `CheckRun`, `PullRequest`, `AutoMerge` | `@effected/github` |
 | `NpmRegistry`, `SemverResolver`-adjacent registry reads | `@effected/npm` |
 | `CommandRunner` (a service) | `@effected/commands`' `Run` free functions over core `ChildProcessSpawner` |
-| `GithubMarkdown` | local `src/utils/github-markdown.ts` (no kit successor — deliberately) |
+| `GithubMarkdown` | `GitHubMarkdown` (capital H) in `@effected/github-actions` — a **rename**, not a removal |
 | `ActionInputError` | this repo's own `InvalidInputError` (`src/errors/errors.ts`) |
 | `*Live` layer constants | `.layer` / `.layer(...)` statics on the service classes |
 | `@savvy-web/github-action-effects/testing` (`ActionStateTest`, `GitHubAppTest`, `ActionOutputsTest`) | `__test__/utils/action-doubles.ts` over each service's `layerTest` |
@@ -78,16 +78,33 @@ The action runs on **Effect v4** (`effect` / `@effect/platform-node` both resolv
   - GraphQL is a member of the client, not a separate `GitHubGraphQL` service.
 - `@effected/github-actions` + `@effected/github` together replace the whole
   `github-action-effects` layer stack; nothing in `src/` imports the old package.
-- `@effected/commands` — subprocess execution as **free functions** over core
+- `@effected/commands` (`^0.3.0`) — subprocess execution as **free functions** over core
   `ChildProcessSpawner`, not a service: `Run.collect` (exit code as a *result*, so a
   non-zero exit is a value rather than an error), `Run.text` / `Run.lines` / `Run.json`
   (typed failure on a non-zero exit) and `Run.succeeds` (boolean probe). Also ships
   `ScriptedSpawner`, the public test fixture the suites script command responses with.
-  - **`Run.text` trims.** That silently corrupts column-aligned output: `git status
-    --porcelain`'s two-character status field means a leading space (`" M path"`) is
-    load-bearing, and trimming shifts every subsequent `substring` index by one. Code
-    reading such output uses `Run.collect` and checks `succeeded` itself (see the `gitRaw`
-    helper in `src/services/branch.ts`).
+  - **`Run.text` trims**, which silently corrupts column-aligned output — a leading
+    space is load-bearing in some formats, and trimming shifts every subsequent index.
+    This used to be a live constraint on `services/branch.ts`, whose `gitRaw` helper
+    read `git status --porcelain` through `Run.collect` for exactly that reason. **That
+    helper and its rationale are gone**: the status reads moved to `@effected/git`, so
+    no code here parses column-aligned text any more. The trimming is still true of
+    `Run.text` and still worth knowing before reading a fixed-width format with it;
+    it is no longer a property this action depends on.
+- **`@effected/git` (`^0.5.2`) — adopted for `status` only.** `Git.status(cwd)` runs
+  `git status --porcelain -z` and returns typed `StatusEntry` values (`x`, `y`, `path`,
+  `origPath`), and `Git.configSet(cwd, key, value)` writes the checkout's local config.
+  Both status readers use it — `services/branch.ts` for the commit file list and
+  `steps/detect-changes.ts` for the change verdict — and `steps/configure-status.ts`
+  pins `core.fileMode=false` through `configSet` once per run.
+  - Adopting it **deleted `parseStatusLine`**, where three silent wrong answers had
+    lived. `-z` also removes git's path-quoting layer, so the octal `\NNN` gap this
+    repo used to carry is the kit's concern now.
+  - The **mutating** tier is still not adopted: the other seven local git operations
+    (refspec `fetch`, `checkout -B`, `reset --hard`, `--unshallow`, `branch -f`,
+    `rev-parse --is-shallow-repository`, `merge-base`) stay on `Run`. So this module
+    runs two subprocess mechanisms for git, accepted deliberately —
+    @./09-project-status.md carries the reasoning and the revisit condition.
 - `@effect/platform-node` — Node platform bundle (`NodeServices.layer`), providing
   FileSystem, Path and **ChildProcessSpawner** (the seam `Run` needs). Provided by
   `Action.run`'s runtime at the platform level and also pulled in directly by
@@ -108,7 +125,7 @@ The action runs on **Effect v4** (`effect` / `@effect/platform-node` both resolv
     caller supplies the clock and missing timestamps drop the version) and
     `PartialReleaseAgeGate` (the permissive per-source contribution type, re-exported by
     `src/services/release-age.ts`).
-- `@effected/workspaces` — Effect-native workspace layer, consumed by `RegularDeps`,
+- `@effected/workspaces` (`^0.10.0`) — Effect-native workspace layer, consumed by `RegularDeps`,
   `PeerSync`, `Lockfile`, `CatalogConfigDeps` and `detectPackageManager`. **Root-bound at
   layer build:** the layers are static factories on the service classes
   (`WorkspaceRoot.layer`, `WorkspaceDiscovery.layer(opts?)`, `PackageManagerDetector.layer`,
@@ -158,12 +175,17 @@ The action runs on **Effect v4** (`effect` / `@effect/platform-node` both resolv
   (pre-wiring auth + `FetchHttpClient`) for the Bun/Deno GitHub-release fetchers. Both the
   snapshot and the live API **exclude end-of-life major lines** — resolving an EOL line
   returns `VersionNotFoundError` and the runtime is skipped with a warning.
-- `@effected/semver` — semver parsing/comparison. Used via the standalone `parseValidSemVer`
-  in `services/peer-sync.ts` and the standalone `Range.parse` in `program.ts` for validating
-  explicit-range `upgrade-runtime-*` / `upgrade-package-manager` values. The action calls the
-  **standalone** functions rather than the static aliases: an alias attached by post-class
-  assignment is tree-shaken out of the bundled dist (`"sideEffects": false`), producing
-  `Range.parse is not a function` at runtime.
+- `@effected/semver` — semver parsing/comparison. Used via `parseValidSemVer` in
+  `services/peer-sync.ts` and `Range.parse` in `program.ts` for validating explicit-range
+  `upgrade-runtime-*` / `upgrade-package-manager` values, plus `Range.maxSatisfying` and
+  `SemVer.parse` in `utils/semver.ts`.
+  - **Historical note, now resolved:** these static parsers used to be attached by
+    post-class assignment (`Range.parse = parseRange`), which the bundler tree-shook out
+    of `dist` under `"sideEffects": false`, producing `Range.parse is not a function` at
+    runtime — so the action deliberately called the standalone functions instead. As of
+    `@effected/semver@0.3.2` they are **in-class static fields**
+    (`static parse = Effect.fn("Range.parse")(...)`, `Range.js:111` / `SemVer.js:171`), so
+    the hazard is gone and the static form is the correct one to call.
 - `@effected/lockfiles` — package-manager-agnostic lockfile parser and model.
   `Lockfile.parse(content, { format })` is a **pure** parser (no memoized reader service), so
   a "before" and an "after" snapshot can be parsed in the same process; it normalizes
@@ -172,28 +194,90 @@ The action runs on **Effect v4** (`effect` / `@effect/platform-node` both resolv
   `ClassifiedSpecifier` — read `.specifier.raw`), `ResolvedPackage`, and the PM-specific
   extension union tagged via `.extension._tag`. `Lockfile.format` records which package
   manager wrote the file.
+- **`WorkspaceCatalogs` (in `@effected/workspaces@0.10.0`) now owns release-age
+  discovery.** `releaseAgeGate()` combines the inline `pnpm-workspace.yaml` keys
+  with the replayed config-dependency hooks; `src/services/release-age.ts` keeps
+  only the fail-open wrapper and the filtering. The layer **must** be
+  `layerWithConfigDependenciesSubprocess` — the in-process variant's computed
+  dynamic `import()` is what rspack miscompiles into a context module, and that
+  is the sole reason this adoption waited on a release. `workspaces@0.10.0`
+  itself declares `@effected/commands: ^0.3.0`, so `Run.jsonLine` (the framing
+  its replay child uses) arrives with it and needs no manual alignment.
+  - **`Run.jsonLine` was evaluated and is SUBSUMED, not skipped.** It was the
+    intended replacement for this repo's local `REPLAY_SENTINEL` framing — but
+    `releaseAgeGate()` combines the inline keys *and* the hook replay, so
+    adopting it deletes the local subprocess entirely and leaves nothing to
+    frame. The kit's own replay child already reads its payload through
+    `Run.jsonLine` (`workspaces/index.d.ts` documents the 16 MiB ceiling as
+    `Run.jsonLine`'s), so it is adopted transitively. Do not re-propose calling
+    it directly; there is no call site.
+  - **The caret trap, recorded because it fails silently:** caret pins the minor
+    on `0.x`, so `^0.9.5` will not accept `0.10.0` and `^0.2.1` will not accept
+    `0.3.0` — and `pnpm install` **succeeds** in that state, resolving the old
+    version with no error and no warning, so the code fails only at runtime.
+    Verify with `pnpm why` or by reading `node_modules/<pkg>/package.json`;
+    **never** the install's exit code.
 - `@effected/yaml` — parse and stringify `pnpm-workspace.yaml` with consistent formatting.
   `Yaml.parse` / `Yaml.stringify` return Effects (rather than throwing like the `yaml` npm
   package), so `workspace-yaml.ts` yields them and maps failures into `FileSystemError`.
 
-### Duplicate resolutions
+### Duplicate resolutions — one is BACK, and its provenance changed
 
-Two copies each of `@effected/workspaces` (`0.9.0` and `0.8.0`) and `@effected/npm`
-(`0.5.0` and `0.4.0`) resolve. The lower copy of each comes **entirely** from the
-`@vitest-agent/plugin` devDependency tree and never reaches the shipped artifact; it clears
-when that plugin bumps. Effect resolves services by the tag's string id, so even a genuine
-duplicate would share one provided layer — the concern is bundle size, not correctness.
+**Current state, verified rather than assumed:** `@effected/npm` resolves a single
+copy (`0.8.3`). `@effected/workspaces` resolves **two** — `0.10.0` and `0.9.5`.
+
+```text
+$ pnpm why @effected/workspaces
+…
+Found 2 versions of @effected/workspaces
+```
+
+**The provenance is not what it was, and this is the part that matters.** The old
+duplicate came *entirely* from the `@vitest-agent/plugin` devDependency tree, which is why
+this document could say it "never reaches the shipped artifact." That is **no longer true**:
+`0.9.5` now also arrives through **`@savvy-web/silk-effects@5.3.0`**, which is a *runtime*
+dependency of this action, and every runtime dependency is inlined into `dist/main.js`. So
+two copies of the workspaces kit are bundled, not one.
+
+The trigger is the caret trap documented above: this action moved to `^0.10.0` while
+silk-effects still declares `^0.9.5`, and caret pins the minor on `0.x`, so the two ranges
+cannot dedupe.
+
+**On the "bundle size, not correctness" reasoning** — still *probably* right, but it is now
+load-bearing rather than academic, so state its limit. Effect resolves services by the tag's
+**string id**, so a layer built from either copy satisfies a requirement from the other.
+That is safe while the shapes agree. It is not safe by construction: `WorkspaceCatalogs` is
+new in `0.10.0`, so the `0.9.5` copy cannot provide it, and any future divergence in a
+*shared* tag's shape would typecheck against one copy and fail at runtime against the other.
+
+**What would settle it:** silk-effects widening or bumping its `@effected/workspaces` range
+so both resolve to `0.10.0`. Until then this is a real ~duplicate in the shipped bundle.
+
+*Verify with* `pnpm why @effected/workspaces` — **not** with the lockfile grep this
+document used to recommend. The grep reports *which* versions exist; only `pnpm why`
+reports *who pulls each one*, and provenance is the whole question here. The previous
+version of this section was updated to new version numbers while keeping the sentence
+"resolves exactly one copy of each," which was false at the moment it was written — because
+the numbers were refreshed and the claim they supported was not re-checked.
 
 ## Build tooling
 
-- `@savvy-web/github-action-builder` (dev) — rspack-based bundler that derives the
+- `@savvy-web/github-action-builder` (dev, `^2.2.2`) — rspack-based bundler that derives the
   pre/main/post entries from `action.config.ts` and inlines every runtime dependency into
   `dist/{pre,main,post}.js`. As of v2.1 it **minifies unconditionally** and folds license
   banners inline, so the committed `dist` carries attribution again. Current output:
-  ~1.18 MB minified.
+  ~1.29 MB minified (`dist/main.js`; `pre` and `post` are ~271 KB each).
 - `@savvy-web/silk` (dev) — silk tooling (commit/changeset conventions).
 - `@effect/vitest` (dev) — pinned **exactly** to the same beta as `effect`
   (`4.0.0-beta.101`) and must move in lockstep with it. See @./08-testing.md.
+- `@effected/schemastore` (dev, pinned **exactly** at `0.2.1`) — builds, lints, gates and
+  writes the JSON Schema for the `result` output. `lib/scripts/generate-schema.ts` hands it a
+  `SchemaTarget` and `SchemaPipeline.run` does the rest: structural lint, the shipped ajv
+  strict-mode gate, and a write **only when the document's content differs** — so a formatter
+  reflowing the generated file does not provoke a rewrite, and the artifact needs no formatter
+  carve-out. The package deliberately never logs; the script supplies the wording. Consumed
+  only at build time and **not** bundled into `dist`. See @./03-type-definitions.md.
+- `tsx` (dev) — runs the schema generator (`pnpm generate-schema`).
 
 ### `action.config.ts` notes
 

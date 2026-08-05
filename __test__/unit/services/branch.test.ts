@@ -1,9 +1,14 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { ScriptResult } from "@effected/commands";
+import type { StatusEntry } from "@effected/git";
+import { Git } from "@effected/git";
 import type { FileChange, Repo } from "@effected/github";
 import { GitBranch, GitCommit, GitHubError, RepoRef, Repo as RepoTag } from "@effected/github";
 import { Effect, Layer, References, Result } from "effect";
 import { describe, expect, it } from "vitest";
-import { BranchManager, BranchManagerLive } from "../../../src/services/branch.js";
+import { BranchManager } from "../../../src/services/branch.js";
 import { fromMap } from "../../utils/spawner.js";
 
 /** Every resource method resolves `Repo` per call, so tests provide one. */
@@ -65,13 +70,18 @@ const runWithBranchManager = <A, E>(
 	effect: Effect.Effect<A, E, BranchManager | Repo>,
 	branches?: Map<string, string>,
 	responses?: ReadonlyMap<string, ScriptResult>,
+	statusEntries?: ReadonlyArray<StatusEntry>,
 ) => {
 	const state: BranchState = { branches: new Map(branches ?? []) };
 	const commitState: CommitState = { commits: [] };
 	const spawner = fromMap(responses);
 
-	const serviceLayer = BranchManagerLive.pipe(
-		Layer.provide(Layer.mergeAll(branchDouble(state), commitDouble(commitState), spawner.layer)),
+	// Only `status` is stubbed. Every other `Git` member dies naming itself, which
+	// is what proves `BranchManager` reaches for nothing else on this service.
+	const gitLayer = Git.layerTest({ status: () => Effect.succeed(statusEntries ?? []) });
+
+	const serviceLayer = BranchManager.layer.pipe(
+		Layer.provide(Layer.mergeAll(branchDouble(state), commitDouble(commitState), spawner.layer, gitLayer)),
 	);
 
 	return {
@@ -147,8 +157,15 @@ describe("BranchManager.manage", () => {
 				Effect.fail(new GitHubError({ kind: "rejected", operation: "git.updateRef", reason: "protected branch" })),
 		});
 		const spawner = fromMap();
-		const serviceLayer = BranchManagerLive.pipe(
-			Layer.provide(Layer.mergeAll(failingBranch, commitDouble({ commits: [] }), spawner.layer)),
+		const serviceLayer = BranchManager.layer.pipe(
+			Layer.provide(
+				Layer.mergeAll(
+					failingBranch,
+					commitDouble({ commits: [] }),
+					spawner.layer,
+					Git.layerTest({ status: () => Effect.succeed([]) }),
+				),
+			),
 		);
 
 		const either = await Effect.runPromise(
@@ -189,30 +206,16 @@ describe("BranchManager.manage", () => {
 });
 
 describe("BranchManager.commitChanges", () => {
-	it("returns early when there are no changes", async () => {
+	// The change list comes from `@effected/git`'s `status`, which models the two
+	// porcelain columns separately and carries `origPath` for a rename. Every case
+	// below is written as the typed entry git's own machine-readable output
+	// produces, so what is under test is the mapping onto commit members — the
+	// place all three historical bugs lived — rather than a parser we no longer own.
+	const entry = (x: StatusEntry["x"], y: StatusEntry["y"], path: string, origPath?: string): StatusEntry =>
+		(origPath === undefined ? { x, y, path } : { x, y, path, origPath }) as StatusEntry;
+
+	it("commits modified files via the GitHub API", async () => {
 		const responses = new Map<string, ScriptResult>([
-			["git -c core.fileMode=false status --porcelain", { exit: 0, stdout: "", stderr: "" }],
-		]);
-
-		const { commitState, result } = runWithBranchManager(
-			Effect.gen(function* () {
-				const manager = yield* BranchManager;
-				return yield* manager.commitChanges("test commit", "pnpm/config");
-			}),
-			undefined,
-			responses,
-		);
-
-		const either = await result;
-
-		expect(Result.isSuccess(either)).toBe(true);
-		// No commits should have been created
-		expect(commitState.commits).toHaveLength(0);
-	});
-
-	it("commits changed files via GitHub API", async () => {
-		const responses = new Map<string, ScriptResult>([
-			["git -c core.fileMode=false status --porcelain", { exit: 0, stdout: " M package.json\n", stderr: "" }],
 			["git fetch origin pnpm/config", { exit: 0, stdout: "", stderr: "" }],
 			["git reset --hard origin/pnpm/config", { exit: 0, stdout: "", stderr: "" }],
 		]);
@@ -220,10 +223,11 @@ describe("BranchManager.commitChanges", () => {
 		const { commitState, result } = runWithBranchManager(
 			Effect.gen(function* () {
 				const manager = yield* BranchManager;
-				return yield* manager.commitChanges("chore: update deps", "pnpm/config");
+				return yield* manager.commitChanges("chore: update deps", "pnpm/config", process.cwd());
 			}),
 			undefined,
 			responses,
+			[entry(" ", "M", "package.json")],
 		);
 
 		const either = await result;
@@ -241,7 +245,6 @@ describe("BranchManager.commitChanges", () => {
 
 	it("records a deletion as a FileDeletion member", async () => {
 		const responses = new Map<string, ScriptResult>([
-			["git -c core.fileMode=false status --porcelain", { exit: 0, stdout: "D  deleted-file.ts\n", stderr: "" }],
 			["git fetch origin branch", { exit: 0, stdout: "", stderr: "" }],
 			["git reset --hard origin/branch", { exit: 0, stdout: "", stderr: "" }],
 		]);
@@ -249,10 +252,11 @@ describe("BranchManager.commitChanges", () => {
 		const { commitState, result } = runWithBranchManager(
 			Effect.gen(function* () {
 				const manager = yield* BranchManager;
-				return yield* manager.commitChanges("update", "branch");
+				return yield* manager.commitChanges("update", "branch", process.cwd());
 			}),
 			undefined,
 			responses,
+			[entry("D", " ", "deleted-file.ts")],
 		);
 
 		const either = await result;
@@ -263,18 +267,72 @@ describe("BranchManager.commitChanges", () => {
 		expect(commitState.commits[0].changes).toEqual([{ _tag: "FileDeletion", path: "deleted-file.ts" }]);
 	});
 
-	it("skips unreadable files gracefully", async () => {
+	it("records a deletion whose two columns disagree", async () => {
+		// Regression: the old parser tested the trimmed two-character field against
+		// "D", which missed `AD` and `RD` entirely — the path was treated as a
+		// modification, the read failed, and the change was dropped with a warning.
+		// `D` in EITHER column means the path is gone in the state being committed.
 		const responses = new Map<string, ScriptResult>([
-			["git -c core.fileMode=false status --porcelain", { exit: 0, stdout: "M  nonexistent-file.ts\n", stderr: "" }],
+			["git fetch origin branch", { exit: 0, stdout: "", stderr: "" }],
+			["git reset --hard origin/branch", { exit: 0, stdout: "", stderr: "" }],
 		]);
 
 		const { commitState, result } = runWithBranchManager(
 			Effect.gen(function* () {
 				const manager = yield* BranchManager;
-				return yield* manager.commitChanges("update", "branch");
+				return yield* manager.commitChanges("update", "branch", process.cwd());
 			}),
 			undefined,
 			responses,
+			[entry("A", "D", "added-then-deleted.ts")],
+		);
+
+		expect(Result.isSuccess(await result)).toBe(true);
+		expect(commitState.commits).toHaveLength(1);
+		expect(commitState.commits[0].changes).toEqual([{ _tag: "FileDeletion", path: "added-then-deleted.ts" }]);
+	});
+
+	it("does not delete a copy's origin", async () => {
+		// A copy carries an origin exactly like a rename does, but the origin still
+		// exists on disk. Deleting it would remove a file the run never touched.
+		const root = mkdtempSync(join(tmpdir(), "branch-copy-"));
+		try {
+			writeFileSync(join(root, "copy.ts"), "export const copied = 1;\n", "utf-8");
+
+			const responses = new Map<string, ScriptResult>([
+				["git fetch origin branch", { exit: 0, stdout: "", stderr: "" }],
+				["git reset --hard origin/branch", { exit: 0, stdout: "", stderr: "" }],
+			]);
+
+			const { commitState, result } = runWithBranchManager(
+				Effect.gen(function* () {
+					const manager = yield* BranchManager;
+					return yield* manager.commitChanges("chore: copy", "branch", root);
+				}),
+				undefined,
+				responses,
+				[entry("C", " ", "copy.ts", "src.ts")],
+			);
+
+			expect(Result.isSuccess(await result)).toBe(true);
+			expect(commitState.commits).toHaveLength(1);
+			expect(commitState.commits[0].changes).toEqual([
+				{ _tag: "FileContent", path: "copy.ts", content: "export const copied = 1;\n" },
+			]);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("skips unreadable files gracefully", async () => {
+		const { commitState, result } = runWithBranchManager(
+			Effect.gen(function* () {
+				const manager = yield* BranchManager;
+				return yield* manager.commitChanges("update", "branch", process.cwd());
+			}),
+			undefined,
+			undefined,
+			[entry("M", " ", "nonexistent-file.ts")],
 		);
 
 		const either = await result;
@@ -284,39 +342,94 @@ describe("BranchManager.commitChanges", () => {
 		expect(commitState.commits).toHaveLength(0);
 	});
 
-	it("ignores executable-bit-only changes and does not create an empty commit", async () => {
-		// Regression: a `run` command (e.g. husky chmod-ing .husky/commit-msg
-		// during `savvy-commit init`) can flip a tracked file's executable bit
-		// without changing its content. A mode-sensitive `git status` reports it
-		// as modified, but committing file content via the GitHub API at mode
-		// 100644 yields an empty tree-diff — an empty commit + spurious PR.
-		// commitChanges must query status with core.fileMode=false so a mode-only
-		// dirty tree is treated as no change.
-		const responses = new Map<string, ScriptResult>([
-			// Mode-sensitive status (the buggy path) would surface a real, readable
-			// file as modified purely because of an executable-bit flip.
-			["git status --porcelain", { exit: 0, stdout: " M package.json\n", stderr: "" }],
-			// Mode-insensitive status (the correct path) reports nothing — the only
-			// working-tree difference was the chmod.
-			["git -c core.fileMode=false status --porcelain", { exit: 0, stdout: "", stderr: "" }],
-			["git fetch origin pnpm/config", { exit: 0, stdout: "", stderr: "" }],
-			["git reset --hard origin/pnpm/config", { exit: 0, stdout: "", stderr: "" }],
-		]);
-
+	it("creates no commit when the working tree is clean", async () => {
 		const { commitState, result } = runWithBranchManager(
 			Effect.gen(function* () {
 				const manager = yield* BranchManager;
-				return yield* manager.commitChanges("chore: update deps", "pnpm/config");
+				return yield* manager.commitChanges("chore: update deps", "pnpm/config", process.cwd());
 			}),
 			undefined,
-			responses,
+			undefined,
+			[],
 		);
 
-		const either = await result;
-
-		expect(Result.isSuccess(either)).toBe(true);
-		// No commit should be created from a mode-only change.
+		expect(Result.isSuccess(await result)).toBe(true);
 		expect(commitState.commits).toHaveLength(0);
+	});
+
+	it("commits a renamed file as a delete of the old path plus content at the new one", async () => {
+		// THE bug: the old parser produced the single path "old.ts -> new.ts", which
+		// cannot be read from disk, so a renamed file silently never reached the
+		// commit at all — the old file stayed and the new one never landed.
+		const root = mkdtempSync(join(tmpdir(), "branch-rename-"));
+		try {
+			writeFileSync(join(root, "new.ts"), "export const moved = 1;\n", "utf-8");
+
+			const responses = new Map<string, ScriptResult>([
+				["git fetch origin branch", { exit: 0, stdout: "", stderr: "" }],
+				["git reset --hard origin/branch", { exit: 0, stdout: "", stderr: "" }],
+			]);
+
+			const { commitState, result } = runWithBranchManager(
+				Effect.gen(function* () {
+					const manager = yield* BranchManager;
+					return yield* manager.commitChanges("chore: move", "branch", root);
+				}),
+				undefined,
+				responses,
+				[entry("R", " ", "new.ts", "old.ts")],
+			);
+
+			expect(Result.isSuccess(await result)).toBe(true);
+			expect(commitState.commits).toHaveLength(1);
+			expect(commitState.commits[0].changes).toEqual([
+				{ _tag: "FileDeletion", path: "old.ts" },
+				{ _tag: "FileContent", path: "new.ts", content: "export const moved = 1;\n" },
+			]);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("reads changed files from the workspace root it is given, not the process cwd", async () => {
+		// Regression: commitChanges used to resolve every status path against
+		// `process.cwd()` while every other step in the run reads and writes at the
+		// DETECTED workspace root. The two are not the same thing — the action can
+		// legitimately be invoked from a subdirectory — and when they diverged the
+		// file read failed and the change was silently dropped with a warning.
+		//
+		// This test discriminates precisely because the file exists ONLY under the
+		// temp root: resolving against `process.cwd()` cannot find it, so the buggy
+		// path records zero commits while the fixed path records the content.
+		const root = mkdtempSync(join(tmpdir(), "branch-root-"));
+		try {
+			writeFileSync(join(root, "package.json"), '{"name":"from-the-workspace-root"}\n', "utf-8");
+
+			const responses = new Map<string, ScriptResult>([
+				["git fetch origin branch", { exit: 0, stdout: "", stderr: "" }],
+				["git reset --hard origin/branch", { exit: 0, stdout: "", stderr: "" }],
+			]);
+
+			const { commitState, result } = runWithBranchManager(
+				Effect.gen(function* () {
+					const manager = yield* BranchManager;
+					return yield* manager.commitChanges("chore: update deps", "branch", root);
+				}),
+				undefined,
+				responses,
+				[entry(" ", "M", "package.json")],
+			);
+
+			const either = await result;
+
+			expect(Result.isSuccess(either)).toBe(true);
+			expect(commitState.commits).toHaveLength(1);
+			expect(commitState.commits[0].changes).toEqual([
+				{ _tag: "FileContent", path: "package.json", content: '{"name":"from-the-workspace-root"}\n' },
+			]);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
 	});
 });
 
@@ -393,7 +506,7 @@ describe("BranchManager.ensureBaseHistory", () => {
 		const { result } = runWithBranchManager(
 			Effect.gen(function* () {
 				const manager = yield* BranchManager;
-				return yield* manager.ensureBaseHistory("main");
+				return yield* manager.ensureBaseHistory("main", "/ws");
 			}),
 			undefined,
 			responses,
@@ -414,12 +527,50 @@ describe("BranchManager.ensureBaseHistory", () => {
 		const { result } = runWithBranchManager(
 			Effect.gen(function* () {
 				const manager = yield* BranchManager;
-				return yield* manager.ensureBaseHistory("main");
+				return yield* manager.ensureBaseHistory("main", "/ws");
 			}),
 			undefined,
 			responses,
 		);
 		expect(Result.isSuccess(await result)).toBe(true);
+	});
+
+	it("runs every git command at the workspace root, not the process cwd", async () => {
+		// Regression, same defect class as the commitChanges cwd bug: every other
+		// step reads and writes at `detected.root`, but this one ran git wherever the
+		// process happened to be. The action can legitimately be invoked from a
+		// subdirectory, and then the merge-base probe and the recovery fetches all
+		// resolve against the wrong repository state.
+		//
+		// This asserts on the spawner's RECORDED cwd, not on command names — the
+		// suites above script by command line, which is cwd-blind and would pass
+		// against the buggy version. That blindness is why this bug survived a
+		// review and a full test suite.
+		const responses = new Map<string, ScriptResult>([
+			["git merge-base main HEAD", { exit: 1, stdout: "", stderr: "no merge base" }],
+			["git fetch origin +refs/heads/main:refs/remotes/origin/main", { exit: 0, stdout: "", stderr: "" }],
+			["git rev-parse --is-shallow-repository", { exit: 0, stdout: "true\n", stderr: "" }],
+			["git fetch --unshallow origin", { exit: 0, stdout: "", stderr: "" }],
+			["git branch -f main refs/remotes/origin/main", { exit: 0, stdout: "", stderr: "" }],
+		]);
+
+		const { spawner, result } = runWithBranchManager(
+			Effect.gen(function* () {
+				const manager = yield* BranchManager;
+				return yield* manager.ensureBaseHistory("main", "/some/workspace/root");
+			}),
+			undefined,
+			responses,
+		);
+
+		expect(Result.isSuccess(await result)).toBe(true);
+		// Every recovery command AND both merge-base probes must be anchored.
+		expect(spawner.spawns.length).toBeGreaterThan(0);
+		for (const spawn of spawner.spawns) {
+			expect(spawn.cwd, `${[spawn.command, ...spawn.args].join(" ")} ran at ${String(spawn.cwd)}`).toBe(
+				"/some/workspace/root",
+			);
+		}
 	});
 });
 

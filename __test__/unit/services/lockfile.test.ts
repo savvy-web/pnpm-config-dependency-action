@@ -13,8 +13,8 @@ import type { WorkspacePackage } from "@effected/workspaces";
 import { WorkspaceDiscovery } from "@effected/workspaces";
 import { Effect, Layer, Logger, References, Result } from "effect";
 import { describe, expect, it } from "vitest";
-import type { LockfileChange } from "../../../src/schemas/domain.js";
-import { LOCKFILE_NAMES, Lockfile, LockfileLive, groupChangesByPackage } from "../../../src/services/lockfile.js";
+import type { LockfileChange } from "../../../src/schema/domain.js";
+import { LOCKFILE_NAMES, Lockfile, groupChangesByPackage } from "../../../src/services/lockfile.js";
 
 /**
  * Mock WorkspaceDiscovery layer that returns a fixed package map for /workspace root.
@@ -104,7 +104,7 @@ const runCompare = (
 			const lockfile = yield* Lockfile;
 			return yield* lockfile.compare(before, after, "/workspace");
 		}).pipe(
-			Effect.provide(LockfileLive),
+			Effect.provide(Lockfile.layer),
 			Effect.provide(discovery),
 			Effect.provideService(References.MinimumLogLevel, "None"),
 		),
@@ -118,7 +118,7 @@ const runCapture = (pm: "pnpm" | "bun" | "npm", root: string) =>
 		Effect.gen(function* () {
 			const lockfile = yield* Lockfile;
 			return yield* lockfile.capture(pm, root);
-		}).pipe(Effect.provide(LockfileLive)),
+		}).pipe(Effect.provide(Lockfile.layer)),
 	);
 
 const tempRoot = () => mkdtempSync(join(tmpdir(), "lockfile-test-"));
@@ -269,7 +269,7 @@ describe("Lockfile.capture", () => {
 				const lockfile = yield* Lockfile;
 				return yield* lockfile.capture("bun", root);
 			}).pipe(
-				Effect.provide(LockfileLive),
+				Effect.provide(Lockfile.layer),
 				Effect.provide(Layer.succeed(References.CurrentLoggers, new Set([captureLogger]))),
 			),
 		);

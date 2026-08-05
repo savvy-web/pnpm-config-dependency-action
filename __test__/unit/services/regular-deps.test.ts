@@ -6,8 +6,8 @@ import type { WorkspacePackage } from "@effected/workspaces";
 import { WorkspaceDiscovery, WorkspaceDiscoveryError } from "@effected/workspaces";
 import { Effect, Layer, References } from "effect";
 import { describe, expect, it } from "vitest";
-import { RegularDeps, RegularDepsLive } from "../../../src/services/regular-deps.js";
-import { ReleaseAge, ReleaseAgeNoop } from "../../../src/services/release-age.js";
+import { RegularDeps } from "../../../src/services/regular-deps.js";
+import { ReleaseAge } from "../../../src/services/release-age.js";
 import { matchesPattern, parseSpecifier } from "../../../src/utils/deps.js";
 import { seededRegistry } from "../../utils/fixtures.js";
 
@@ -67,7 +67,7 @@ const runWithService = <A, E>(
 	fn: (service: Effect.Success<typeof RegularDeps>) => Effect.Effect<A, E>,
 	packages?: Record<string, string | string[]>,
 	workspacesLayer?: Layer.Layer<WorkspaceDiscovery>,
-	releaseAge: Layer.Layer<ReleaseAge> = ReleaseAgeNoop,
+	releaseAge: Layer.Layer<ReleaseAge> = ReleaseAge.layerNoop,
 ) => {
 	// These suites describe a package as a bare version or a version list; the
 	// shared seeder takes the richer per-version shape.
@@ -83,7 +83,7 @@ const runWithService = <A, E>(
 			)
 		: seededRegistry({});
 	const wsLayer = workspacesLayer ?? mockWorkspaces([]);
-	const layer = RegularDepsLive.pipe(Layer.provide(Layer.mergeAll(registryLayer, wsLayer, releaseAge)));
+	const layer = RegularDeps.layer.pipe(Layer.provide(Layer.mergeAll(registryLayer, wsLayer, releaseAge)));
 	return Effect.runPromise(
 		Effect.gen(function* () {
 			const service = yield* RegularDeps;
@@ -188,7 +188,7 @@ describe("parseSpecifier", () => {
 
 describe("RegularDeps.updateRegularDeps", () => {
 	it("returns empty array when no patterns provided", async () => {
-		const result = await runWithService((s) => s.updateRegularDeps([]));
+		const result = await runWithService((s) => s.updateRegularDeps([], makeTempDir()));
 		expect(result).toEqual([]);
 	});
 

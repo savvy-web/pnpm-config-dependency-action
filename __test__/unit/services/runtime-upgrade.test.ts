@@ -5,7 +5,7 @@ import { BunResolver, DenoResolver, NoMatchingVersionError, NodeResolver } from 
 import { Effect, Layer, Logger, References } from "effect";
 import { describe, expect, it } from "vitest";
 import type { RuntimeUpgradeConfig } from "../../../src/services/runtime-upgrade.js";
-import { RuntimeUpgrade, RuntimeUpgradeLive } from "../../../src/services/runtime-upgrade.js";
+import { RuntimeUpgrade } from "../../../src/services/runtime-upgrade.js";
 
 const makeTempDir = () => mkdtempSync(join(tmpdir(), "runtime-test-"));
 const writePackageJson = (dir: string, content: Record<string, unknown>) =>
@@ -41,7 +41,7 @@ const runWithLogs = (
 		Layer.succeed(DenoResolver, makeResolver(latest.deno !== undefined ? latest.deno : "2.1.0") as never),
 		Layer.succeed(BunResolver, makeResolver(latest.bun !== undefined ? latest.bun : "1.2.0") as never),
 	);
-	const layer = RuntimeUpgradeLive.pipe(Layer.provide(resolvers));
+	const layer = RuntimeUpgrade.layer.pipe(Layer.provide(resolvers));
 	return Effect.runPromise(
 		Effect.gen(function* () {
 			const service = yield* RuntimeUpgrade;

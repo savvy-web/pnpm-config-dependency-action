@@ -1,8 +1,8 @@
 import type { ScriptResult } from "@effected/commands";
 import { Effect, References } from "effect";
 import { describe, expect, it } from "vitest";
-import { runCommands } from "../../src/program.js";
-import { fromMap } from "../utils/spawner.js";
+import { runCommands } from "../../../src/steps/custom-commands.js";
+import { fromMap } from "../../utils/spawner.js";
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Test Helpers
@@ -25,7 +25,10 @@ describe("runCommands", () => {
 	it("returns empty result for empty commands", async () => {
 		const spawner = fromMap();
 		const result = await Effect.runPromise(
-			runCommands([]).pipe(Effect.provide(spawner.layer), Effect.provideService(References.MinimumLogLevel, "None")),
+			runCommands([], "/tmp/ws").pipe(
+				Effect.provide(spawner.layer),
+				Effect.provideService(References.MinimumLogLevel, "None"),
+			),
 		);
 		expect(result.successful).toEqual([]);
 		expect(result.failed).toEqual([]);
@@ -35,7 +38,7 @@ describe("runCommands", () => {
 		const spawner = fromMap();
 
 		const result = await Effect.runPromise(
-			runCommands(["pnpm lint:fix", "pnpm test"]).pipe(
+			runCommands(["pnpm lint:fix", "pnpm test"], "/tmp/ws").pipe(
 				Effect.provide(spawner.layer),
 				Effect.provideService(References.MinimumLogLevel, "None"),
 			),
@@ -47,11 +50,32 @@ describe("runCommands", () => {
 		expect(result.failed).toEqual([]);
 	});
 
+	it("runs every command at the workspace root, not the process cwd", async () => {
+		// Regression: the spawn carried no cwd at all, so every custom command
+		// inherited the process directory. When the action is invoked from a
+		// subdirectory those are different trees — the command would lint, test or
+		// build something other than what the run just edited and pass anyway,
+		// which is worse than failing: it is a green signal about the wrong tree.
+		//
+		// This discriminates because `ScriptedSpawner` records `cwd` per spawn: an
+		// absent cwd is `undefined`, never the root, whatever the process cwd is.
+		const spawner = fromMap();
+
+		await Effect.runPromise(
+			runCommands(["pnpm lint", "pnpm test"], "/tmp/ws").pipe(
+				Effect.provide(spawner.layer),
+				Effect.provideService(References.MinimumLogLevel, "None"),
+			),
+		);
+
+		expect(spawner.spawns.map((call) => call.cwd)).toEqual(["/tmp/ws", "/tmp/ws"]);
+	});
+
 	it("collects failed commands with error details", async () => {
 		const spawner = fromMap(new Map([[shLine("pnpm lint:fix"), failing("lint errors")]]));
 
 		const result = await Effect.runPromise(
-			runCommands(["pnpm lint:fix"]).pipe(
+			runCommands(["pnpm lint:fix"], "/tmp/ws").pipe(
 				Effect.provide(spawner.layer),
 				Effect.provideService(References.MinimumLogLevel, "None"),
 			),
@@ -67,7 +91,7 @@ describe("runCommands", () => {
 		const spawner = fromMap(new Map([[shLine("pnpm test"), failing("test fail")]]));
 
 		const result = await Effect.runPromise(
-			runCommands(["pnpm lint", "pnpm test", "pnpm build"]).pipe(
+			runCommands(["pnpm lint", "pnpm test", "pnpm build"], "/tmp/ws").pipe(
 				Effect.provide(spawner.layer),
 				Effect.provideService(References.MinimumLogLevel, "None"),
 			),

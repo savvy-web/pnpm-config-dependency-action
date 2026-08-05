@@ -131,21 +131,27 @@ export class PackageManagerUpgrade extends Context.Service<
 		readonly upgrade: (
 			mode: string,
 			pm: SupportedPm,
-			workspaceRoot?: string,
+			workspaceRoot: string,
 		) => Effect.Effect<PackageManagerUpgradeOutcome, FileSystemError>;
 	}
->()("PackageManagerUpgrade") {}
-
-export const PackageManagerUpgradeLive = Layer.effect(
-	PackageManagerUpgrade,
-	Effect.gen(function* () {
-		const registry = yield* NpmRegistry;
-		return {
-			upgrade: (mode, pm, workspaceRoot = process.cwd()) =>
-				upgradePackageManagerImpl(registry, mode, pm, workspaceRoot),
-		};
-	}),
-);
+>()("PackageManagerUpgrade") {
+	/**
+	 * Live layer.
+	 *
+	 * Declared IN the class body, which is load-bearing rather than stylistic: a
+	 * member attached by post-class assignment is tree-shaken out of the bundled
+	 * `dist`, and that fails only in production because vitest runs the source.
+	 */
+	static readonly layer = Layer.effect(
+		this,
+		Effect.gen(function* () {
+			const registry = yield* NpmRegistry;
+			return {
+				upgrade: (mode, pm, workspaceRoot) => upgradePackageManagerImpl(registry, mode, pm, workspaceRoot),
+			};
+		}),
+	);
+}
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Internal Helpers

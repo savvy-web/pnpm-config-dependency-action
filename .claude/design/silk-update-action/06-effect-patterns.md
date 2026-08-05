@@ -3,8 +3,8 @@ status: current
 module: silk-update-action
 category: architecture
 created: 2026-02-20
-updated: 2026-07-26
-last-synced: 2026-07-26
+updated: 2026-08-05
+last-synced: 2026-08-05
 completeness: 95
 related:
   - ./_index.md
@@ -82,11 +82,27 @@ service — there is no `CommandRunner` tag to inject, and a caller's requiremen
 - `Run.succeeds` — boolean probe.
 - `ScriptedSpawner` — the public test fixture.
 
-**`Run.text` trims.** For column-aligned output (`git status --porcelain`) use
-`Run.collect` and check `succeeded` yourself; `branch.ts`'s `gitRaw` helper does
-exactly this. A service that needs the spawner for several members resolves it
-once in the layer and re-provides it (`withSpawner` in `branch.ts`), keeping each
-member's `R` free of it.
+**`Run.text` trims**, which corrupts a fixed-width format. That used to constrain
+`branch.ts`, whose `gitRaw` helper read `git status --porcelain` through
+`Run.collect` for exactly this reason; **both are gone** — status is
+`@effected/git`'s `Git.status` now, returning typed entries, so nothing here
+parses column-aligned text. The trimming remains true of `Run.text` and worth
+knowing; it is no longer a property this action depends on.
+
+A service that needs the spawner for several members resolves it once in the
+layer and re-provides it (`withSpawner` in `branch.ts`), keeping each member's
+`R` free of it.
+
+### git (`@effected/git`)
+
+Adopted for **reads only**: `Git.status(cwd)` (`git status --porcelain -z` →
+`StatusEntry[]`) and `Git.configSet(cwd, key, value)` (writes the checkout's own
+config). `Git.layer` requires only `ChildProcessSpawner`, and `Git.layerTest`
+supplies the per-member doubles the suites use.
+
+The seven mutating operations `services/branch.ts` performs stay on `Run`, so
+that module runs two subprocess mechanisms for git. That is a deliberate trade,
+not an oversight — see @./09-project-status.md.
 
 ### npm (`@effected/npm`)
 
@@ -94,13 +110,16 @@ member's `R` free of it.
   `packageInfo`, `publishTimes`; keyed by (registry, package, version). Being HTTP
   rather than an `npm` subprocess removes the whole class of `~/.npm` cache
   permission failures.
-- `ReleaseAgeGate` / `PartialReleaseAgeGate` — the release-age vocabulary the
-  local `ReleaseAge` service composes.
+- `ReleaseAgeGate` / `PartialReleaseAgeGate` — the release-age vocabulary. The
+  **gate is now assembled by `@effected/workspaces`' `WorkspaceCatalogs`**, not
+  locally; the local `ReleaseAge` service only wraps it in a fail-open posture
+  and does the filtering. See @./05-module-library.md.
 
 ### Workspace services (`@effected/workspaces`)
 
 `WorkspaceDiscovery` (`listPackages()`, `importerMap()`), `WorkspaceRoot`
-(`find`), `PackageManagerDetector` (`detect`) and `LockfileReader` — all
+(`find`), `PackageManagerDetector` (`detect`), `LockfileReader` and
+**`WorkspaceCatalogs`** (`releaseAgeGate()`, from `0.10.0`) — all
 **root-bound at layer build** via static `.layer` / `.layer(opts?)` factories, so
 their methods are arg-less. Consumed by `RegularDeps`, `PeerSync`, `Lockfile`,
 `CatalogConfigDeps` and `detectPackageManager`.
@@ -124,37 +143,69 @@ failure), selected by `runtimeLive`. `resolve({ range })` → `.latest`.
 
 ### Domain services (src/services/)
 
-- `BranchManager` / `BranchManagerLive` — `GitBranch`, `GitCommit`,
+**Every one is a `static layer` on its class**, matching the kit — there are no
+`*Live` constants left in `src/services/`. Each is declared *in* the class body,
+which is load-bearing rather than cosmetic: a member attached by post-class
+assignment is tree-shaken out of the bundled `dist`, and it fails only in
+production because vitest runs the source.
+
+- `BranchManager.layer` — `GitBranch`, `GitCommit`, `Git`, `ChildProcessSpawner`
+- `PackageManagerUpgrade.layer` — `NpmRegistry`
+- `RuntimeUpgrade.layer` — the three resolvers
+- `ReleaseAge.layer` — `WorkspaceCatalogs`, `NpmRegistry`. Not a factory and no
+  workspace-root parameter: the root is bound when `WorkspaceCatalogs`' layer is
+  built, and the hook-replay subprocess is the kit's now, not ours.
+  `ReleaseAge.layerNoop` is the inert variant
+- `ConfigDeps.layer` — `NpmRegistry`, `ReleaseAge`
+- `CatalogConfigDeps.layer` — `NpmRegistry`, `LockfileReader`, `HttpClient`,
   `ChildProcessSpawner`
-- `PackageManagerUpgrade` / `PackageManagerUpgradeLive` — `NpmRegistry`
-- `RuntimeUpgrade` / `RuntimeUpgradeLive` — the three resolvers
-- `ReleaseAge` / `ReleaseAgeLive(workspaceRoot?)` — `ChildProcessSpawner`,
-  `NpmRegistry`; `ReleaseAgeNoop` is the inert test layer
-- `ConfigDeps` / `ConfigDepsLive` — `NpmRegistry`, `ReleaseAge`
-- `CatalogConfigDeps` / `CatalogConfigDepsLive` — `NpmRegistry`, `LockfileReader`,
-  `HttpClient`, `ChildProcessSpawner`
-- `RegularDeps` / `RegularDepsLive` — `NpmRegistry`, `WorkspaceDiscovery`,
-  `ReleaseAge`
-- `Changesets` / `ChangesetsLive` — `Changesets.DepsRegen`
-- `Report` / `ReportLive` — `PullRequest`
+- `RegularDeps.layer` — `NpmRegistry`, `WorkspaceDiscovery`, `ReleaseAge`
+- `Changesets.layer` — `Changesets.DepsRegen`
+- `Report.layer` — `PullRequest`
+- `Lockfile.layer` — no requirements
+
+`PreLive` / `PostLive` in the entry points are **not** part of this: they are
+aliases for `GitHubApp.layer`, not service layers.
 
 Stateless concerns (`detectPackageManager`, `syncPeers`, `fetchModuleCatalogs`,
-the `WorkspaceYaml` and `Lockfile` standalone helpers) export functions used
-directly by `program.ts`. `syncPeers` and `compareLockfiles` require
+the `workspace-yaml` and `Lockfile` standalone helpers) export functions consumed
+by the step modules in `src/steps/`, which is what `program.ts` composes — it no
+longer calls them directly. `syncPeers` and `compareLockfiles` require
 `WorkspaceDiscovery` in their environment.
+
+### Step modules as an error-channel discipline
+
+`src/steps/` is where this codebase's typed-error posture is most visible: each
+step declares its own error channel, and **four declare `never`**
+(`custom-commands`, `regular-dependencies`, `upgrade-package-manager`,
+`upgrade-runtimes`). That is not a comment claiming resilience — it is a
+signature the compiler enforces, and it means the degradation happens *inside*
+the step rather than being left to a caller who might forget. Each module's doc
+comment names its **failure posture** (fail-the-job or degrade-to-warning) in
+those words, so the intent and the type can be checked against each other. See
+the table in @./04-module-entry-points.md.
 
 ### Layer composition patterns worth copying
 
-- **Capture context, re-provide it.** `CatalogConfigDepsLive` yields
+- **Capture context, re-provide it.** `CatalogConfigDeps.layer` yields
   `Effect.context<…>()` once and pipes `Effect.provide(context)` into its method,
   so the method's `R` is `never` without threading each dependency by hand.
-- **Resolve ambient infrastructure once.** `BranchManagerLive` resolves the
+- **Resolve ambient infrastructure once.** `BranchManager.layer` resolves the
   spawner in the layer and wraps each member with `withSpawner`, while
   deliberately *not* resolving `Repo`.
 - **`Layer.orDie` at the edge.** `GitHubToken.clientLayer()` and
-  `Repo.layerFromConfig()` are `orDie`-d so a missing token or repo is a defect,
-  keeping the resulting layer at `E = never` for the `withCheckRun` callback,
-  which requires `R = never`.
+  `Repo.layerFromConfig()` are `orDie`-d so a missing token or repo is a defect
+  rather than an error every caller must handle, keeping the resulting layer at
+  `E = never`.
+- **Provide the app layer once.** `innerProgram` provides `appLayer` a single
+  time, around the whole body. It used to provide it a second time *inside* the
+  `withCheckRun` callback, justified by "that callback requires `R = never`" —
+  which was false. `withCheckRun` is generic in `R`
+  (`use: (id, conclude) => Effect<A, E, R>` returning
+  `Effect<A, E | GitHubError, R | Repo>`, `@effected/github/index.d.ts:1049`), so
+  the callback inherits the surrounding context like any other effect. The claim
+  was true of an older kit whose callback *was* `R`-less; the kit's own TSDoc
+  notes the change. Full write-up in @./04-module-entry-points.md.
 
 ```typescript
 // main.ts — no { layer }; program needs only what Action.run injects:
@@ -180,8 +231,9 @@ Effect distinguishes **expected errors** (typed, recoverable) from **defects**.
 - `CommandFailedError` / `CommandOutputError` (kit) — subprocess failures.
 - `ConfigError` (core) — a malformed/absent input from `ActionInput`.
 
-`GitHubApiError` and `PnpmError` remain defined in `src/errors/errors.ts` but are
-no longer constructed anywhere; see @./03-type-definitions.md.
+That list is exhaustive, and `src/errors/errors.ts` defines nothing beyond it.
+`GitHubApiError`, `GitError`, `PnpmError` and `DependencyUpdateFailures` were
+deleted for having no construction site; see @./03-type-definitions.md.
 
 **Strategy by scenario:**
 
@@ -261,11 +313,16 @@ failed), `neutral` (no changes) and `success`.
 
 ```typescript
 // program.ts
-import { ActionEnvironment, ActionInput } from "@effected/github-actions";
-import { Config, Duration, Effect, References } from "effect";
+import { ActionEnvironment } from "@effected/github-actions";
+import { Duration, Effect, References } from "effect";
 import { makeAppLayer } from "./layers/app.js";
+import { readInputs } from "./schema/inputs.js";
+import { emitOutputs, initialOutputs } from "./schema/outputs.js";
 
 export const program = Effect.gen(function* () {
+ // Publish the all-disabled baseline BEFORE any work, so every declared output
+ // has a value on every exit path — including a failure in `readInputs` itself.
+ yield* emitOutputs(initialOutputs);
  const { inputs, dryRun, timeout, runtimeLive } = yield* readInputs;
 
  const env = yield* ActionEnvironment;
@@ -281,13 +338,17 @@ export const program = Effect.gen(function* () {
   }));
 });
 
-// main.ts
-Action.run(program);
+// main.ts — guarded, so importing the module never runs the action
+if (process.env.GITHUB_ACTIONS) {
+ await Action.run(program);
+}
 ```
 
-**Testing:** tests import `readInputs`, `program`, `innerProgram`, `runCommands`
-and `runInstall` directly from `program.ts` — `main.ts` (with its module-level
-`Action.run`) is never evaluated. Kit services are injected via `Layer.succeed`
+**Testing:** tests import each export from the module that owns it — `program` /
+`innerProgram` from `program.ts`, `readInputs` from `schema/inputs.ts`,
+`runCommands` from `steps/custom-commands.ts`, `runInstall` from
+`steps/install.ts` — so `main.ts` (with its module-level, guarded `Action.run`)
+is never evaluated. Kit services are injected via `Layer.succeed`
 fakes, each service's `layerTest`, or the local doubles in
 `__test__/utils/action-doubles.ts`; commands are scripted with
 `@effected/commands`' `ScriptedSpawner`. Config inputs are injected through

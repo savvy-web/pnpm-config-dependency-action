@@ -17,10 +17,11 @@
  * @module program.inputs.test
  */
 
+import { readFileSync } from "node:fs";
 import { ActionInput } from "@effected/github-actions";
-import { Effect, Exit, References } from "effect";
+import { Cause, Effect, Exit, References, Result } from "effect";
 import { describe, expect, it } from "vitest";
-import { readInputs } from "../../src/program.js";
+import { INPUT_NAMES, readInputs } from "../../../src/schema/inputs.js";
 
 /**
  * The variables the runner actually exports: `INPUT_` + the input name
@@ -31,6 +32,22 @@ import { readInputs } from "../../src/program.js";
  */
 const runnerEnv = (inputs: Readonly<Record<string, string>>): Record<string, string> =>
 	Object.fromEntries(Object.entries(inputs).map(([name, value]) => [`INPUT_${name.toUpperCase()}`, value]));
+
+/**
+ * The `field` an `InvalidInputError` names, or `null` for any other failure.
+ *
+ * Reaching into the cause is deliberate: asserting only that a read failed
+ * cannot distinguish "rejected the right input" from "rejected a different one",
+ * and a validation error that names the wrong field sends the reader to correct
+ * configuration and tells them it is broken.
+ */
+const failedField = (exit: Exit.Exit<unknown, unknown>): string | null => {
+	if (Exit.isSuccess(exit)) return null;
+	const error = Cause.findError(exit.cause);
+	if (!Result.isSuccess(error)) return null;
+	const field = (error.success as { field?: unknown }).field;
+	return typeof field === "string" ? field : null;
+};
 
 const read = (inputs: Readonly<Record<string, string>>) =>
 	Effect.runPromiseExit(
@@ -146,6 +163,39 @@ describe("readInputs — validation", () => {
 		expect(Exit.isFailure(exit)).toBe(true);
 	});
 
+	it("rejects a glob in peer-lock, naming peer-lock", async () => {
+		// `dependencies` entries ARE globs; peer entries are matched as exact
+		// package names. A `@scope/*` in `peer-lock` therefore matched nothing at
+		// all — and did so silently: the overlap check compares raw strings so it
+		// never fired, and the run reported success having synced no peer ranges.
+		// The only proportional signal for "this input did nothing" is rejection.
+		const exit = await read({ dependencies: "@scope/*", "peer-lock": "@scope/*" });
+
+		expect(Exit.isFailure(exit)).toBe(true);
+		expect(failedField(exit)).toBe("peer-lock");
+	});
+
+	it("rejects a glob in peer-minor, naming peer-minor", async () => {
+		// The `field` assertion is the point, not the failure. The first version of
+		// this validation merged both lists and hardcoded `field: "peer-lock"`, so
+		// a glob in `peer-minor` alone sent the reader to an input that was
+		// correct. `Exit.isFailure` alone passes against that bug — which is why
+		// the three tests shipped with it, including a control, all went green.
+		const exit = await read({ dependencies: "effect*", "peer-minor": "effect*" });
+
+		expect(Exit.isFailure(exit)).toBe(true);
+		expect(failedField(exit)).toBe("peer-minor");
+	});
+
+	it("accepts a literal scoped package name in peer-lock", async () => {
+		// The control. Without it the rejection above is indistinguishable from a
+		// pattern that rejects every scoped name — `@scope/pkg` contains no glob
+		// metacharacter and must still be accepted.
+		const exit = await read({ dependencies: "@scope/*", "peer-lock": "@scope/pkg" });
+
+		expect(Exit.isSuccess(exit)).toBe(true);
+	});
+
 	it("fails on an unparseable semver range for a runtime input", async () => {
 		const exit = await read({ dependencies: "effect", "upgrade-runtime-node": "not-a-range" });
 
@@ -234,5 +284,30 @@ describe("readInputs — enumerated inputs", () => {
 		// while the workflow had asked for live data.
 		const exit = await read({ dependencies: "effect", "runtime-data": "offline-ish" });
 		expect(Exit.isFailure(exit)).toBe(true);
+	});
+});
+
+describe("INPUT_NAMES", () => {
+	/**
+	 * The input names `action.yml` declares, read straight from the manifest.
+	 *
+	 * Narrow regex rather than a YAML dependency: the `inputs:` block is a flat
+	 * map of `  <name>:` keys, and anchoring on the block keeps a nested
+	 * `description:`/`default:` from being mistaken for an input.
+	 */
+	const manifestInputNames = (): ReadonlyArray<string> => {
+		const yaml = readFileSync(new URL("../../../action.yml", import.meta.url), "utf-8");
+		const block = /\ninputs:\n([\s\S]*?)(?=\noutputs:)/.exec(yaml);
+		if (block === null) throw new Error("action.yml has no inputs: block");
+		return [...block[1].matchAll(/^ {2}([a-z][a-z0-9-]*):/gm)].map((m) => m[1]);
+	};
+
+	it("mirrors action.yml exactly", () => {
+		// action.yml is the single source of input names; this tuple is a mirror,
+		// and a mirror nobody checks is just a second source. The regression it
+		// guards is an input added to the manifest and never read, or read under a
+		// name the manifest does not declare — both of which resolve to a silent
+		// default under the runner rather than failing.
+		expect([...INPUT_NAMES].sort()).toEqual([...manifestInputNames()].sort());
 	});
 });
