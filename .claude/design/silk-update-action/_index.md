@@ -21,7 +21,7 @@ The action is built on **Effect v4** and the first-party **`@effected/*` kit** (
 
 The package manager is **detected once per run** (`detectPackageManager`, over `@effected/workspaces`' `PackageManagerDetector`) and every dispatch point — config dependencies, install, package-manager upgrade, workspace formatting — routes on that one value. pnpm, bun and npm are supported; yarn is rejected with a clear error.
 
-The `main` phase is organized as **composition over steps**: `src/program.ts` reads inputs, runs the steps in order, folds their results into outputs and reports, while each step's body lives in its own module under `src/steps/`. `program.ts` performs no I/O and builds no strings of its own — log rendering is `src/format.ts`, the input and output contracts are `src/schema/`.
+The `main` phase is organized as **composition over steps**: `src/program.ts` reads inputs, runs the steps in order, folds their results into outputs and reports, while each step's body lives in its own module under `src/steps/`. `program.ts` issues no I/O primitive and builds no strings of its own — log rendering is `src/format.ts`, the input and output contracts are `src/schema/`. It does still call two helpers that read from disk (`readWorkspaceYaml`, `compareLockfiles`); see @./04-module-entry-points.md for why the stronger "performs no I/O" is false and why a grep for primitives cannot detect that.
 
 **Key Features:**
 

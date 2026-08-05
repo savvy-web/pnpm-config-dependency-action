@@ -199,8 +199,11 @@ guarded so it never fails the workflow). The dependency-update workflow below
 runs entirely in the `main` phase. `src/program.ts` **composes** it — it reads
 inputs, runs the steps in order, folds their results into outputs and reports —
 while each step's body lives in its own module under `src/steps/`. `program.ts`
-performs no I/O and builds no strings of its own; a step doing either is the
-signal it belongs in `steps/` or `format.ts`.
+issues no I/O primitive and builds no strings of its own; code doing either is
+the signal it belongs in `steps/` or `format.ts`. The stronger claim — that it
+performs no I/O at all — is **false**: it still calls `readWorkspaceYaml` and
+`compareLockfiles`, which read from disk. See @./04-module-entry-points.md for
+why a grep for primitives cannot detect that.
 
 **Steps are named, not numbered.** Once the package-manager, config-dependency
 and install steps each dispatch on the detected package manager there is no

@@ -229,12 +229,22 @@ order, fold their results into outputs, report. Token provisioning and
 revocation live in `pre.ts` / `post.ts`; each step's *body* lives in its own
 module under `src/steps/`.
 
-`program.ts` performs **no I/O of its own and builds no strings of its own**.
-That is the invariant the wave-4 restructure established, and it is falsifiable
-by inspection: a `Run.*` call, a `readFileSync`, or a template literal destined
-for a log line appearing in this module means the code belongs in `steps/` or in
-`format.ts`. The last holdout was the `git status` call, which is why
-`steps/detect-changes.ts` exists.
+`program.ts` issues **no I/O primitive and builds no strings of its own**. State
+the invariant that precisely, because the looser version — "performs no I/O" —
+is **false**, and was asserted here until it was checked: `program.ts` still
+calls `readWorkspaceYaml` and `compareLockfiles`, both of which read from disk.
+Direct primitives moved out (the `git status` call last, which is why
+`steps/detect-changes.ts` exists); two service helpers did not.
+
+The falsifiability test has to match the claim, and the obvious one does not.
+Grepping for `Run.*`, `ChildProcess.*` or `node:fs` returns **clean** on this
+module and always would — a call to a helper that reads is still a read, and no
+search for primitives can see it. So: **to check this invariant, follow the
+callees, not the imports.** The narrow grep is what let the false version stand.
+
+Those two calls are a candidate for extraction into steps, which would make the
+stronger claim true. Not yet done, and deliberately not folded into the
+behavior-preserving restructure.
 
 The module exports two things: `program` and `innerProgram`.
 
@@ -354,7 +364,7 @@ convention, and is verifiable by reading the four signatures.
 | `install` | `CommandFailedError` \| `CommandOutputError` | `runInstall` lives here |
 | `format-workspace` | `FileSystemError` | pnpm-only; logs the reason when it does not apply |
 | `custom-commands` | `never` | `runCommands` lives here; returns failures, does **not** conclude |
-| `detect-changes` | `CommandFailedError` \| `CommandOutputError` | the `git status` call; extracted so `program.ts` does no I/O |
+| `detect-changes` | `CommandFailedError` \| `CommandOutputError` | the `git status` call; extracted to get the last I/O primitive out of `program.ts` |
 | `changesets` | `ChangesetError` (+ command errors) | delegates wholly to silk's `DepsRegen` |
 | `commit-and-pr` | `GitHubError` (+ command errors) | one module: the PR must describe a commit that exists |
 
