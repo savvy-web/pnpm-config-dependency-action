@@ -106,10 +106,24 @@ Shared helpers currently in that directory:
     correct says nothing about the others. The two early returns used to publish
     the *pre-run baseline* (`packageManager: null`, `workspaceRoot: ""`) after
     detection had already succeeded; the success path had no assertion at all.
+    - The failure exit is asserted on its **contents**, not only its context,
+      and that is the second defect on the same line: the first fix corrected
+      `packageManager` and left `updates: []` for a run that had really updated
+      things. Fixing half a document is how it looked correct. The harness makes
+      `RegularDeps` return one update, so an exit that drops it produces an
+      empty array rather than a missing field — which parses, and reads as
+      "nothing happened".
     That gap surfaced by accident — a mutation aimed at one early-return path
     landed on the success path instead, and the whole suite stayed green. A
     misfire that reports green is evidence about the path it hit, not a wasted
     attempt.
+- **Change detection** (`unit/steps/detect-changes.test.ts`) — three tests over a
+  `Git.layerTest` that records the `cwd` it was called with. It exists because
+  the composition suite reads only the count, so it would stay green against a
+  step that ran status in the wrong directory or discarded everything but the
+  path — both of which this step has actually done. Mutation-verified in both
+  directions: swapping the root for `process.cwd()` fails one test, flattening
+  the entries to `{ path }` fails the other.
 - **Install dispatch** (`unit/steps/install.test.ts`) — `runInstall` per package
   manager over a `ScriptedSpawner`, asserting the command lines and their order,
   and that the npm path unlinks `package-lock.json` through `node:fs`.

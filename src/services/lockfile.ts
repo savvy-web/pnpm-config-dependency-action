@@ -28,11 +28,11 @@ import type { SupportedPm } from "./package-manager.js";
 export class Lockfile extends Context.Service<
 	Lockfile,
 	{
-		readonly capture: (pm: SupportedPm, workspaceRoot?: string) => Effect.Effect<LockfileModel | null, LockfileError>;
+		readonly capture: (pm: SupportedPm, workspaceRoot: string) => Effect.Effect<LockfileModel | null, LockfileError>;
 		readonly compare: (
 			before: LockfileModel | null,
 			after: LockfileModel | null,
-			workspaceRoot?: string,
+			workspaceRoot: string,
 		) => Effect.Effect<ReadonlyArray<LockfileChange>, LockfileError, WorkspaceDiscovery>;
 	}
 >()("Lockfile") {
@@ -44,8 +44,8 @@ export class Lockfile extends Context.Service<
 	 * `dist`, and that fails only in production because vitest runs the source.
 	 */
 	static readonly layer = Layer.succeed(this, {
-		capture: (pm, workspaceRoot = process.cwd()) => captureLockfileStateImpl(pm, workspaceRoot),
-		compare: (before, after, workspaceRoot = process.cwd()) => compareLockfilesImpl(before, after, workspaceRoot),
+		capture: (pm, workspaceRoot) => captureLockfileStateImpl(pm, workspaceRoot),
+		compare: (before, after, workspaceRoot) => compareLockfilesImpl(before, after, workspaceRoot),
 	});
 }
 
@@ -70,7 +70,7 @@ export const LOCKFILE_NAMES: Record<SupportedPm, string> = {
  */
 export const captureLockfileState = (
 	pm: SupportedPm,
-	workspaceRoot: string = process.cwd(),
+	workspaceRoot: string,
 ): Effect.Effect<LockfileModel | null, LockfileError> => captureLockfileStateImpl(pm, workspaceRoot);
 
 /**
@@ -79,7 +79,7 @@ export const captureLockfileState = (
 export const compareLockfiles = (
 	before: LockfileModel | null,
 	after: LockfileModel | null,
-	workspaceRoot: string = process.cwd(),
+	workspaceRoot: string,
 ): Effect.Effect<ReadonlyArray<LockfileChange>, LockfileError, WorkspaceDiscovery> =>
 	compareLockfilesImpl(before, after, workspaceRoot);
 

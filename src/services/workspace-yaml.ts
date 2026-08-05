@@ -122,15 +122,14 @@ export const sortContent = (content: PnpmWorkspaceContent): PnpmWorkspaceContent
  * Reads, sorts, formats, and writes back the workspace file.
  * This ensures consistency with the lint-staged handler.
  */
-export const formatWorkspaceYaml = (workspaceRoot: string = process.cwd()): Effect.Effect<void, FileSystemError> =>
+export const formatWorkspaceYaml = (workspaceRoot: string): Effect.Effect<void, FileSystemError> =>
 	formatWorkspaceYamlImpl(workspaceRoot);
 
 /**
  * Read pnpm-workspace.yaml content.
  */
-export const readWorkspaceYaml = (
-	workspaceRoot: string = process.cwd(),
-): Effect.Effect<PnpmWorkspaceContent | null, FileSystemError> => readWorkspaceYamlImpl(workspaceRoot);
+export const readWorkspaceYaml = (workspaceRoot: string): Effect.Effect<PnpmWorkspaceContent | null, FileSystemError> =>
+	readWorkspaceYamlImpl(workspaceRoot);
 
 const formatWorkspaceYamlImpl = (workspaceRoot: string): Effect.Effect<void, FileSystemError> =>
 	Effect.gen(function* () {

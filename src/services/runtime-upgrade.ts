@@ -75,7 +75,7 @@ export class RuntimeUpgrade extends Context.Service<
 	{
 		readonly upgrade: (
 			config: RuntimeUpgradeConfig,
-			workspaceRoot?: string,
+			workspaceRoot: string,
 		) => Effect.Effect<readonly RuntimeUpgradeResult[], FileSystemError>;
 	}
 >()("RuntimeUpgrade") {
@@ -93,7 +93,7 @@ export class RuntimeUpgrade extends Context.Service<
 			const deno = yield* DenoResolver;
 			const bun = yield* BunResolver;
 			return {
-				upgrade: (config, workspaceRoot = process.cwd()) => upgradeImpl({ node, deno, bun }, config, workspaceRoot),
+				upgrade: (config, workspaceRoot) => upgradeImpl({ node, deno, bun }, config, workspaceRoot),
 			};
 		}),
 	);

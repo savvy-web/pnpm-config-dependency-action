@@ -56,7 +56,7 @@ export class CatalogConfigDeps extends Context.Service<
 	{
 		readonly update: (
 			deps: ReadonlyArray<string>,
-			workspaceRoot?: string,
+			workspaceRoot: string,
 		) => Effect.Effect<CatalogConfigDepsResult, FileSystemError>;
 	}
 >()("CatalogConfigDeps") {
@@ -78,7 +78,7 @@ export class CatalogConfigDeps extends Context.Service<
 				NpmRegistry | LockfileReader | HttpClient.HttpClient | ChildProcessSpawner.ChildProcessSpawner
 			>();
 			return {
-				update: (deps, workspaceRoot = process.cwd()) => updateImpl(deps, workspaceRoot).pipe(Effect.provide(context)),
+				update: (deps, workspaceRoot) => updateImpl(deps, workspaceRoot).pipe(Effect.provide(context)),
 			};
 		}),
 	);

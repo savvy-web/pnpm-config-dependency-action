@@ -35,6 +35,31 @@ needs typing without being yielded, the kit exposes a companion `*Shape`
 interface (e.g. `NpmRegistryShape`, `WorkspaceDiscoveryShape`, `GitBranchShape`,
 `PullRequestShape`).
 
+**The workspace root is a required parameter everywhere it appears — every
+service method AND every standalone helper.** There is no `process.cwd()` default
+left anywhere in `src/`.
+
+This is the branch's most-repeated bug closed structurally rather than one site
+at a time. Four separate instances were found — `commitChanges`,
+`ensureBaseHistory`, `steps/detect-changes.ts` and `steps/custom-commands.ts` —
+in four separate rounds, three of them by reviewers rather than by us. **Every
+one entered through a parameter that quietly defaulted to `process.cwd()`.** The
+action can legitimately be invoked from a subdirectory, so the default does not
+fail: it reads a different tree, succeeds, and reports a confident wrong answer.
+
+While the defaults existed the same bug could reappear at any new call site with
+nothing to say so. Required parameters turn every future instance into a compile
+error, which is the whole point — it converts a class of silent wrong-directory
+reads into something the type checker refuses.
+
+Worth recording what the change actually cost: **`src/` needed no edits at all.**
+Every production caller already passed a root explicitly, so the defaults were
+pure hazard providing nothing. Three test call sites were relying on them, each
+silently reading the runner's cwd — and two of those were `chdir`-ing the test
+process into a temp directory *specifically to reach the default*, which is
+global mutable state in a test suite. They now pass the root, which is both what
+production does and the stronger assertion.
+
 ### Workspace discovery (via @effected/workspaces)
 
 Domain services consume `WorkspaceDiscovery` directly, via its **arg-less**
@@ -217,7 +242,7 @@ construction).
 
 ```typescript
 export class PackageManagerUpgrade extends Context.Service<PackageManagerUpgrade, {
- readonly upgrade: (mode: string, pm: SupportedPm, workspaceRoot?: string) =>
+ readonly upgrade: (mode: string, pm: SupportedPm, workspaceRoot: string) =>
   Effect.Effect<PackageManagerUpgradeOutcome, FileSystemError>;
 }>()("PackageManagerUpgrade") {}
 ```
@@ -345,7 +370,7 @@ under `catalogMode: strict`). Depends on `NpmRegistry` and `ReleaseAge`.
 
 ```typescript
 export class ConfigDeps extends Context.Service<ConfigDeps, {
- readonly updateConfigDeps: (deps: ReadonlyArray<string>, workspaceRoot?: string) =>
+ readonly updateConfigDeps: (deps: ReadonlyArray<string>, workspaceRoot: string) =>
   Effect.Effect<ReadonlyArray<DependencyUpdateResult>>;
 }>()("ConfigDeps") {}
 ```
@@ -374,7 +399,7 @@ is where bun reads them from. A nested `workspaces.catalog(s)` copy is still rea
 
 ```typescript
 export class CatalogConfigDeps extends Context.Service<CatalogConfigDeps, {
- readonly update: (deps: ReadonlyArray<string>, workspaceRoot?: string) =>
+ readonly update: (deps: ReadonlyArray<string>, workspaceRoot: string) =>
   Effect.Effect<CatalogConfigDepsResult, FileSystemError>;
 }>()("CatalogConfigDeps") {}
 ```
@@ -434,7 +459,7 @@ which promotes deps to catalogs under `catalogMode: strict`). Depends on
 export class RegularDeps extends Context.Service<RegularDeps, {
  readonly updateRegularDeps: (
   patterns: ReadonlyArray<string>,
-  workspaceRoot?: string,
+  workspaceRoot: string,
   exclude?: ReadonlySet<string>,
  ) => Effect.Effect<ReadonlyArray<DependencyUpdateResult>>;
 }>()("RegularDeps") {}
@@ -493,9 +518,9 @@ normalizes `pnpm-lock.yaml`, `bun.lock` and `package-lock.json` into one model v
 
 ```typescript
 export class Lockfile extends Context.Service<Lockfile, {
- readonly capture: (pm: SupportedPm, workspaceRoot?: string) =>
+ readonly capture: (pm: SupportedPm, workspaceRoot: string) =>
   Effect.Effect<LockfileModel | null, LockfileError>;
- readonly compare: (before, after, workspaceRoot?) =>
+ readonly compare: (before, after, workspaceRoot) =>
   Effect.Effect<ReadonlyArray<LockfileChange>, LockfileError, WorkspaceDiscovery>;
 }>()("Lockfile") {}
 ```
@@ -518,7 +543,7 @@ failures are caught and skipped per-runtime, never fatal.
 
 ```typescript
 export class RuntimeUpgrade extends Context.Service<RuntimeUpgrade, {
- readonly upgrade: (config: RuntimeUpgradeConfig, workspaceRoot?: string) =>
+ readonly upgrade: (config: RuntimeUpgradeConfig, workspaceRoot: string) =>
   Effect.Effect<readonly RuntimeUpgradeResult[], FileSystemError>;
 }>()("RuntimeUpgrade") {}
 ```

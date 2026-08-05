@@ -284,6 +284,19 @@ export const innerProgram = (
 					// ── workspace formatting ────────────────────────────────────────
 					yield* formatWorkspaceStep(detected.pm, detected.root);
 
+					// Aggregated HERE, above the custom-commands step, not below it.
+					// Every source is already resolved by this point, and the failure
+					// exit below has to describe them: a run that updated five
+					// dependencies and then failed `pnpm test` did do that work, and a
+					// document reporting an empty update set for it is false.
+					const allUpdates = [
+						...configUpdatesFromPackageManager,
+						...runtimeUpdates,
+						...configUpdates,
+						...regularUpdates,
+						...peerUpdates,
+					];
+
 					// ── custom commands ─────────────────────────────────────────────
 					// The step reports what happened; concluding the check run and
 					// publishing outputs stay here, because the run's verdict is a
@@ -298,14 +311,20 @@ export const innerProgram = (
 							}),
 						);
 
+						// `has-changes` is false because nothing was committed and no PR
+						// opened — that is what the flag means. `updates-count` reports the
+						// updates that DID happen, so it cannot contradict the document
+						// below; the two are the same fact, and one path wording it two
+						// ways is exactly the drift the single-document design forbids.
 						yield* outputs.set("has-changes", "false");
-						yield* outputs.set("updates-count", "0");
+						yield* outputs.set("updates-count", String(allUpdates.length));
 						// Re-encode `result` rather than leaving the pre-run baseline in
-						// place. By this point detection HAS succeeded, so the baseline's
-						// `packageManager: null` and `workspaceRoot: ""` would be false
-						// statements about a run that got this far — and a consumer reading
-						// the document to explain a failed run is exactly who needs the
-						// context. `hasChanges` stays false: nothing was committed.
+						// place. Detection HAS succeeded by now, and so have the update
+						// steps — a run that bumped five dependencies and then failed
+						// `pnpm test` did that work, and the working tree still holds it.
+						// Publishing an empty update set here would be a false statement
+						// about a run that a consumer is reading precisely to find out
+						// what happened before it broke.
 						yield* outputs.set(
 							"result",
 							encodeRunResult(
@@ -315,8 +334,12 @@ export const innerProgram = (
 									detected,
 									branch: inputs.branch,
 									targetBranch: inputs.targetBranch,
-									updates: [],
-									deltas: [],
+									updates: allUpdates,
+									deltas: configDeltas,
+									// The "after" lockfile snapshot and its comparison run
+									// below this exit, so there is genuinely nothing to
+									// report here — empty because it was never computed,
+									// not because it was discarded.
 									lockfileChanges: [],
 									changesets: [],
 									pullRequest: null,
@@ -334,13 +357,6 @@ export const innerProgram = (
 					const changes = yield* compareLockfiles(lockfileBefore, lockfileAfter, detected.root);
 					yield* Effect.logDebug(`Detected changes: ${JSON.stringify(changes)}`);
 
-					const allUpdates = [
-						...configUpdatesFromPackageManager,
-						...runtimeUpdates,
-						...configUpdates,
-						...regularUpdates,
-						...peerUpdates,
-					];
 					yield* Effect.logDebug(
 						`Total updates: ${allUpdates.length} (config: ${configUpdates.length + configUpdatesFromPackageManager.length}, dev: ${regularUpdates.length}, peer: ${peerUpdates.length})`,
 					);

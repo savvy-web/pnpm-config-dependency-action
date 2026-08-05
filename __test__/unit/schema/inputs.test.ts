@@ -19,7 +19,7 @@
 
 import { readFileSync } from "node:fs";
 import { ActionInput } from "@effected/github-actions";
-import { Effect, Exit, References } from "effect";
+import { Cause, Effect, Exit, References, Result } from "effect";
 import { describe, expect, it } from "vitest";
 import { INPUT_NAMES, readInputs } from "../../../src/schema/inputs.js";
 
@@ -32,6 +32,22 @@ import { INPUT_NAMES, readInputs } from "../../../src/schema/inputs.js";
  */
 const runnerEnv = (inputs: Readonly<Record<string, string>>): Record<string, string> =>
 	Object.fromEntries(Object.entries(inputs).map(([name, value]) => [`INPUT_${name.toUpperCase()}`, value]));
+
+/**
+ * The `field` an `InvalidInputError` names, or `null` for any other failure.
+ *
+ * Reaching into the cause is deliberate: asserting only that a read failed
+ * cannot distinguish "rejected the right input" from "rejected a different one",
+ * and a validation error that names the wrong field sends the reader to correct
+ * configuration and tells them it is broken.
+ */
+const failedField = (exit: Exit.Exit<unknown, unknown>): string | null => {
+	if (Exit.isSuccess(exit)) return null;
+	const error = Cause.findError(exit.cause);
+	if (!Result.isSuccess(error)) return null;
+	const field = (error.success as { field?: unknown }).field;
+	return typeof field === "string" ? field : null;
+};
 
 const read = (inputs: Readonly<Record<string, string>>) =>
 	Effect.runPromiseExit(
@@ -147,7 +163,7 @@ describe("readInputs — validation", () => {
 		expect(Exit.isFailure(exit)).toBe(true);
 	});
 
-	it("rejects a glob in peer-lock", async () => {
+	it("rejects a glob in peer-lock, naming peer-lock", async () => {
 		// `dependencies` entries ARE globs; peer entries are matched as exact
 		// package names. A `@scope/*` in `peer-lock` therefore matched nothing at
 		// all — and did so silently: the overlap check compares raw strings so it
@@ -156,12 +172,19 @@ describe("readInputs — validation", () => {
 		const exit = await read({ dependencies: "@scope/*", "peer-lock": "@scope/*" });
 
 		expect(Exit.isFailure(exit)).toBe(true);
+		expect(failedField(exit)).toBe("peer-lock");
 	});
 
-	it("rejects a glob in peer-minor", async () => {
+	it("rejects a glob in peer-minor, naming peer-minor", async () => {
+		// The `field` assertion is the point, not the failure. The first version of
+		// this validation merged both lists and hardcoded `field: "peer-lock"`, so
+		// a glob in `peer-minor` alone sent the reader to an input that was
+		// correct. `Exit.isFailure` alone passes against that bug — which is why
+		// the three tests shipped with it, including a control, all went green.
 		const exit = await read({ dependencies: "effect*", "peer-minor": "effect*" });
 
 		expect(Exit.isFailure(exit)).toBe(true);
+		expect(failedField(exit)).toBe("peer-minor");
 	});
 
 	it("accepts a literal scoped package name in peer-lock", async () => {

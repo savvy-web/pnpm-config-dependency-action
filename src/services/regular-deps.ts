@@ -38,7 +38,7 @@ export class RegularDeps extends Context.Service<
 		 */
 		readonly updateRegularDeps: (
 			patterns: ReadonlyArray<string>,
-			workspaceRoot?: string,
+			workspaceRoot: string,
 			exclude?: ReadonlySet<string>,
 		) => Effect.Effect<ReadonlyArray<DependencyUpdateResult>>;
 	}
@@ -57,7 +57,7 @@ export class RegularDeps extends Context.Service<
 			const discovery = yield* WorkspaceDiscovery;
 			const releaseAge = yield* ReleaseAge;
 			return {
-				updateRegularDeps: (patterns, workspaceRoot = process.cwd(), exclude) =>
+				updateRegularDeps: (patterns, workspaceRoot, exclude) =>
 					updateRegularDepsImpl(patterns, registry, discovery, releaseAge, workspaceRoot, exclude),
 			};
 		}),

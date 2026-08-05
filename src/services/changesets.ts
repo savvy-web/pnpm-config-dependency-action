@@ -76,8 +76,7 @@ export class Changesets extends Context.Service<
 /**
  * Check if the repository uses changesets.
  */
-export const hasChangesets = (workspaceRoot: string = process.cwd()): boolean =>
-	existsSync(join(workspaceRoot, ".changeset"));
+export const hasChangesets = (workspaceRoot: string): boolean => existsSync(join(workspaceRoot, ".changeset"));
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Live Layer

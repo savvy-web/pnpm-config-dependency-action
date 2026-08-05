@@ -188,7 +188,7 @@ describe("parseSpecifier", () => {
 
 describe("RegularDeps.updateRegularDeps", () => {
 	it("returns empty array when no patterns provided", async () => {
-		const result = await runWithService((s) => s.updateRegularDeps([]));
+		const result = await runWithService((s) => s.updateRegularDeps([], makeTempDir()));
 		expect(result).toEqual([]);
 	});
 

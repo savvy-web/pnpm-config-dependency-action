@@ -31,7 +31,7 @@ export class ConfigDeps extends Context.Service<
 	{
 		readonly updateConfigDeps: (
 			deps: ReadonlyArray<string>,
-			workspaceRoot?: string,
+			workspaceRoot: string,
 		) => Effect.Effect<ReadonlyArray<DependencyUpdateResult>>;
 	}
 >()("ConfigDeps") {
@@ -48,8 +48,7 @@ export class ConfigDeps extends Context.Service<
 			const registry = yield* NpmRegistry;
 			const releaseAge = yield* ReleaseAge;
 			return {
-				updateConfigDeps: (deps, workspaceRoot = process.cwd()) =>
-					updateConfigDepsImpl(deps, registry, releaseAge, workspaceRoot),
+				updateConfigDeps: (deps, workspaceRoot) => updateConfigDepsImpl(deps, registry, releaseAge, workspaceRoot),
 			};
 		}),
 	);

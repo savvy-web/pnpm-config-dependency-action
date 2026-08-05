@@ -318,6 +318,26 @@ pattern is worth naming because it recurs:
   upstream, and left asserting a hazard that no longer existed.
 - The raw-`node:` enumeration claimed 14 modules, listed 12, and the true count
   was 13 — the number, the list, and each other all disagreed.
+- **A control proves the wrong half.** Three tests were written for the peer-glob
+  rejection, one of them deliberately a control — and all three asserted only
+  `Exit.isFailure`, which the bug they were meant to catch *also* satisfies (it
+  failed, naming the wrong input). The control established that a valid scoped
+  name is still accepted, which was true and beside the point. **A control makes
+  a test non-vacuous about the property it controls for; it does not make the
+  test non-vacuous generally.** Having written one is not evidence the assertion
+  discriminates.
+- **The mutant has to be aimed at the assertion, not the code.** Three defects
+  shipped in one review round, two of them tests that could not fail, and all
+  three from the same habit: running a mutant against the *code* that changed and
+  not against the *new assertion*. The glob case is the clean illustration — the
+  fix was correct, the test was decoration, and only a mutant aimed at the
+  assertion could have shown it. Applying that rule in the next round caught a
+  gap nobody had listed.
+- **A false justification is worse than none**, because it stops the next reader
+  checking. A test carried the comment "the double would die if `upgrade` were
+  called"; the double was a plain `Layer.succeed` and would have answered
+  happily. The comment is why nobody re-examined an assertion that could not
+  fail.
 - "`-c core.fileMode=false` cannot be scoped" — the ruling that kept
   `@effected/git` out for a release. **Every individual claim in it was true**,
   which is what made it hard to see: the kit really has no per-command config

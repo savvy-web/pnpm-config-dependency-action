@@ -359,7 +359,33 @@ Indexing is a different claim, and it does not follow. A present-but-empty array
 
 `packageManager` and `pullRequest` are nullable rather than carrying a placeholder: a value that parses and is false is worse than an absent one, because a consumer branching on it cannot tell that it is branching on a lie.
 
-Only a run that reaches the end with changes populates the document. Every earlier exit — no changes detected, a failed `run` command, an aborted input read — leaves `result` at the empty-run baseline, which is exactly this:
+**When each field is empty or `null` is a contract, not an accident.** There are
+three exits, and they differ:
+
+| exit | `packageManager` / `workspaceRoot` | `updates` | `hasChanges` |
+| --- | --- | --- | --- |
+| completed with changes | the detected values | every change made | `true` |
+| completed, nothing to do | the detected values | whatever resolved (often empty) | `false` |
+| a `run` command failed | the detected values | the updates made before the failure | `false` |
+| aborted before detection | `null` / `""` | `[]` | `false` |
+
+So **`packageManager` is `null` only when the run never got as far as detecting
+one** — an invalid input, a missing credential, any failure before the workspace
+was inspected. It is not a "nothing happened" marker: a run that detected pnpm,
+found no updates and exited reports `"pnpm"`, and a run that updated three
+dependencies and then failed `pnpm test` reports those three updates with
+`hasChanges: false`.
+
+`hasChanges` means "a commit was made and a pull request opened or updated" —
+nothing weaker. Reading it as "did anything happen" will mislead you on the
+failed-command exit, where real work sits in the working tree uncommitted.
+
+That last exit is the one to design around: `updates` being non-empty while
+`hasChanges` is `false` is a *successful update followed by a failed check*, and
+the `updates-count` output carries the same number so the two cannot disagree.
+
+The baseline document — what an abort-before-detection publishes — is exactly
+this:
 
 ```json
 {
@@ -378,7 +404,7 @@ Only a run that reaches the end with changes populates the document. Every earli
 }
 ```
 
-So check `hasChanges` (or the `has-changes` output) before trusting the context fields — a no-changes run reports `packageManager: null` even though it did detect one.
+A consumer can therefore parse unconditionally and branch on `packageManager === null` to mean "this run never started properly", which is a different question from `hasChanges === false`.
 
 ### Using the `result` document
 

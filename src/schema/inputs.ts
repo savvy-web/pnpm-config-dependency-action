@@ -185,17 +185,27 @@ export const readInputs = Effect.gen(function* () {
 	// warning below DOES fire but reads as a configuration nit, and the run
 	// completes having synced no peer ranges at all. Rejecting is the only
 	// signal proportional to "this input did nothing".
-	const globbed = [...peerLock, ...peerMinor].filter((pkg) => /[*?[\]]/.test(pkg));
-	if (globbed.length > 0) {
-		yield* Effect.fail(
-			new InvalidInputError({
-				field: "peer-lock",
-				reason:
-					`Glob patterns are not supported in peer-lock/peer-minor (they match exact package names): ${globbed.join(", ")}. ` +
-					"Use `dependencies` for glob matching and list each peer dependency by name.",
-				value: undefined,
-			}),
-		);
+	// Validated per input, not over a merged list. Merging them and reporting a
+	// hardcoded field name is the version this replaces: a glob in `peer-minor`
+	// alone was reported against `peer-lock`, sending the reader to an input that
+	// was fine. An error that names the wrong field is worse than a vague one,
+	// because it is specific and confidently wrong.
+	for (const [field, entries] of [
+		["peer-lock", peerLock],
+		["peer-minor", peerMinor],
+	] as const) {
+		const globbed = entries.filter((pkg) => /[*?[\]]/.test(pkg));
+		if (globbed.length > 0) {
+			yield* Effect.fail(
+				new InvalidInputError({
+					field,
+					reason:
+						`Glob patterns are not supported in ${field} (entries match exact package names): ${globbed.join(", ")}. ` +
+						"Use `dependencies` for glob matching and list each peer dependency by name.",
+					value: undefined,
+				}),
+			);
+		}
 	}
 
 	// Validate peer-lock and peer-minor don't overlap

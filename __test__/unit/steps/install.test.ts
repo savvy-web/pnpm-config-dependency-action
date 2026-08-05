@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect, References } from "effect";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { runInstall } from "../../../src/steps/install.js";
 import { fromMap } from "../../utils/spawner.js";
 
@@ -15,22 +15,18 @@ import { fromMap } from "../../utils/spawner.js";
  * that invariant no longer exists and the surviving assertion is which commands
  * run, in what order.
  */
-const run = (pm: "pnpm" | "bun" | "npm") => {
+const run = (pm: "pnpm" | "bun" | "npm", workspaceRoot = "/ws") => {
 	const spawner = fromMap();
 	return Effect.runPromise(
-		runInstall(pm).pipe(Effect.provide(spawner.layer), Effect.provideService(References.MinimumLogLevel, "None")),
-	).then(() => ({ exec: spawner.spawns.map((call) => [call.command, ...call.args].join(" ")) }));
+		runInstall(pm, workspaceRoot).pipe(
+			Effect.provide(spawner.layer),
+			Effect.provideService(References.MinimumLogLevel, "None"),
+		),
+	).then(() => ({
+		exec: spawner.spawns.map((call) => [call.command, ...call.args].join(" ")),
+		cwds: spawner.spawns.map((call) => call.cwd),
+	}));
 };
-
-/** Restored after any test that chdirs into a temp workspace. */
-let cwd: string | null = null;
-
-afterEach(() => {
-	if (cwd !== null) {
-		process.chdir(cwd);
-		cwd = null;
-	}
-});
 
 describe("runInstall", () => {
 	it("regenerates the lockfile for pnpm", async () => {
@@ -45,33 +41,48 @@ describe("runInstall", () => {
 		expect(calls.exec).toEqual(["bun install --force"]);
 	});
 
+	it("runs every command at the workspace root", async () => {
+		// `runInstall` used to default this parameter to `process.cwd()`. That is
+		// the shape of four separate defects on this branch, so the root being
+		// honoured is asserted rather than assumed — and `/ws` is not a directory
+		// the test process could reach by accident.
+		const calls = await run("pnpm", "/ws");
+
+		expect(calls.cwds).toEqual(["/ws", "/ws"]);
+	});
+
 	it("deletes the lockfile and installs for npm", async () => {
 		// The removal goes through node:fs, not a shelled-out `rm`, so assert the
 		// file is actually gone rather than that a command was issued — `rm` does
 		// not exist on a Windows runner, and the pnpm path is deliberately
 		// platform-agnostic for the same reason.
-		cwd = process.cwd();
+		//
+		// No `process.chdir` here. These two tests used to chdir into the temp
+		// directory purely to reach the `process.cwd()` default; with the root
+		// required they pass it, which is both what production does and a stronger
+		// assertion — the unlink has to resolve against the ARGUMENT, since the
+		// test process is never inside this directory.
 		const root = mkdtempSync(join(tmpdir(), "run-install-"));
-		process.chdir(root);
-		writeFileSync(join(root, "package-lock.json"), "{}");
+		try {
+			writeFileSync(join(root, "package-lock.json"), "{}");
 
-		const calls = await run("npm");
+			const calls = await run("npm", root);
 
-		expect(existsSync(join(root, "package-lock.json"))).toBe(false);
-		expect(calls.exec).toEqual(["npm install"]);
-
-		rmSync(root, { recursive: true, force: true });
+			expect(existsSync(join(root, "package-lock.json"))).toBe(false);
+			expect(calls.exec).toEqual(["npm install"]);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
 	});
 
 	it("does not fail for npm when there is no lockfile to remove", async () => {
-		cwd = process.cwd();
 		const root = mkdtempSync(join(tmpdir(), "run-install-"));
-		process.chdir(root);
+		try {
+			const calls = await run("npm", root);
 
-		const calls = await run("npm");
-
-		expect(calls.exec).toEqual(["npm install"]);
-
-		rmSync(root, { recursive: true, force: true });
+			expect(calls.exec).toEqual(["npm install"]);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
 	});
 });

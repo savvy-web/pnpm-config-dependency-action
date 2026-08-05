@@ -52,7 +52,7 @@ import type { SupportedPm } from "../services/package-manager.js";
  */
 export const runInstall = (
 	pm: SupportedPm,
-	workspaceRoot: string = process.cwd(),
+	workspaceRoot: string,
 ): Effect.Effect<void, CommandFailedError | CommandOutputError, ChildProcessSpawner.ChildProcessSpawner> =>
 	Effect.gen(function* () {
 		// Run.text fails typed on a non-zero exit, preserving the old `exec`

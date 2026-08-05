@@ -671,12 +671,24 @@ describe("innerProgram — no silent skips", () => {
 		expect(document.workspaceRoot).toBe(realRoot);
 	});
 
-	it("re-encodes `result` with the detected context when a custom command fails", async () => {
-		// The failure exit has the same defect and the same fix. It is asserted
-		// separately because the two paths return through different branches, so
-		// one being correct says nothing about the other.
+	it("reports the completed work in `result` when a custom command fails", async () => {
+		// The failure exit returns through its own branch, so the other two exits
+		// being correct says nothing about it.
+		//
+		// Two separate defects have lived here. First the document carried the
+		// pre-run BASELINE, so `packageManager` was null after detection had
+		// succeeded. That was fixed — and the fix left the document's *contents*
+		// empty, so a run that bumped a dependency and then failed `pnpm test`
+		// reported an empty update set for work that had actually happened and was
+		// still sitting in the working tree. Fixing half a document is how it
+		// looked correct.
+		//
+		// The update is what discriminates: the harness makes `RegularDeps` return
+		// one, so an exit that drops it produces `updates: []` rather than a
+		// missing field, which parses and reads as "nothing happened".
 		writeFixture("pnpm");
 		const harness = makeHarness({
+			regularUpdates: [update("effect", "^3.0.0", "^3.1.0")],
 			gitStatus: ["package.json"],
 			commands: new Map([["sh -c exit 1", { exit: 1, stdout: "", stderr: "boom" }]]),
 		});
@@ -685,9 +697,16 @@ describe("innerProgram — no silent skips", () => {
 
 		expect(Exit.isFailure(exit)).toBe(true);
 		const document = JSON.parse(harness.outputs.get("result") ?? "{}");
-		expect(document.hasChanges).toBe(false);
 		expect(document.packageManager).toBe("pnpm");
 		expect(document.workspaceRoot).toBe(realRoot);
+		// `hasChanges` is about the commit/PR, which did not happen.
+		expect(document.hasChanges).toBe(false);
+		// The updates did happen, and the document must say so.
+		expect(document.updates).toContainEqual(
+			expect.objectContaining({ dependency: "effect", from: "^3.0.0", to: "^3.1.0" }),
+		);
+		// The scalar cannot contradict the document — they are the same fact.
+		expect(harness.outputs.get("updates-count")).toBe("1");
 	});
 
 	it("pins core.fileMode=false on the checkout before any status read", async () => {

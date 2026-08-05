@@ -11,14 +11,27 @@
  * @module steps/detect-changes
  */
 
-import type { GitCommandError, NotARepositoryError, UnknownRefError } from "@effected/git";
+import type { GitCommandError, NotARepositoryError, StatusEntry, UnknownRefError } from "@effected/git";
 import { Git } from "@effected/git";
 import { Effect } from "effect";
 
 /** The file-level change signal. */
 export interface DetectChangesResult {
-	/** One entry per changed path; only the count is read today. */
-	readonly entries: ReadonlyArray<{ readonly path: string }>;
+	/**
+	 * The working tree's changed entries, **as `@effected/git` models them** —
+	 * both porcelain status columns and `origPath`, not a narrowed `{ path }`.
+	 *
+	 * The point of adopting the kit's `status` was that the typed entry makes a
+	 * whole class of defect unrepresentable: a rename read as a single unusable
+	 * path, and a deletion whose two columns disagree (`AD`, `RD`) read as a
+	 * modification. Flattening at this boundary would keep the *fix* while
+	 * discarding the *property* — the next consumer that needs to know a change
+	 * was a rename would have to re-derive it, from a shape that no longer says.
+	 *
+	 * Only the count is consumed today. That is a fact about the consumer being
+	 * thin, not a reason for this step to narrow what it returns.
+	 */
+	readonly entries: ReadonlyArray<StatusEntry>;
 	readonly hasChanges: boolean;
 }
 

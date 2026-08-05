@@ -85,7 +85,7 @@ describe("ConfigDeps.updateConfigDeps", () => {
 	};
 
 	it("returns empty array when no deps provided", async () => {
-		const result = await runWithService((s) => s.updateConfigDeps([]));
+		const result = await runWithService((s) => s.updateConfigDeps([], tempDir));
 		expect(result).toEqual([]);
 	});
 

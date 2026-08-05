@@ -445,6 +445,14 @@ const appLayer = makeAppLayer(dryRun, { runtimeLive });
 
 ### Step 14: Run Custom Commands (if specified)
 
+The `allUpdates` aggregation happens **above** this step, not below it. Every
+source is resolved by now, and this step's failure exit has to describe them: a
+run that bumped five dependencies and then failed `pnpm test` did that work, and
+it is still in the working tree. `updates-count` reports the same number the
+`result` document does, so the scalar and the document cannot disagree about one
+run — `has-changes` stays `false`, because that flag means "a commit was made and
+a PR opened", which did not happen.
+
 - `runCommands(commands, root)` executes each `run` entry sequentially via
   `Run.collect` on `sh -c …`, **anchored at the detected workspace root**. A
   non-zero exit is a **result**, not an error channel failure, so the failure
@@ -464,6 +472,11 @@ const appLayer = makeAppLayer(dryRun, { runtimeLive });
   type).
 - `Git.status(root)` from `@effected/git` supplies the file-level signal, as a
   list of typed `StatusEntry` values rather than porcelain text this repo parses.
+  **`detectChangesStep` returns those entries unnarrowed**, even though only the
+  count is read today. Flattening them to `{ path }` at that boundary would keep
+  the rename/`AD`/`RD` fix while discarding the property that makes those
+  defects unrepresentable — a thin consumer is a fact about the consumer, not a
+  reason for the step to narrow its own contract.
   `BranchManager.commitChanges` reads the same way, which is what keeps the run's
   verdict and the commit's contents from disagreeing.
 - `core.fileMode=false` is **not** a per-command flag any more. It is written

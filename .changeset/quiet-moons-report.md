@@ -36,8 +36,8 @@ edited — and passed, reporting green about the wrong tree.
 
 `dependencies` entries are globs; peer entries are matched as exact package
 names. A `@scope/*` in `peer-lock` therefore matched nothing, no peer range was
-synced, and the run reported success. Those inputs now fail with a clear error
-naming the offending entries.
+synced, and the run reported success. Those inputs now fail with an error naming
+the offending entries **and the input they came from**.
 
 ### Files silently missing from commits
 
@@ -72,13 +72,24 @@ will enforce it at install instead.
 
 Tracked upstream as [spencerbeggs/effected#292](https://github.com/spencerbeggs/effected/issues/292).
 
-### The `result` document described the wrong run on two exit paths
+### The `result` document described the wrong run on the non-success exits
 
 A run that ended at the no-changes exit, or because a custom command failed,
 published the *pre-run baseline* document — `packageManager: null`,
 `workspaceRoot: ""` — even though detection had already succeeded. It parsed,
 every field was present, and nothing in the log distinguished it from a run that
-genuinely never detected anything. Both exits now encode the run's real context.
+genuinely never detected anything.
+
+The failed-command exit additionally reported an **empty update set** for work
+that had actually happened: a run that bumped three dependencies and then failed
+`pnpm test` left those bumps in the working tree while telling consumers it had
+changed nothing. Both exits now carry the run's real context *and* its completed
+updates, and `updates-count` matches, so the scalar and the document cannot
+disagree.
+
+`packageManager` is now `null` in exactly one case — a run that aborted before
+detecting a package manager at all. `docs/02-configuration.md` documents each
+exit's shape.
 
 ### Outputs missing on failure paths
 
@@ -96,6 +107,14 @@ Every declared output is now published on every exit path. Previously a run that
 | @effected/git | dependency | added | — | ^0.5.2 |
 
 ## Refactoring
+
+- **The workspace root is now a required parameter on every service method and
+  helper that takes one** — no `process.cwd()` default remains in the action.
+  Four separate wrong-directory defects on this release entered through such a
+  default, each one silent: the action can be invoked from a subdirectory, so the
+  default reads a different tree, succeeds, and reports a confident wrong answer.
+  Requiring the parameter makes any future instance a compile error. No behavior
+  changes — every caller already passed a root.
 
 - The `git status` reads behind the change verdict and the commit file list now
   go through `@effected/git`, which models the two porcelain columns separately.

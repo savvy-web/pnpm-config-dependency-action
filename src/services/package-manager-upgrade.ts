@@ -131,7 +131,7 @@ export class PackageManagerUpgrade extends Context.Service<
 		readonly upgrade: (
 			mode: string,
 			pm: SupportedPm,
-			workspaceRoot?: string,
+			workspaceRoot: string,
 		) => Effect.Effect<PackageManagerUpgradeOutcome, FileSystemError>;
 	}
 >()("PackageManagerUpgrade") {
@@ -147,8 +147,7 @@ export class PackageManagerUpgrade extends Context.Service<
 		Effect.gen(function* () {
 			const registry = yield* NpmRegistry;
 			return {
-				upgrade: (mode, pm, workspaceRoot = process.cwd()) =>
-					upgradePackageManagerImpl(registry, mode, pm, workspaceRoot),
+				upgrade: (mode, pm, workspaceRoot) => upgradePackageManagerImpl(registry, mode, pm, workspaceRoot),
 			};
 		}),
 	);
