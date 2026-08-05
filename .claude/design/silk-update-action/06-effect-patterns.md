@@ -131,8 +131,10 @@ failure), selected by `runtimeLive`. `resolve({ range })` → `.latest`.
   `ChildProcessSpawner`
 - `PackageManagerUpgrade` / `PackageManagerUpgradeLive` — `NpmRegistry`
 - `RuntimeUpgrade` / `RuntimeUpgradeLive` — the three resolvers
-- `ReleaseAge` / `ReleaseAgeLive(workspaceRoot?)` — `ChildProcessSpawner`,
-  `NpmRegistry`; `ReleaseAgeNoop` is the inert test layer
+- `ReleaseAge` / `ReleaseAgeLive()` — `WorkspaceCatalogs`, `NpmRegistry`;
+  `ReleaseAgeNoop` is the inert test layer. It no longer takes a workspace root
+  or needs a `ChildProcessSpawner`: the root is bound when `WorkspaceCatalogs`'
+  layer is built, and the hook-replay subprocess is now the kit's, not ours
 - `ConfigDeps` / `ConfigDepsLive` — `NpmRegistry`, `ReleaseAge`
 - `CatalogConfigDeps` / `CatalogConfigDepsLive` — `NpmRegistry`, `LockfileReader`,
   `HttpClient`, `ChildProcessSpawner`

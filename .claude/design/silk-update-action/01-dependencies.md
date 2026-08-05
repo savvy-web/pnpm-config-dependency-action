@@ -204,21 +204,44 @@ The action runs on **Effect v4** (`effect` / `@effect/platform-node` both resolv
   `Yaml.parse` / `Yaml.stringify` return Effects (rather than throwing like the `yaml` npm
   package), so `workspace-yaml.ts` yields them and maps failures into `FileSystemError`.
 
-### Duplicate resolutions — RESOLVED
+### Duplicate resolutions — one is BACK, and its provenance changed
 
-This document previously recorded two copies each of `@effected/workspaces`
-(`0.9.0` / `0.8.0`) and `@effected/npm` (`0.5.0` / `0.4.0`), the lower copy of each coming
-entirely from the `@vitest-agent/plugin` devDependency tree, and predicted they would clear
-when that plugin bumped. **They have.** `pnpm-lock.yaml` now resolves exactly one copy of
-each — `@effected/workspaces@0.10.0` and `@effected/npm@0.8.3` — on
-`@vitest-agent/plugin@2.0.13`.
+**Current state, verified rather than assumed:** `@effected/npm` resolves a single
+copy (`0.8.3`). `@effected/workspaces` resolves **two** — `0.10.0` and `0.9.5`.
 
-Kept as a record rather than deleted, because the reasoning is the reusable part: Effect
-resolves services by the tag's **string id**, so even a genuine duplicate shares one provided
-layer. A duplicate here is a bundle-size concern, not a correctness one — which is why it was
-right to wait it out rather than force a resolution.
+```text
+$ pnpm why @effected/workspaces
+…
+Found 2 versions of @effected/workspaces
+```
 
-*Verify with* `grep -oE "@effected/(workspaces|npm)@[0-9.]+" pnpm-lock.yaml | sort -u`.
+**The provenance is not what it was, and this is the part that matters.** The old
+duplicate came *entirely* from the `@vitest-agent/plugin` devDependency tree, which is why
+this document could say it "never reaches the shipped artifact." That is **no longer true**:
+`0.9.5` now also arrives through **`@savvy-web/silk-effects@5.3.0`**, which is a *runtime*
+dependency of this action, and every runtime dependency is inlined into `dist/main.js`. So
+two copies of the workspaces kit are bundled, not one.
+
+The trigger is the caret trap documented above: this action moved to `^0.10.0` while
+silk-effects still declares `^0.9.5`, and caret pins the minor on `0.x`, so the two ranges
+cannot dedupe.
+
+**On the "bundle size, not correctness" reasoning** — still *probably* right, but it is now
+load-bearing rather than academic, so state its limit. Effect resolves services by the tag's
+**string id**, so a layer built from either copy satisfies a requirement from the other.
+That is safe while the shapes agree. It is not safe by construction: `WorkspaceCatalogs` is
+new in `0.10.0`, so the `0.9.5` copy cannot provide it, and any future divergence in a
+*shared* tag's shape would typecheck against one copy and fail at runtime against the other.
+
+**What would settle it:** silk-effects widening or bumping its `@effected/workspaces` range
+so both resolve to `0.10.0`. Until then this is a real ~duplicate in the shipped bundle.
+
+*Verify with* `pnpm why @effected/workspaces` — **not** with the lockfile grep this
+document used to recommend. The grep reports *which* versions exist; only `pnpm why`
+reports *who pulls each one*, and provenance is the whole question here. The previous
+version of this section was updated to new version numbers while keeping the sentence
+"resolves exactly one copy of each," which was false at the moment it was written — because
+the numbers were refreshed and the claim they supported was not re-checked.
 
 ## Build tooling
 

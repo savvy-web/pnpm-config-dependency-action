@@ -247,7 +247,7 @@ keys with the replayed config-dependency `pnpmfile` hooks, strictest-wins, off
 the same single read it uses for the catalog set. This module no longer reads
 the workspace at all — `readInlineReleaseAge`, `replayHookReleaseAge`,
 `REPLAY_SCRIPT`, `REPLAY_SENTINEL` and `extractReplayPayload` are **deleted**
-(304 → 179 lines).
+(304 → 176 lines).
 
 The layer must be **`layerWithConfigDependenciesSubprocess`**, not
 `layerWithConfigDependencies`: the in-process variant loads each pnpmfile with a
