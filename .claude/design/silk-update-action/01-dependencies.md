@@ -78,7 +78,7 @@ The action runs on **Effect v4** (`effect` / `@effect/platform-node` both resolv
   - GraphQL is a member of the client, not a separate `GitHubGraphQL` service.
 - `@effected/github-actions` + `@effected/github` together replace the whole
   `github-action-effects` layer stack; nothing in `src/` imports the old package.
-- `@effected/commands` — subprocess execution as **free functions** over core
+- `@effected/commands` (`^0.3.0`) — subprocess execution as **free functions** over core
   `ChildProcessSpawner`, not a service: `Run.collect` (exit code as a *result*, so a
   non-zero exit is a value rather than an error), `Run.text` / `Run.lines` / `Run.json`
   (typed failure on a non-zero exit) and `Run.succeeds` (boolean probe). Also ships
@@ -108,7 +108,7 @@ The action runs on **Effect v4** (`effect` / `@effect/platform-node` both resolv
     caller supplies the clock and missing timestamps drop the version) and
     `PartialReleaseAgeGate` (the permissive per-source contribution type, re-exported by
     `src/services/release-age.ts`).
-- `@effected/workspaces` — Effect-native workspace layer, consumed by `RegularDeps`,
+- `@effected/workspaces` (`^0.10.0`) — Effect-native workspace layer, consumed by `RegularDeps`,
   `PeerSync`, `Lockfile`, `CatalogConfigDeps` and `detectPackageManager`. **Root-bound at
   layer build:** the layers are static factories on the service classes
   (`WorkspaceRoot.layer`, `WorkspaceDiscovery.layer(opts?)`, `PackageManagerDetector.layer`,
@@ -177,6 +177,29 @@ The action runs on **Effect v4** (`effect` / `@effect/platform-node` both resolv
   `ClassifiedSpecifier` — read `.specifier.raw`), `ResolvedPackage`, and the PM-specific
   extension union tagged via `.extension._tag`. `Lockfile.format` records which package
   manager wrote the file.
+- **`WorkspaceCatalogs` (in `@effected/workspaces@0.10.0`) now owns release-age
+  discovery.** `releaseAgeGate()` combines the inline `pnpm-workspace.yaml` keys
+  with the replayed config-dependency hooks; `src/services/release-age.ts` keeps
+  only the fail-open wrapper and the filtering. The layer **must** be
+  `layerWithConfigDependenciesSubprocess` — the in-process variant's computed
+  dynamic `import()` is what rspack miscompiles into a context module, and that
+  is the sole reason this adoption waited on a release. `workspaces@0.10.0`
+  itself declares `@effected/commands: ^0.3.0`, so `Run.jsonLine` (the framing
+  its replay child uses) arrives with it and needs no manual alignment.
+  - **`Run.jsonLine` was evaluated and is SUBSUMED, not skipped.** It was the
+    intended replacement for this repo's local `REPLAY_SENTINEL` framing — but
+    `releaseAgeGate()` combines the inline keys *and* the hook replay, so
+    adopting it deletes the local subprocess entirely and leaves nothing to
+    frame. The kit's own replay child already reads its payload through
+    `Run.jsonLine` (`workspaces/index.d.ts` documents the 16 MiB ceiling as
+    `Run.jsonLine`'s), so it is adopted transitively. Do not re-propose calling
+    it directly; there is no call site.
+  - **The caret trap, recorded because it fails silently:** caret pins the minor
+    on `0.x`, so `^0.9.5` will not accept `0.10.0` and `^0.2.1` will not accept
+    `0.3.0` — and `pnpm install` **succeeds** in that state, resolving the old
+    version with no error and no warning, so the code fails only at runtime.
+    Verify with `pnpm why` or by reading `node_modules/<pkg>/package.json`;
+    **never** the install's exit code.
 - `@effected/yaml` — parse and stringify `pnpm-workspace.yaml` with consistent formatting.
   `Yaml.parse` / `Yaml.stringify` return Effects (rather than throwing like the `yaml` npm
   package), so `workspace-yaml.ts` yields them and maps failures into `FileSystemError`.
@@ -187,7 +210,7 @@ This document previously recorded two copies each of `@effected/workspaces`
 (`0.9.0` / `0.8.0`) and `@effected/npm` (`0.5.0` / `0.4.0`), the lower copy of each coming
 entirely from the `@vitest-agent/plugin` devDependency tree, and predicted they would clear
 when that plugin bumped. **They have.** `pnpm-lock.yaml` now resolves exactly one copy of
-each — `@effected/workspaces@0.9.5` and `@effected/npm@0.8.2` — on
+each — `@effected/workspaces@0.10.0` and `@effected/npm@0.8.3` — on
 `@vitest-agent/plugin@2.0.13`.
 
 Kept as a record rather than deleted, because the reasoning is the reusable part: Effect

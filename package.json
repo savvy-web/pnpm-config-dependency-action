@@ -41,14 +41,14 @@
 	},
 	"dependencies": {
 		"@effect/platform-node": "catalog:effect",
-		"@effected/commands": "^0.2.1",
+		"@effected/commands": "^0.3.0",
 		"@effected/github": "^0.2.3",
 		"@effected/github-actions": "^0.5.1",
 		"@effected/lockfiles": "^0.3.2",
-		"@effected/npm": "^0.8.2",
+		"@effected/npm": "^0.8.3",
 		"@effected/runtimes": "^0.2.5",
 		"@effected/semver": "^0.3.2",
-		"@effected/workspaces": "^0.9.5",
+		"@effected/workspaces": "^0.10.0",
 		"@effected/yaml": "^0.6.1",
 		"@savvy-web/silk-effects": "^5.3.0",
 		"effect": "catalog:effect"

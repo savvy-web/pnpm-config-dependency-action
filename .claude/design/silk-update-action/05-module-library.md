@@ -241,41 +241,57 @@ export class ReleaseAge extends Context.Service<ReleaseAge, {
 }>()("ReleaseAge") {}
 ```
 
-**Gate discovery** (two sources, combined strictest-wins via
-`ReleaseAgeGate.combine`, assembled once and `Effect.cached` for the layer
-lifetime):
+**Gate discovery belongs to `@effected/workspaces`.**
+`WorkspaceCatalogs.releaseAgeGate()` combines the inline `pnpm-workspace.yaml`
+keys with the replayed config-dependency `pnpmfile` hooks, strictest-wins, off
+the same single read it uses for the catalog set. This module no longer reads
+the workspace at all — `readInlineReleaseAge`, `replayHookReleaseAge`,
+`REPLAY_SCRIPT`, `REPLAY_SENTINEL` and `extractReplayPayload` are **deleted**
+(304 → 179 lines).
 
-- `readInlineReleaseAge(workspaceRoot?)` — the keys declared inline in
-  `pnpm-workspace.yaml`.
-- `replayHookReleaseAge(workspaceRoot?)` — replays the workspace's
-  config-dependency pnpmfile `updateConfig` hooks in a **node subprocess** via
-  `@effected/commands`' `Run` (script passed via argv; `pnpmfile.mjs` first then
-  `.cjs`, mirroring pnpm 11's loader order). A subprocess because `pnpm config get`
-  never sees hook-injected values, and the rspack bundle cannot host an in-process
-  computed dynamic import (see @./01-dependencies.md). Best-effort: any failure
-  degrades to no contribution with a warning.
+The layer must be **`layerWithConfigDependenciesSubprocess`**, not
+`layerWithConfigDependencies`: the in-process variant loads each pnpmfile with a
+computed dynamic `import()`, which rspack compiles into a context module and
+breaks in the bundled `dist` (see @./01-dependencies.md). The subprocess variant
+passes a static script via argv, so nothing computed enters the bundle graph —
+which is precisely what blocked this adoption until `@effected/workspaces@0.10.0`.
 
-**The replay payload is framed behind a sentinel** (`REPLAY_SENTINEL`), and the
-parent scans the child's stdout **from the end** for it. This is not
-defensive-programming garnish — it fixes a shipped silent wrong answer:
+**What stays local is the fail-open posture, and that is now the whole point of
+the wrapper.** The kit fails **typed** (`CatalogAssemblyFailure` =
+`CatalogAssemblyError | WorkspaceRootNotFoundError`), which is the right contract
+for a library. This action instead degrades to "no gate" with a warning, because
+pnpm re-enforces the gate at install, so missing data lands on exactly the
+pre-gate behavior — whereas aborting a dependency-update run over one broken
+plugin would be strictly worse. That `Effect.catch` lives at the single call site
+in `ReleaseAgeLive`.
 
-- A pnpmfile hook is arbitrary user code and may log freely; several real ones
-  do. The parent used to run `JSON.parse` over the child's **entire** stdout, so
-  a single `console.log` in a hook made the parse throw.
-- The fail-open catch then degraded the run to **no gate at all**, silently —
-  turning the exact protection this module exists to provide into a no-op, after
-  which the action could propose a version pnpm rejects at install with
-  `ERR_PNPM_NO_MATURE_MATCHING_VERSION`. Fail-open is right when the data is
-  genuinely unavailable; it is dangerous when it silently absorbs a *parsing*
-  bug, because the two are indistinguishable at the call site.
-- Scanning from the end rather than "just take the last line", because a hook
-  that logs valid JSON as its final output would otherwise be parsed as the
-  payload — not hypothetical for tooling that dumps its resolved config.
-- `extractReplayPayload(stdout)` is **exported for direct testing**: the whole
-  defect lived in that parse, so the test guarding it should not need to spawn a
-  child to reach it. It returns `null` for "no framed line", which the caller
-  reports distinctly from "framed but unparseable" — two different failures that
-  previously looked identical.
+`release-age.int.test.ts` pins **both halves** of that split: that the kit's own
+surface fails typed on a throwing pnpmfile, *and* that `ReleaseAgeLive` turns
+that into the inert gate. Asserting only the outcome would still pass if someone
+deleted the wrapper.
+
+### Two bounds the subprocess layer imposes, and one known gap
+
+`layerSubprocess` documents two bounds `layerLive` cannot have: the replay gets
+**30 seconds** (a pnpmfile that loops fails typed rather than hanging the
+memoized assemble pass — a subprocess is killable, an in-process synchronous
+hook call is not), and the child's stdout is captured under `Run.jsonLine`'s
+**16 MiB** ceiling, above which it fails typed as `tooLarge`.
+
+**Known gap, verified here rather than assumed** (upstream
+[spencerbeggs/effected#292](https://github.com/spencerbeggs/effected/issues/292))**:**
+`Run.jsonLine` reads the
+**last non-empty line** of stdout, so a hook that writes *after* the payload —
+`process.on("exit", () => console.log(…))`, i.e. cleanup logging — makes the
+parse fail, and our fail-open wrapper then degrades it to no gate. A hook that
+logs *during* execution, which is the ordinary case and the one the shipped #9
+bug was about, survives fine.
+
+The evidence is a controlled pair in `release-age.int.test.ts`: the same fixture
+helper, two hooks differing only in *when* they log. The deleted local
+implementation handled both, because scanning from the end for a sentinel beats
+last-line parsing exactly here. Reported upstream; the trade was accepted because
+the ordinary case works and the alternative was keeping ~125 lines for one edge.
 
 **Publish times** come from `NpmRegistry.publishTimes(pkg)` — the kit absorbed
 this repo's former hand-rolled `npm view <pkg> time --json` shell-out —

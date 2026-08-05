@@ -56,8 +56,8 @@ importers:
         specifier: catalog:effect
         version: 4.0.0-beta.101(effect@4.0.0-beta.101)(ioredis@5.11.1(supports-color@7.2.0))
       '@effected/commands':
-        specifier: ^0.2.1
-        version: 0.2.1(effect@4.0.0-beta.101)
+        specifier: ^0.3.0
+        version: 0.3.0(effect@4.0.0-beta.101)
       '@effected/github':
         specifier: ^0.2.3
         version: 0.2.3(effect@4.0.0-beta.101)
@@ -66,10 +66,10 @@ importers:
         version: 0.5.1(@effect/platform-node@4.0.0-beta.101(effect@4.0.0-beta.101)(ioredis@5.11.1(supports-color@7.2.0)))(@effected/jsonc@0.5.2(effect@4.0.0-beta.101))(@effected/semver@0.3.2(effect@4.0.0-beta.101))(@effected/toml@0.3.2(effect@4.0.0-beta.101))(@effected/yaml@0.6.1(effect@4.0.0-beta.101))(effect@4.0.0-beta.101)(supports-color@7.2.0)
       '@effected/lockfiles':
         specifier: ^0.3.2
-        version: 0.3.2(@effected/jsonc@0.5.2(effect@4.0.0-beta.101))(@effected/npm@0.8.2(@effected/semver@0.3.2(effect@4.0.0-beta.101))(effect@4.0.0-beta.101))(@effected/semver@0.3.2(effect@4.0.0-beta.101))(@effected/yaml@0.6.1(effect@4.0.0-beta.101))(effect@4.0.0-beta.101)
+        version: 0.3.2(@effected/jsonc@0.5.2(effect@4.0.0-beta.101))(@effected/npm@0.8.3(@effected/semver@0.3.2(effect@4.0.0-beta.101))(effect@4.0.0-beta.101))(@effected/semver@0.3.2(effect@4.0.0-beta.101))(@effected/yaml@0.6.1(effect@4.0.0-beta.101))(effect@4.0.0-beta.101)
       '@effected/npm':
-        specifier: ^0.8.2
-        version: 0.8.2(@effected/semver@0.3.2(effect@4.0.0-beta.101))(effect@4.0.0-beta.101)
+        specifier: ^0.8.3
+        version: 0.8.3(@effected/semver@0.3.2(effect@4.0.0-beta.101))(effect@4.0.0-beta.101)
       '@effected/runtimes':
         specifier: ^0.2.5
         version: 0.2.5(effect@4.0.0-beta.101)
@@ -77,8 +77,8 @@ importers:
         specifier: ^0.3.2
         version: 0.3.2(effect@4.0.0-beta.101)
       '@effected/workspaces':
-        specifier: ^0.9.5
-        version: 0.9.5(@effected/jsonc@0.5.2(effect@4.0.0-beta.101))(effect@4.0.0-beta.101)
+        specifier: ^0.10.0
+        version: 0.10.0(@effected/jsonc@0.5.2(effect@4.0.0-beta.101))(effect@4.0.0-beta.101)
       '@effected/yaml':
         specifier: ^0.6.1
         version: 0.6.1(effect@4.0.0-beta.101)
@@ -432,6 +432,12 @@ packages:
     peerDependencies:
       effect: 4.0.0-beta.101
 
+  '@effected/commands@0.3.0':
+    resolution: {integrity: sha512-Ii6HlCa4h12LSiEUIcrAPyOOIYFO1qPVMo3yKuUrovEcpp5tSpCSD1Ty9rS+PDRMqS0tHUiMYKGAhp6RP3b4FA==}
+    engines: {node: '>=24.11.0'}
+    peerDependencies:
+      effect: 4.0.0-beta.101
+
   '@effected/config-file@0.2.1':
     resolution: {integrity: sha512-dmPgms9womRWUynAxNh1q4UcE2hXb2AhNyhJAs8HmiUTYl4oHIHRfQpL46AXHLZZExBG1LZLVale9UyOSQ/DJA==}
     engines: {node: '>=24.11.0'}
@@ -499,8 +505,8 @@ packages:
       '@effected/yaml':
         optional: true
 
-  '@effected/npm@0.8.2':
-    resolution: {integrity: sha512-/8OTVcZErcoVXXKo18Ybya4GqLzDhA24/D3OpKL6Tn3WQed/WKOzxBCUCjTfeBIg4+q8IpFZaVgetiJ/OoiD2Q==}
+  '@effected/npm@0.8.3':
+    resolution: {integrity: sha512-ixSmsGkAztHAE06BJhA/M67oOG8qlXYO1YX+Y462zg7gK7n0YnyBCt+1SOSSg3foeY3w7VJB25CjhLwChyL2fQ==}
     engines: {node: '>=24.11.0'}
     peerDependencies:
       '@effected/semver': ^0.3.2
@@ -559,6 +565,12 @@ packages:
     engines: {node: '>=24.11.0'}
     peerDependencies:
       '@effected/glob': ^0.2.2
+      effect: 4.0.0-beta.101
+
+  '@effected/workspaces@0.10.0':
+    resolution: {integrity: sha512-fqMMcb84LI7q407ZLDkE0CiZPZKOh+5/kDhusKWOzX7vvriSsqHZXxudwtYZcGrdbO27ZAm2YPquxcKOjTpGjw==}
+    engines: {node: '>=24.11.0'}
+    peerDependencies:
       effect: 4.0.0-beta.101
 
   '@effected/workspaces@0.9.5':
@@ -3831,6 +3843,10 @@ snapshots:
     dependencies:
       effect: 4.0.0-beta.101
 
+  '@effected/commands@0.3.0(effect@4.0.0-beta.101)':
+    dependencies:
+      effect: 4.0.0-beta.101
+
   '@effected/config-file@0.2.1(@effected/jsonc@0.5.2(effect@4.0.0-beta.101))(@effected/toml@0.3.2(effect@4.0.0-beta.101))(@effected/walker@0.3.4(@effected/glob@0.2.2(effect@4.0.0-beta.101))(effect@4.0.0-beta.101))(@effected/yaml@0.6.1(effect@4.0.0-beta.101))(effect@4.0.0-beta.101)':
     dependencies:
       '@effected/jsonc': 0.5.2(effect@4.0.0-beta.101)
@@ -3850,7 +3866,7 @@ snapshots:
       '@effected/github': 0.2.3(effect@4.0.0-beta.101)
       '@effected/glob': 0.2.2(effect@4.0.0-beta.101)
       '@effected/markdown': 0.4.2(@effected/jsonc@0.5.2(effect@4.0.0-beta.101))(@effected/toml@0.3.2(effect@4.0.0-beta.101))(@effected/yaml@0.6.1(effect@4.0.0-beta.101))(effect@4.0.0-beta.101)
-      '@effected/npm': 0.8.2(@effected/semver@0.3.2(effect@4.0.0-beta.101))(effect@4.0.0-beta.101)
+      '@effected/npm': 0.8.3(@effected/semver@0.3.2(effect@4.0.0-beta.101))(effect@4.0.0-beta.101)
       '@effected/sbom': 0.2.3(effect@4.0.0-beta.101)(supports-color@7.2.0)
       '@effected/templates': 0.1.1(effect@4.0.0-beta.101)
       effect: 4.0.0-beta.101
@@ -3879,10 +3895,10 @@ snapshots:
     dependencies:
       effect: 4.0.0-beta.101
 
-  '@effected/lockfiles@0.3.2(@effected/jsonc@0.5.2(effect@4.0.0-beta.101))(@effected/npm@0.8.2(@effected/semver@0.3.2(effect@4.0.0-beta.101))(effect@4.0.0-beta.101))(@effected/semver@0.3.2(effect@4.0.0-beta.101))(@effected/yaml@0.6.1(effect@4.0.0-beta.101))(effect@4.0.0-beta.101)':
+  '@effected/lockfiles@0.3.2(@effected/jsonc@0.5.2(effect@4.0.0-beta.101))(@effected/npm@0.8.3(@effected/semver@0.3.2(effect@4.0.0-beta.101))(effect@4.0.0-beta.101))(@effected/semver@0.3.2(effect@4.0.0-beta.101))(@effected/yaml@0.6.1(effect@4.0.0-beta.101))(effect@4.0.0-beta.101)':
     dependencies:
       '@effected/jsonc': 0.5.2(effect@4.0.0-beta.101)
-      '@effected/npm': 0.8.2(@effected/semver@0.3.2(effect@4.0.0-beta.101))(effect@4.0.0-beta.101)
+      '@effected/npm': 0.8.3(@effected/semver@0.3.2(effect@4.0.0-beta.101))(effect@4.0.0-beta.101)
       '@effected/semver': 0.3.2(effect@4.0.0-beta.101)
       '@effected/yaml': 0.6.1(effect@4.0.0-beta.101)
       effect: 4.0.0-beta.101
@@ -3895,15 +3911,15 @@ snapshots:
       '@effected/toml': 0.3.2(effect@4.0.0-beta.101)
       '@effected/yaml': 0.6.1(effect@4.0.0-beta.101)
 
-  '@effected/npm@0.8.2(@effected/semver@0.3.2(effect@4.0.0-beta.101))(effect@4.0.0-beta.101)':
+  '@effected/npm@0.8.3(@effected/semver@0.3.2(effect@4.0.0-beta.101))(effect@4.0.0-beta.101)':
     dependencies:
-      '@effected/commands': 0.2.1(effect@4.0.0-beta.101)
+      '@effected/commands': 0.3.0(effect@4.0.0-beta.101)
       '@effected/semver': 0.3.2(effect@4.0.0-beta.101)
       effect: 4.0.0-beta.101
 
   '@effected/package-json@0.7.3(effect@4.0.0-beta.101)':
     dependencies:
-      '@effected/npm': 0.8.2(@effected/semver@0.3.2(effect@4.0.0-beta.101))(effect@4.0.0-beta.101)
+      '@effected/npm': 0.8.3(@effected/semver@0.3.2(effect@4.0.0-beta.101))(effect@4.0.0-beta.101)
       '@effected/semver': 0.3.2(effect@4.0.0-beta.101)
       '@effected/spdx': 0.1.2(effect@4.0.0-beta.101)
       effect: 4.0.0-beta.101
@@ -3951,13 +3967,32 @@ snapshots:
       '@effected/glob': 0.2.2(effect@4.0.0-beta.101)
       effect: 4.0.0-beta.101
 
+  '@effected/workspaces@0.10.0(@effected/jsonc@0.5.2(effect@4.0.0-beta.101))(effect@4.0.0-beta.101)':
+    dependencies:
+      '@effected/commands': 0.3.0(effect@4.0.0-beta.101)
+      '@effected/git': 0.5.2(effect@4.0.0-beta.101)
+      '@effected/glob': 0.2.2(effect@4.0.0-beta.101)
+      '@effected/lockfiles': 0.3.2(@effected/jsonc@0.5.2(effect@4.0.0-beta.101))(@effected/npm@0.8.3(@effected/semver@0.3.2(effect@4.0.0-beta.101))(effect@4.0.0-beta.101))(@effected/semver@0.3.2(effect@4.0.0-beta.101))(@effected/yaml@0.6.1(effect@4.0.0-beta.101))(effect@4.0.0-beta.101)
+      '@effected/npm': 0.8.3(@effected/semver@0.3.2(effect@4.0.0-beta.101))(effect@4.0.0-beta.101)
+      '@effected/package-json': 0.7.3(effect@4.0.0-beta.101)
+      '@effected/semver': 0.3.2(effect@4.0.0-beta.101)
+      '@effected/walker': 0.3.4(@effected/glob@0.2.2(effect@4.0.0-beta.101))(effect@4.0.0-beta.101)
+      '@effected/yaml': 0.6.1(effect@4.0.0-beta.101)
+      '@pnpm/catalogs.config': 1100.0.4
+      '@pnpm/catalogs.protocol-parser': 1100.0.1
+      '@pnpm/catalogs.resolver': 1100.0.1
+      '@pnpm/catalogs.types': 1100.0.1
+      effect: 4.0.0-beta.101
+    transitivePeerDependencies:
+      - '@effected/jsonc'
+
   '@effected/workspaces@0.9.5(@effected/jsonc@0.5.2(effect@4.0.0-beta.101))(effect@4.0.0-beta.101)':
     dependencies:
       '@effected/commands': 0.2.1(effect@4.0.0-beta.101)
       '@effected/git': 0.5.2(effect@4.0.0-beta.101)
       '@effected/glob': 0.2.2(effect@4.0.0-beta.101)
-      '@effected/lockfiles': 0.3.2(@effected/jsonc@0.5.2(effect@4.0.0-beta.101))(@effected/npm@0.8.2(@effected/semver@0.3.2(effect@4.0.0-beta.101))(effect@4.0.0-beta.101))(@effected/semver@0.3.2(effect@4.0.0-beta.101))(@effected/yaml@0.6.1(effect@4.0.0-beta.101))(effect@4.0.0-beta.101)
-      '@effected/npm': 0.8.2(@effected/semver@0.3.2(effect@4.0.0-beta.101))(effect@4.0.0-beta.101)
+      '@effected/lockfiles': 0.3.2(@effected/jsonc@0.5.2(effect@4.0.0-beta.101))(@effected/npm@0.8.3(@effected/semver@0.3.2(effect@4.0.0-beta.101))(effect@4.0.0-beta.101))(@effected/semver@0.3.2(effect@4.0.0-beta.101))(@effected/yaml@0.6.1(effect@4.0.0-beta.101))(effect@4.0.0-beta.101)
+      '@effected/npm': 0.8.3(@effected/semver@0.3.2(effect@4.0.0-beta.101))(effect@4.0.0-beta.101)
       '@effected/package-json': 0.7.3(effect@4.0.0-beta.101)
       '@effected/semver': 0.3.2(effect@4.0.0-beta.101)
       '@effected/walker': 0.3.4(@effected/glob@0.2.2(effect@4.0.0-beta.101))(effect@4.0.0-beta.101)

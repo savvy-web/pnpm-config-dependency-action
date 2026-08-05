@@ -10,7 +10,13 @@ import { CheckRun, GitBranch, GitCommit, PullRequest, Repo } from "@effected/git
 import { DryRun, GitHubToken } from "@effected/github-actions";
 import { NpmRegistry } from "@effected/npm";
 import { BunResolver, DenoResolver, NodeResolver, GitHubClient as RuntimesGitHubClient } from "@effected/runtimes";
-import { LockfileReader, PackageManagerDetector, WorkspaceDiscovery, WorkspaceRoot } from "@effected/workspaces";
+import {
+	LockfileReader,
+	PackageManagerDetector,
+	WorkspaceCatalogs,
+	WorkspaceDiscovery,
+	WorkspaceRoot,
+} from "@effected/workspaces";
 import { Changesets as SilkChangesets } from "@savvy-web/silk-effects";
 import { Layer } from "effect";
 
@@ -73,10 +79,6 @@ export const makeAppLayer = (dryRun: boolean, options: { runtimeLive: boolean } 
 	// copy of the Node platform and the fetch client in its bundle, and forced a
 	// direct `@effect/platform-node` dependency the program has no business naming.
 	const npmRegistry = NpmRegistry.layer;
-	// Effective pnpm minimumReleaseAge gate (inline pnpm-workspace.yaml keys +
-	// config-dependency hook replay), applied by ConfigDeps/RegularDeps before
-	// version resolution. Inert when the workspace declares no gate.
-	const releaseAge = ReleaseAgeLive().pipe(Layer.provide(npmRegistry));
 	const gitBranch = GitBranch.layer.pipe(Layer.provide(githubClient));
 	const gitCommit = GitCommit.layer.pipe(Layer.provide(githubClient));
 	const prLayer = PullRequest.layer.pipe(Layer.provide(githubClient));
@@ -91,6 +93,21 @@ export const makeAppLayer = (dryRun: boolean, options: { runtimeLive: boolean } 
 		Layer.provide(Layer.mergeAll(workspaceRoot, packageManagerDetector, workspaceDiscovery)),
 	);
 
+	// Effective pnpm minimumReleaseAge gate (inline pnpm-workspace.yaml keys +
+	// config-dependency hook replay), applied by ConfigDeps/RegularDeps before
+	// version resolution. Inert when the workspace declares no gate.
+	//
+	// `layerWithConfigDependenciesSubprocess`, NOT `layerWithConfigDependencies`:
+	// the in-process variant loads each config dependency's pnpmfile with a
+	// computed dynamic `import()`, which rspack compiles into a context module and
+	// breaks in the bundled dist (see the action.config.ts note on
+	// `nativeDynamicImports`). The subprocess variant passes a static script via
+	// argv, so nothing computed enters the bundle graph — which is the whole
+	// reason this adoption was blocked until effected#288 shipped.
+	const workspaceCatalogs = WorkspaceCatalogs.layerWithConfigDependenciesSubprocess().pipe(
+		Layer.provide(Layer.mergeAll(workspaceRoot, lockfileReader)),
+	);
+	const releaseAge = ReleaseAgeLive().pipe(Layer.provide(Layer.merge(npmRegistry, workspaceCatalogs)));
 	// DepsRegen (from @savvy-web/silk-effects) is the source of truth for
 	// dependency changesets. DepsRegenDefault is the batteries-included layer: it
 	// bundles the point-in-time workspace reader, ConfigInspector, WorkspaceDiscovery,

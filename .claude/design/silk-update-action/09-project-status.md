@@ -251,6 +251,34 @@ surfaced mid-restructure and a behavior change folded into a behavior-preserving
 move is unreviewable. The argument is recorded in the step's module doc. It may
 well be correct; it needs to land as its own decision.
 
+### `@effected/workspaces` release-age discovery — adopted, with one known gap
+
+`WorkspaceCatalogs.releaseAgeGate()` over `layerWithConfigDependenciesSubprocess`
+replaced the discovery half of `release-age.ts` (304 → 179 lines). Blocked until
+`0.10.0` because the in-process hook loader's computed dynamic `import()` is what
+rspack miscompiles; the subprocess variant passes a static script via argv.
+
+The **fail-open posture stayed ours** as an `Effect.catch` — the kit fails typed,
+which is correct for a library and wrong for this action, since pnpm re-enforces
+the gate at install.
+
+**Known gap (upstream spencerbeggs/effected#292), measured not assumed:** the kit
+frames its child's payload with
+`Run.jsonLine`, which reads the **last non-empty stdout line**. A hook that
+writes *after* the payload (`process.on("exit", …)`) therefore breaks the parse,
+and our wrapper degrades it to no gate. A hook that logs *during* execution — the
+ordinary case, and the one the shipped bug was about — survives. Evidence is a
+controlled pair in `release-age.int.test.ts` differing only in *when* the hook
+logs. The deleted local implementation handled both, because scanning from the
+end for a sentinel beats last-line parsing exactly here.
+
+**How this was nearly mis-filed:** the first reproduction used a hand-built
+fixture and returned the inert gate — apparently damning. A **silent-hook control
+on the same fixture** returned the inert gate too, proving the fixture was simply
+wrong and the reproduction worthless. Only the repo's own fixture helper, where
+the quiet and chatty cases differ in one line, is real evidence. A reproduction
+without a control is an anecdote.
+
 ## How to read the claims in these documents
 
 Several confident assertions in this record turned out to be false, and the

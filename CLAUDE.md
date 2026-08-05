@@ -296,11 +296,18 @@ Composite builds with project references, strict mode, ES2022/ES2023.
   **npm** is skipped — no `catalog:` protocol
 - `ConfigDeps`/`RegularDeps` mirror pnpm's `minimumReleaseAge` gate at resolution
   time via `ReleaseAge.filterVersions`, so the action never proposes a version pnpm
-  would reject (`ERR_PNPM_NO_MATURE_MATCHING_VERSION`). The gate combines inline
-  `pnpm-workspace.yaml` keys **and** a node-subprocess replay of config-dependency
-  pnpmfile hooks (`pnpm config get` never sees hook-injected values, and the rspack
-  bundle cannot host the in-process dynamic import); publish times come from
-  `NpmRegistry.publishTimes`. The whole path **fails open**. Depth in
+  would reject (`ERR_PNPM_NO_MATURE_MATCHING_VERSION`). **Gate discovery is the
+  kit's**, not this repo's: `WorkspaceCatalogs.releaseAgeGate()` over
+  `layerWithConfigDependenciesSubprocess()` combines inline `pnpm-workspace.yaml`
+  keys with the replayed config-dependency pnpmfile hooks (`pnpm config get` never
+  sees hook-injected values). The **subprocess** variant is mandatory — rspack
+  miscompiles the in-process computed dynamic `import()` into a context module —
+  and it is what unblocked this adoption. Publish times come from
+  `NpmRegistry.publishTimes`. **What stays local is the fail-open posture**: the
+  kit fails typed with `CatalogAssemblyFailure`, correct for a library, and this
+  action degrades it to "no gate" with a warning in a one-line `Effect.catch` at
+  the single call site in `ReleaseAgeLive`, because pnpm re-enforces the gate at
+  install. Depth in
   `@./.claude/design/silk-update-action/05-module-library.md`
 - Runtime bumps (`upgrade-runtime-*`) **upgrade only, never add** — in *every*
   mode — and always write the **bare exact** resolved version (the range only
@@ -327,12 +334,14 @@ Composite builds with project references, strict mode, ES2022/ES2023.
   (spencerbeggs/effected#279), which is load-bearing here. Detail and the "what
   would change the answer" conditions live in
   `@./.claude/design/silk-update-action/09-project-status.md`
-- **A caret on a `0.x` dependency pins the minor.** `"@effected/workspaces":
-  "^0.9.5"` will **not** accept `0.10.0`, and `"@effected/commands": "^0.2.1"`
-  will not accept `0.3.0`. A plain `pnpm update` therefore leaves them on the old
-  minor while code calls the new surface — the install succeeds and the failure
-  shows up later. Bump the declared range explicitly when a `0.x` kit package
-  releases a minor
+- **A caret on a `0.x` dependency pins the minor.** `^0.9.5` does **not** admit
+  `0.10.0`; `^0.2.1` does not admit `0.3.0`. A plain `pnpm update` therefore
+  leaves a `0.x` kit package on the old minor while code calls the new surface —
+  the install succeeds and the failure shows up later. Bump the declared range
+  explicitly when a `0.x` kit package releases a minor. This is not theoretical:
+  `@effected/workspaces` and `@effected/commands` both crossed a `0.x` minor
+  during this branch and needed exactly that hand-edit (now at `^0.10.0` /
+  `^0.3.0`)
 - **`src/services/lockfile.ts` once held a raw NUL byte** (the `depKey`
   separator, since replaced by the `\0` escape). `file(1)` reported it as `data`
   and **grep silently skipped all 531 lines**, returning something

@@ -94,13 +94,16 @@ member's `R` free of it.
   `packageInfo`, `publishTimes`; keyed by (registry, package, version). Being HTTP
   rather than an `npm` subprocess removes the whole class of `~/.npm` cache
   permission failures.
-- `ReleaseAgeGate` / `PartialReleaseAgeGate` — the release-age vocabulary the
-  local `ReleaseAge` service composes.
+- `ReleaseAgeGate` / `PartialReleaseAgeGate` — the release-age vocabulary. The
+  **gate is now assembled by `@effected/workspaces`' `WorkspaceCatalogs`**, not
+  locally; the local `ReleaseAge` service only wraps it in a fail-open posture
+  and does the filtering. See @./05-module-library.md.
 
 ### Workspace services (`@effected/workspaces`)
 
 `WorkspaceDiscovery` (`listPackages()`, `importerMap()`), `WorkspaceRoot`
-(`find`), `PackageManagerDetector` (`detect`) and `LockfileReader` — all
+(`find`), `PackageManagerDetector` (`detect`), `LockfileReader` and
+**`WorkspaceCatalogs`** (`releaseAgeGate()`, from `0.10.0`) — all
 **root-bound at layer build** via static `.layer` / `.layer(opts?)` factories, so
 their methods are arg-less. Consumed by `RegularDeps`, `PeerSync`, `Lockfile`,
 `CatalogConfigDeps` and `detectPackageManager`.

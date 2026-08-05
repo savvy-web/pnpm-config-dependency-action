@@ -41,6 +41,22 @@ When the action is invoked from a subdirectory of the workspace, two paths resol
 
 A config-dependency `pnpmfile` hook that wrote anything to stdout corrupted the parse of the replay child's output. Because that path fails open by design, the run continued with **no release-age gate at all** — after which the action could propose a version pnpm rejects at install with `ERR_PNPM_NO_MATURE_MATCHING_VERSION`. That is precisely the failure the gate exists to prevent, produced by the gate's own error handling. The payload is now framed so hook output cannot corrupt it.
 
+### Release-age gate: one narrow case now loses the gate
+
+Gate discovery moved to `@effected/workspaces`, whose replay reads its child's
+payload from the last line of stdout. A config-dependency `pnpmfile` hook that
+writes to stdout **after** that payload — cleanup logging from a
+`process.on("exit")` handler, for instance — now makes discovery fail, and the
+action falls back to running with no release-age gate (logged as a warning).
+
+A hook that logs during execution, which is the ordinary case, is unaffected.
+This is narrower than the bug fixed above but it is the same failure mode, so it
+is called out rather than left to be discovered: if your workspace uses a
+config dependency whose pnpmfile logs on exit, the gate will not apply and pnpm
+will enforce it at install instead.
+
+Tracked upstream as [spencerbeggs/effected#292](https://github.com/spencerbeggs/effected/issues/292).
+
 ### Outputs missing on failure paths
 
 Every declared output is now published on every exit path. Previously a run that failed early set none of them, so a downstream `if: steps.x.outputs.has-changes == 'false'` compared against an empty string rather than `false`.
@@ -51,3 +67,6 @@ Every declared output is now published on every exit path. Previously a run that
 | :--- | :--- | :--- | :--- | :--- |
 | @effected/schemastore | devDependency | added | — | 0.2.1 |
 | tsx | devDependency | added | — | ^4.23.5 |
+| @effected/workspaces | dependency | updated | ^0.9.5 | ^0.10.0 |
+| @effected/commands | dependency | updated | ^0.2.1 | ^0.3.0 |
+| @effected/npm | dependency | updated | ^0.8.2 | ^0.8.3 |

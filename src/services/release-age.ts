@@ -1,237 +1,47 @@
 /**
- * Release-age gate discovery and publish-time helpers.
+ * Release-age gate: the effective pnpm `minimumReleaseAge` policy, mirrored at
+ * resolution time.
  *
- * pnpm's `minimumReleaseAge` / `minimumReleaseAgeExclude` settings reject
- * versions published inside the cutoff window at install time
- * (`ERR_PNPM_NO_MATURE_MATCHING_VERSION`). The action mirrors that gate at
- * resolution time so it never proposes a version pnpm would refuse to
- * install. The effective settings come from two sources:
+ * pnpm rejects versions published inside the cutoff window at install
+ * (`ERR_PNPM_NO_MATURE_MATCHING_VERSION`). The action applies the same gate
+ * when resolving, so it never proposes a version pnpm would refuse.
  *
- * - inline keys in `pnpm-workspace.yaml` (`readInlineReleaseAge`), and
- * - config-dependency `pnpmfile` `updateConfig` hooks
- *   (`replayHookReleaseAge`) — pnpm does not replay hooks for
- *   `pnpm config get`, so repos that receive the settings via a config
- *   dependency (e.g. `@savvy-web/pnpm-plugin-silk`) can only be read by
- *   replaying the hooks.
+ * **Discovery belongs to `@effected/workspaces`.** `WorkspaceCatalogs.releaseAgeGate()`
+ * combines the inline `pnpm-workspace.yaml` keys with the replayed
+ * config-dependency `pnpmfile` hooks, strictest-wins, off the same single read it
+ * uses for the catalog set. Replaying hooks matters because `pnpm config get`
+ * does not, so a repo receiving its settings through a config dependency can
+ * only be read that way.
  *
- * The replay runs in a `node` subprocess via `@effected/commands`' `Run`
- * rather than an in-process dynamic `import()`: the rspack bundle miscompiles
- * a computed dynamic import into a context module (see the `action.config.ts`
- * note on `nativeDynamicImports`), and a subprocess also keeps
- * config-dependency code out of the action's own process. Discovery is
- * best-effort by design — any failure degrades to "no gate" (today's
- * behavior) with a warning rather than failing the run.
+ * The hook replay must run in a **subprocess** — `layerWithConfigDependenciesSubprocess`,
+ * not `layerWithConfigDependencies` — because rspack miscompiles a computed
+ * dynamic `import()` into a context module (see the `action.config.ts` note on
+ * `nativeDynamicImports`). The subprocess variant passes a static script via
+ * argv, so nothing computed enters the bundle graph. It also keeps
+ * config-dependency code out of the action's own process.
  *
- * Combining the two sources, exclude matching, and version filtering are
- * deliberately NOT implemented here — that vocabulary lives upstream in
- * `@effected/npm` (`ReleaseAgeGate`), as does publish-time fetching
- * (`NpmRegistry.publishTimes`), which replaced this module's hand-rolled
- * `npm view <pkg> time --json` shell-out.
+ * **What stays local is the fail-open posture.** The kit fails *typed* with
+ * `CatalogAssemblyFailure`, which is correct for a library. This action instead
+ * degrades to "no gate" with a warning, because pnpm re-enforces the gate at
+ * install and the worst case of missing data is exactly the pre-gate behavior —
+ * whereas aborting a dependency-update run over an unreadable workspace file
+ * would be a strictly worse trade. That wrapper is at the one call site in
+ * `ReleaseAgeLive`.
  *
  * @module services/release-age
  */
 
-import { Run } from "@effected/commands";
-import type { PartialReleaseAgeGate } from "@effected/npm";
 import { NpmRegistry, ReleaseAgeGate } from "@effected/npm";
+import { WorkspaceCatalogs } from "@effected/workspaces";
 import { Context, DateTime, Effect, Layer } from "effect";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
-
-import type { FileSystemError } from "../errors/errors.js";
-import { readWorkspaceYaml } from "./workspace-yaml.js";
 
 export type { PartialReleaseAgeGate } from "@effected/npm";
 
 /**
- * Build a gate from raw `minimumReleaseAge` / `minimumReleaseAgeExclude`
- * values, or `null` when neither is usable.
- */
-const gateFrom = (age: unknown, exclude: unknown): PartialReleaseAgeGate | null => {
-	const out: { ageMinutes?: number; exclude?: readonly string[] } = {};
-	if (typeof age === "number" && Number.isFinite(age)) {
-		out.ageMinutes = age;
-	}
-	if (Array.isArray(exclude)) {
-		const patterns = exclude.filter((entry): entry is string => typeof entry === "string");
-		if (patterns.length > 0) {
-			out.exclude = patterns;
-		}
-	}
-	return out.ageMinutes === undefined && out.exclude === undefined ? null : out;
-};
-
-/**
- * Read the release-age gate declared inline in `pnpm-workspace.yaml`.
+ * Fetch a package's publish times, normalized to `version → ISO-8601`.
  *
- * @param workspaceRoot - Workspace root (defaults to cwd)
- * @returns The inline gate values, or `null` when neither key is declared
- */
-export const readInlineReleaseAge = (
-	workspaceRoot: string = process.cwd(),
-): Effect.Effect<PartialReleaseAgeGate | null, FileSystemError> =>
-	Effect.gen(function* () {
-		const content = yield* readWorkspaceYaml(workspaceRoot);
-		if (content === null) {
-			return null;
-		}
-		return gateFrom(content.minimumReleaseAge, content.minimumReleaseAgeExclude);
-	});
-
-/**
- * The subprocess program that replays config-dependency `updateConfig` hooks
- * and prints the release-age slice of the resulting config as JSON.
- *
- * Receives the workspace root and the config-dependency names as argv (never
- * string-interpolated — `Run` spawns without a shell).
- * Mirrors pnpm 11's loader order (`pnpmfile.mjs` first, `pnpmfile.cjs`
- * fallback) and tolerates every per-dependency failure: a dependency whose
- * pnpmfile is missing, fails to load, or throws contributes nothing. This is
- * lenient where `@effected/workspaces`' `ConfigDependencyHooks` fails typed,
- * because discovery here is best-effort — a lost gate degrades to today's
- * behavior instead of failing the run.
- */
-/**
- * Marks the replay child's payload line, distinguishing it from anything a
- * config-dependency hook wrote to stdout.
- *
- * @remarks
- * A pnpmfile hook is arbitrary user code and may log freely — several real ones
- * do. Before this framing existed the parent ran `JSON.parse` over the child's
- * **entire** stdout, so a single `console.log` in a hook made the parse throw,
- * and the fail-open catch degraded the run to **no gate at all**, silently. That
- * is the precise failure the gate exists to prevent: the action would then
- * propose a version pnpm rejects at install with
- * `ERR_PNPM_NO_MATURE_MATCHING_VERSION`.
- *
- * A sentinel rather than "just take the last line", because a hook that logs
- * valid JSON as its final output would otherwise be parsed as the payload —
- * which is not hypothetical for tooling that dumps its resolved config.
- */
-const REPLAY_SENTINEL = "__silk_release_age_payload__:";
-
-/**
- * Pull the framed payload out of the replay child's stdout.
- *
- * Scans from the end so the payload wins even if a hook logged something that
- * happens to contain the sentinel earlier. Returns `null` when no framed line is
- * present, which the caller reports distinctly from "framed but unparseable" —
- * the two mean different things and previously looked identical.
- *
- * Exported for direct testing: the whole defect lived in this parse, so the test
- * that guards it should not need to spawn a child to reach it.
- */
-export const extractReplayPayload = (stdout: string): string | null => {
-	const lines = stdout.split("\n");
-	for (let i = lines.length - 1; i >= 0; i -= 1) {
-		const line = lines[i];
-		if (line.startsWith(REPLAY_SENTINEL)) {
-			return line.slice(REPLAY_SENTINEL.length);
-		}
-	}
-	return null;
-};
-
-const REPLAY_SCRIPT = `
-const [root, ...names] = process.argv.slice(1);
-const { pathToFileURL } = await import("node:url");
-const { join } = await import("node:path");
-let config = { catalog: {}, catalogs: {} };
-for (const name of names) {
-	let mod;
-	for (const filename of ["pnpmfile.mjs", "pnpmfile.cjs"]) {
-		try {
-			mod = await import(pathToFileURL(join(root, "node_modules", ".pnpm-config", name, filename)).href);
-			break;
-		} catch {}
-	}
-	if (!mod) continue;
-	const candidates = [mod, mod.default].filter((m) => m && typeof m === "object");
-	let hook;
-	for (const candidate of candidates) {
-		if (candidate.hooks && typeof candidate.hooks.updateConfig === "function") {
-			hook = candidate.hooks.updateConfig;
-			break;
-		}
-		if (typeof candidate.updateConfig === "function") {
-			hook = candidate.updateConfig;
-			break;
-		}
-	}
-	if (!hook) continue;
-	try {
-		const next = await hook(config);
-		if (next && typeof next === "object") config = next;
-	} catch {}
-}
-process.stdout.write("\\n" + ${JSON.stringify(REPLAY_SENTINEL)} + JSON.stringify({
-	minimumReleaseAge: config.minimumReleaseAge,
-	minimumReleaseAgeExclude: config.minimumReleaseAgeExclude,
-}) + "\\n");
-`;
-
-/**
- * Replay the workspace's config-dependency `updateConfig` hooks in a `node`
- * subprocess and read the release-age gate they inject.
- *
- * @param workspaceRoot - Workspace root (defaults to cwd)
- * @returns The hook-injected gate values, or `null` when there are no config
- *   dependencies, no hook sets the keys, or the replay fails (best-effort)
- */
-export const replayHookReleaseAge = (
-	workspaceRoot: string = process.cwd(),
-): Effect.Effect<PartialReleaseAgeGate | null, never, ChildProcessSpawner.ChildProcessSpawner> =>
-	Effect.gen(function* () {
-		const content = yield* readWorkspaceYaml(workspaceRoot).pipe(Effect.catch(() => Effect.succeed(null)));
-		const configDependencies = content?.configDependencies ?? {};
-		// A `..` path segment would escape node_modules/.pnpm-config — skip it.
-		const names = Object.keys(configDependencies).filter((name) => !name.split(/[/\\]/).includes(".."));
-		if (names.length === 0) {
-			return null;
-		}
-
-		// Run.collect treats a non-zero exit as a result, so a replay that runs
-		// but exits non-zero is handled by the exitCode check below rather than
-		// the spawn-failure catch.
-		const command = ChildProcess.make("node", ["--input-type=module", "-e", REPLAY_SCRIPT, workspaceRoot, ...names]);
-		const result = yield* Run.collect(command).pipe(Effect.catch(() => Effect.succeed(null)));
-		if (result === null || !result.succeeded) {
-			yield* Effect.logWarning("Config-dependency hook replay failed; release-age gate from hooks unavailable");
-			return null;
-		}
-
-		const payload = extractReplayPayload(result.stdout);
-		if (payload === null) {
-			yield* Effect.logWarning(
-				"Config-dependency hook replay emitted no recognizable payload; release-age gate from hooks unavailable",
-			);
-			return null;
-		}
-
-		const parsed = yield* Effect.try({
-			try: () => JSON.parse(payload) as { minimumReleaseAge?: unknown; minimumReleaseAgeExclude?: unknown },
-			catch: () => null,
-		}).pipe(Effect.catch(() => Effect.succeed(null)));
-		if (parsed === null) {
-			yield* Effect.logWarning("Config-dependency hook replay produced unparseable output; ignoring");
-			return null;
-		}
-
-		return gateFrom(parsed.minimumReleaseAge, parsed.minimumReleaseAgeExclude);
-	});
-
-/**
- * Fetch a package's publish timestamps from the npm registry, keyed by version.
- *
- * Delegates to `@effected/npm`'s `NpmRegistry.publishTimes`, which owns the
- * registry read and already drops the `time` object's non-version `created` /
- * `modified` entries — the exclusion this module used to re-derive from a raw
- * `npm view <pkg> time --json` shell-out.
- *
- * Best-effort: a failed query yields an empty record, which downstream
- * filtering treats as "no timestamp data" for every version.
- *
- * @param pkg - Package name
- * @returns Version → ISO-8601 publish timestamp record
+ * Fails open: a registry failure yields `{}` with a warning, which the caller
+ * treats as "cannot filter" rather than as an error.
  */
 export const getPublishTimes = (pkg: string): Effect.Effect<Record<string, string>, never, NpmRegistry> =>
 	Effect.gen(function* () {
@@ -277,27 +87,40 @@ export class ReleaseAge extends Context.Service<
  * (mirroring the `@effected/workspaces` root-bound layer idiom); the gate is
  * assembled once on first use and cached for the layer's lifetime.
  */
-export const ReleaseAgeLive = (
-	workspaceRoot: string = process.cwd(),
-): Layer.Layer<ReleaseAge, never, ChildProcessSpawner.ChildProcessSpawner | NpmRegistry> =>
+export const ReleaseAgeLive = (): Layer.Layer<ReleaseAge, never, WorkspaceCatalogs | NpmRegistry> =>
 	Layer.effect(
 		ReleaseAge,
 		Effect.gen(function* () {
 			// Both dependencies are resolved once here, so every member's R is
 			// `never` — which is what keeps `filterVersions` usable from the
 			// ConfigDeps/RegularDeps call sites without threading requirements.
-			const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+			const catalogs = yield* WorkspaceCatalogs;
 			const registry = yield* NpmRegistry;
 
 			const assembleGate = Effect.gen(function* () {
-				const inline = yield* readInlineReleaseAge(workspaceRoot).pipe(Effect.catch(() => Effect.succeed(null)));
-				const hooks = yield* replayHookReleaseAge(workspaceRoot).pipe(
-					Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+				// Discovery is the kit's: `releaseAgeGate()` combines the inline
+				// `pnpm-workspace.yaml` keys with the replayed config-dependency hooks,
+				// strictest-wins, off the same single read it uses for the catalog set.
+				//
+				// **The fail-open posture stays ours.** The kit fails *typed* with
+				// `CatalogAssemblyFailure`, which is the right contract for a library —
+				// but this action deliberately degrades to "no gate" instead, because
+				// pnpm re-enforces the gate at install and the worst case of missing
+				// data is exactly the pre-gate behavior. Aborting a dependency-update
+				// run because a workspace file could not be assembled would be a
+				// strictly worse trade.
+				const gate = yield* catalogs.releaseAgeGate().pipe(
+					Effect.catch((error) =>
+						Effect.gen(function* () {
+							yield* Effect.logWarning(
+								`Release-age gate discovery failed (${error._tag}); proceeding with no gate. ` +
+									"pnpm still enforces minimumReleaseAge at install.",
+							);
+							return ReleaseAgeGate.combine();
+						}),
+					),
 				);
-				const contributions = [inline, hooks].filter(
-					(contribution): contribution is PartialReleaseAgeGate => contribution !== null,
-				);
-				const gate = ReleaseAgeGate.combine(...contributions);
+
 				if (gate.ageMinutes > 0) {
 					yield* Effect.logInfo(
 						`Release-age gate active: ${gate.ageMinutes} minute minimum, ${gate.exclude.length} exclude pattern(s)`,
