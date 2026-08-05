@@ -152,6 +152,22 @@ rather than silently performing a package-manager-only run.
   run including silk's DepsRegen — rejected on blast radius. The rename bug the
   kit's `StatusEntry` would have fixed was fixed directly instead; see
   `parseStatusLine` in @./05-module-library.md.
+- **Raw `node:fs` / `node:path` use is pervasive and unresolved.** Core
+  `FileSystem` / `Path` are ambient (they are members of `ActionServices`), so
+  these are drift rather than necessity — the kit's rule is that a raw `node:`
+  import is sanctioned only inside `@effected/github-actions` itself. The
+  current, **NUL-safe recount** is 14 modules: `format.ts`, `utils/deps.ts`,
+  `steps/install.ts`, and `services/{changesets, peer-sync,
+  package-manager-upgrade, config-deps, workspace-yaml, catalog-config-deps,
+  regular-deps, runtime-upgrade, branch, module-catalogs, lockfile}.ts`.
+  `module-catalogs.ts` is the one defensible case (`node:crypto` / `os` / `url`
+  for tarball extraction).
+  - **Correction to the original audit.** That finding claimed "14 modules" while
+    enumerating only 12, and the enumeration omitted `services/lockfile.ts`
+    because the grep it came from silently skipped that file (see the NUL-byte
+    note below). The count, the list, and each other all disagreed. The
+    conclusion — that the drift is pervasive — was right; the evidence presented
+    as exhaustive was not. Do not cite the original enumeration.
 - **Deferred fix, not yet applied:** `BranchManager.ensureBaseHistory` still runs
   its git commands at `process.cwd()` while every other step uses `detected.root`
   — the same defect class as the `commitChanges` bug fixed in the entry-guard
