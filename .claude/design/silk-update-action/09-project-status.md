@@ -308,6 +308,21 @@ not. The concrete habit: *before trusting a green signal, ask what specific
 change would have turned it red — if the answer is "nothing", the signal is
 decoration.*
 
+The companion habit, for when a signal is *not* green: **when a tool reports
+something inconsistent with what you believe, the discrepancy is the finding —
+investigate the tool, not just the symptom.** Three instances here. A typecheck
+error on an import a `grep -rl` had said was clean was patched without asking
+why the grep missed the file (it was unreadable — see the NUL note above). A
+background notification described this repo's own outbound mail as *inbound*
+from the counterpart, and the anomaly was explained away rather than read as the
+direction error it was. A `Write` reporting success on a file that was later
+absent was taken as an unreliable write path, when a concurrent actor had moved
+it.
+
+The scope of "tool" is the part that keeps getting drawn too small: a monitor
+notification, a linter's path list and a success message are all tool output,
+and each of the three above was misfiled as noise, configuration or a given.
+
 **Next steps:**
 
 1. Integration testing with a real GitHub App in CI.
