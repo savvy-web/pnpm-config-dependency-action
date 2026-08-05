@@ -21,7 +21,7 @@ import {
 import { DateTime, Effect, Layer, References } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { ReleaseAge, ReleaseAgeLive, ReleaseAgeNoop, getPublishTimes } from "../../src/services/release-age.js";
+import { ReleaseAge, getPublishTimes } from "../../src/services/release-age.js";
 
 /**
  * The **real** kit stack over a fixture root — `WorkspaceRoot.layerTest(root)`
@@ -252,7 +252,7 @@ describe("release-age", () => {
 			// pre-gate behaviour, whereas aborting a dependency-update run over one
 			// broken plugin would be strictly worse.
 			//
-			// So `ReleaseAgeLive` wraps it in `Effect.catch`. If that wrapper is ever
+			// So `ReleaseAge.layer` wraps it in `Effect.catch`. If that wrapper is ever
 			// removed, the first assertion still passes and the second fails — which is
 			// the point of asserting both rather than only the outcome.
 			writeWorkspaceYaml(
@@ -283,7 +283,7 @@ describe("release-age", () => {
 					const service = yield* ReleaseAge;
 					return yield* service.gate();
 				}).pipe(
-					Effect.provide(ReleaseAgeLive().pipe(Layer.provide(Layer.merge(catalogsAt(root), NpmRegistry.layerTest())))),
+					Effect.provide(ReleaseAge.layer.pipe(Layer.provide(Layer.merge(catalogsAt(root), NpmRegistry.layerTest())))),
 					Effect.provideService(References.MinimumLogLevel, "None"),
 				),
 			);
@@ -356,14 +356,14 @@ describe("release-age", () => {
 			});
 
 		/**
-		 * `ReleaseAgeLive` now takes its discovery from `WorkspaceCatalogs` rather
+		 * `ReleaseAge.layer` now takes its discovery from `WorkspaceCatalogs` rather
 		 * than reading the workspace itself, so the fixture root is bound by the
 		 * catalogs layer instead of being passed as an argument.
 		 */
 		const runService = <A, E>(effect: Effect.Effect<A, E, ReleaseAge>, registry: Layer.Layer<NpmRegistry>) =>
 			Effect.runPromise(
 				effect.pipe(
-					Effect.provide(ReleaseAgeLive().pipe(Layer.provide(Layer.merge(catalogsAt(root), registry)))),
+					Effect.provide(ReleaseAge.layer.pipe(Layer.provide(Layer.merge(catalogsAt(root), registry)))),
 					Effect.provideService(References.MinimumLogLevel, "None"),
 				) as Effect.Effect<A, E, never>,
 			);
@@ -476,12 +476,12 @@ describe("release-age", () => {
 			expect(eligible).toEqual(["1.0.0", "1.1.0"]);
 		});
 
-		it("ReleaseAgeNoop passes versions through untouched", async () => {
+		it("ReleaseAge.layerNoop passes versions through untouched", async () => {
 			const eligible = await Effect.runPromise(
 				Effect.gen(function* () {
 					const service = yield* ReleaseAge;
 					return yield* service.filterVersions("prettier", ["1.0.0"]);
-				}).pipe(Effect.provide(ReleaseAgeNoop), Effect.provideService(References.MinimumLogLevel, "None")),
+				}).pipe(Effect.provide(ReleaseAge.layerNoop), Effect.provideService(References.MinimumLogLevel, "None")),
 			);
 
 			expect(eligible).toEqual(["1.0.0"]);

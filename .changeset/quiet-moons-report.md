@@ -13,16 +13,31 @@ A consuming workflow reads it with `fromJSON()` **unconditionally**: on every ex
 ```yaml
 - uses: savvy-web/silk-update-action@v4
   id: update
-- run: echo "${{ fromJSON(steps.update.outputs.result).updates[0].dependency }}"
+- run: echo "${{ fromJSON(steps.update.outputs.result).updates.length }} update(s)"
 ```
 
-It carries the run's disposition (`hasChanges`, `dryRun`), its context (`packageManager`, `workspaceRoot`, `branch`, `targetBranch`) and five collections: `updates`, `catalogDeltas`, `lockfileChanges`, `changesets` and `pullRequest`. Arrays are empty rather than omitted, so a consumer can index without guarding; `pullRequest` and `packageManager` are `null` when genuinely absent rather than carrying a placeholder.
+It carries the run's disposition (`hasChanges`, `dryRun`), its context (`packageManager`, `workspaceRoot`, `branch`, `targetBranch`) and five collections: `updates`, `catalogDeltas`, `lockfileChanges`, `changesets` and `pullRequest`. Arrays are empty rather than omitted, so a consumer can iterate without a presence check — an empty array still has no element `0`, so check `updates.length` before indexing. `pullRequest` and `packageManager` are `null` when genuinely absent rather than carrying a placeholder.
 
 A JSON Schema is published at `docs/schema/run-result.schema.json` and regenerated with `pnpm generate-schema`.
 
 ## Bug Fixes
 
 **None of these produced an error.** Each was a silent wrong answer — the action reported success while quietly doing less than it claimed, so no user could have known.
+
+### Custom commands ran in the wrong directory
+
+Every command in the `run` input inherited the action's process directory rather
+than the detected workspace root. When the action is invoked from a
+subdirectory those are different trees, so a configured `pnpm test` or
+`pnpm build` linted, tested or built something other than what the run had just
+edited — and passed, reporting green about the wrong tree.
+
+### Glob patterns in `peer-lock` / `peer-minor` silently did nothing
+
+`dependencies` entries are globs; peer entries are matched as exact package
+names. A `@scope/*` in `peer-lock` therefore matched nothing, no peer range was
+synced, and the run reported success. Those inputs now fail with a clear error
+naming the offending entries.
 
 ### Files silently missing from commits
 
@@ -57,6 +72,14 @@ will enforce it at install instead.
 
 Tracked upstream as [spencerbeggs/effected#292](https://github.com/spencerbeggs/effected/issues/292).
 
+### The `result` document described the wrong run on two exit paths
+
+A run that ended at the no-changes exit, or because a custom command failed,
+published the *pre-run baseline* document — `packageManager: null`,
+`workspaceRoot: ""` — even though detection had already succeeded. It parsed,
+every field was present, and nothing in the log distinguished it from a run that
+genuinely never detected anything. Both exits now encode the run's real context.
+
 ### Outputs missing on failure paths
 
 Every declared output is now published on every exit path. Previously a run that failed early set none of them, so a downstream `if: steps.x.outputs.has-changes == 'false'` compared against an empty string rather than `false`.
@@ -70,3 +93,16 @@ Every declared output is now published on every exit path. Previously a run that
 | @effected/workspaces | dependency | updated | ^0.9.5 | ^0.10.0 |
 | @effected/commands | dependency | updated | ^0.2.1 | ^0.3.0 |
 | @effected/npm | dependency | updated | ^0.8.2 | ^0.8.3 |
+| @effected/git | dependency | added | — | ^0.5.2 |
+
+## Refactoring
+
+- The `git status` reads behind the change verdict and the commit file list now
+  go through `@effected/git`, which models the two porcelain columns separately.
+  The local porcelain parser is deleted — the rename, `AD`/`RD` and copy defects
+  above become unrepresentable rather than merely fixed. `core.fileMode=false` is
+  written to the checkout's own git config once per run instead of being passed
+  per command, so the two readers cannot drift apart.
+- `BranchManagerLive` and `ReleaseAgeLive` are now `BranchManager.layer` and
+  `ReleaseAge.layer`, matching the `@effected` kit's own convention. Neither was
+  part of a documented public API.

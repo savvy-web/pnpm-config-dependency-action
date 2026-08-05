@@ -18,6 +18,7 @@
  */
 
 import type { CommandFailedError, CommandOutputError } from "@effected/commands";
+import type { GitCommandError, NotARepositoryError, UnknownRefError } from "@effected/git";
 import type { GitHubError, Repo } from "@effected/github";
 import { Effect } from "effect";
 import type { CatalogDelta, ChangesetFile, DependencyUpdateResult, PullRequestResult } from "../schema/domain.js";
@@ -47,7 +48,7 @@ export const commitAndPrStep = (
 	params: CommitAndPrParams,
 ): Effect.Effect<
 	CommitAndPrResult,
-	GitHubError | CommandFailedError | CommandOutputError,
+	GitHubError | CommandFailedError | CommandOutputError | GitCommandError | NotARepositoryError | UnknownRefError,
 	BranchManager | Report | Repo
 > =>
 	Effect.gen(function* () {

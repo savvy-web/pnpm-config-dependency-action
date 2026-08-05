@@ -2,11 +2,13 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ScriptResult } from "@effected/commands";
+import type { StatusEntry } from "@effected/git";
+import { Git } from "@effected/git";
 import type { FileChange, Repo } from "@effected/github";
 import { GitBranch, GitCommit, GitHubError, RepoRef, Repo as RepoTag } from "@effected/github";
 import { Effect, Layer, References, Result } from "effect";
 import { describe, expect, it } from "vitest";
-import { BranchManager, BranchManagerLive, parseStatusLine } from "../../../src/services/branch.js";
+import { BranchManager } from "../../../src/services/branch.js";
 import { fromMap } from "../../utils/spawner.js";
 
 /** Every resource method resolves `Repo` per call, so tests provide one. */
@@ -68,13 +70,18 @@ const runWithBranchManager = <A, E>(
 	effect: Effect.Effect<A, E, BranchManager | Repo>,
 	branches?: Map<string, string>,
 	responses?: ReadonlyMap<string, ScriptResult>,
+	statusEntries?: ReadonlyArray<StatusEntry>,
 ) => {
 	const state: BranchState = { branches: new Map(branches ?? []) };
 	const commitState: CommitState = { commits: [] };
 	const spawner = fromMap(responses);
 
-	const serviceLayer = BranchManagerLive.pipe(
-		Layer.provide(Layer.mergeAll(branchDouble(state), commitDouble(commitState), spawner.layer)),
+	// Only `status` is stubbed. Every other `Git` member dies naming itself, which
+	// is what proves `BranchManager` reaches for nothing else on this service.
+	const gitLayer = Git.layerTest({ status: () => Effect.succeed(statusEntries ?? []) });
+
+	const serviceLayer = BranchManager.layer.pipe(
+		Layer.provide(Layer.mergeAll(branchDouble(state), commitDouble(commitState), spawner.layer, gitLayer)),
 	);
 
 	return {
@@ -150,8 +157,15 @@ describe("BranchManager.manage", () => {
 				Effect.fail(new GitHubError({ kind: "rejected", operation: "git.updateRef", reason: "protected branch" })),
 		});
 		const spawner = fromMap();
-		const serviceLayer = BranchManagerLive.pipe(
-			Layer.provide(Layer.mergeAll(failingBranch, commitDouble({ commits: [] }), spawner.layer)),
+		const serviceLayer = BranchManager.layer.pipe(
+			Layer.provide(
+				Layer.mergeAll(
+					failingBranch,
+					commitDouble({ commits: [] }),
+					spawner.layer,
+					Git.layerTest({ status: () => Effect.succeed([]) }),
+				),
+			),
 		);
 
 		const either = await Effect.runPromise(
@@ -192,30 +206,16 @@ describe("BranchManager.manage", () => {
 });
 
 describe("BranchManager.commitChanges", () => {
-	it("returns early when there are no changes", async () => {
+	// The change list comes from `@effected/git`'s `status`, which models the two
+	// porcelain columns separately and carries `origPath` for a rename. Every case
+	// below is written as the typed entry git's own machine-readable output
+	// produces, so what is under test is the mapping onto commit members — the
+	// place all three historical bugs lived — rather than a parser we no longer own.
+	const entry = (x: StatusEntry["x"], y: StatusEntry["y"], path: string, origPath?: string): StatusEntry =>
+		(origPath === undefined ? { x, y, path } : { x, y, path, origPath }) as StatusEntry;
+
+	it("commits modified files via the GitHub API", async () => {
 		const responses = new Map<string, ScriptResult>([
-			["git -c core.fileMode=false status --porcelain", { exit: 0, stdout: "", stderr: "" }],
-		]);
-
-		const { commitState, result } = runWithBranchManager(
-			Effect.gen(function* () {
-				const manager = yield* BranchManager;
-				return yield* manager.commitChanges("test commit", "pnpm/config", process.cwd());
-			}),
-			undefined,
-			responses,
-		);
-
-		const either = await result;
-
-		expect(Result.isSuccess(either)).toBe(true);
-		// No commits should have been created
-		expect(commitState.commits).toHaveLength(0);
-	});
-
-	it("commits changed files via GitHub API", async () => {
-		const responses = new Map<string, ScriptResult>([
-			["git -c core.fileMode=false status --porcelain", { exit: 0, stdout: " M package.json\n", stderr: "" }],
 			["git fetch origin pnpm/config", { exit: 0, stdout: "", stderr: "" }],
 			["git reset --hard origin/pnpm/config", { exit: 0, stdout: "", stderr: "" }],
 		]);
@@ -227,6 +227,7 @@ describe("BranchManager.commitChanges", () => {
 			}),
 			undefined,
 			responses,
+			[entry(" ", "M", "package.json")],
 		);
 
 		const either = await result;
@@ -244,7 +245,6 @@ describe("BranchManager.commitChanges", () => {
 
 	it("records a deletion as a FileDeletion member", async () => {
 		const responses = new Map<string, ScriptResult>([
-			["git -c core.fileMode=false status --porcelain", { exit: 0, stdout: "D  deleted-file.ts\n", stderr: "" }],
 			["git fetch origin branch", { exit: 0, stdout: "", stderr: "" }],
 			["git reset --hard origin/branch", { exit: 0, stdout: "", stderr: "" }],
 		]);
@@ -256,6 +256,7 @@ describe("BranchManager.commitChanges", () => {
 			}),
 			undefined,
 			responses,
+			[entry("D", " ", "deleted-file.ts")],
 		);
 
 		const either = await result;
@@ -266,9 +267,14 @@ describe("BranchManager.commitChanges", () => {
 		expect(commitState.commits[0].changes).toEqual([{ _tag: "FileDeletion", path: "deleted-file.ts" }]);
 	});
 
-	it("skips unreadable files gracefully", async () => {
+	it("records a deletion whose two columns disagree", async () => {
+		// Regression: the old parser tested the trimmed two-character field against
+		// "D", which missed `AD` and `RD` entirely — the path was treated as a
+		// modification, the read failed, and the change was dropped with a warning.
+		// `D` in EITHER column means the path is gone in the state being committed.
 		const responses = new Map<string, ScriptResult>([
-			["git -c core.fileMode=false status --porcelain", { exit: 0, stdout: "M  nonexistent-file.ts\n", stderr: "" }],
+			["git fetch origin branch", { exit: 0, stdout: "", stderr: "" }],
+			["git reset --hard origin/branch", { exit: 0, stdout: "", stderr: "" }],
 		]);
 
 		const { commitState, result } = runWithBranchManager(
@@ -278,6 +284,55 @@ describe("BranchManager.commitChanges", () => {
 			}),
 			undefined,
 			responses,
+			[entry("A", "D", "added-then-deleted.ts")],
+		);
+
+		expect(Result.isSuccess(await result)).toBe(true);
+		expect(commitState.commits).toHaveLength(1);
+		expect(commitState.commits[0].changes).toEqual([{ _tag: "FileDeletion", path: "added-then-deleted.ts" }]);
+	});
+
+	it("does not delete a copy's origin", async () => {
+		// A copy carries an origin exactly like a rename does, but the origin still
+		// exists on disk. Deleting it would remove a file the run never touched.
+		const root = mkdtempSync(join(tmpdir(), "branch-copy-"));
+		try {
+			writeFileSync(join(root, "copy.ts"), "export const copied = 1;\n", "utf-8");
+
+			const responses = new Map<string, ScriptResult>([
+				["git fetch origin branch", { exit: 0, stdout: "", stderr: "" }],
+				["git reset --hard origin/branch", { exit: 0, stdout: "", stderr: "" }],
+			]);
+
+			const { commitState, result } = runWithBranchManager(
+				Effect.gen(function* () {
+					const manager = yield* BranchManager;
+					return yield* manager.commitChanges("chore: copy", "branch", root);
+				}),
+				undefined,
+				responses,
+				[entry("C", " ", "copy.ts", "src.ts")],
+			);
+
+			expect(Result.isSuccess(await result)).toBe(true);
+			expect(commitState.commits).toHaveLength(1);
+			expect(commitState.commits[0].changes).toEqual([
+				{ _tag: "FileContent", path: "copy.ts", content: "export const copied = 1;\n" },
+			]);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("skips unreadable files gracefully", async () => {
+		const { commitState, result } = runWithBranchManager(
+			Effect.gen(function* () {
+				const manager = yield* BranchManager;
+				return yield* manager.commitChanges("update", "branch", process.cwd());
+			}),
+			undefined,
+			undefined,
+			[entry("M", " ", "nonexistent-file.ts")],
 		);
 
 		const either = await result;
@@ -287,52 +342,30 @@ describe("BranchManager.commitChanges", () => {
 		expect(commitState.commits).toHaveLength(0);
 	});
 
-	it("ignores executable-bit-only changes and does not create an empty commit", async () => {
-		// Regression: a `run` command (e.g. husky chmod-ing .husky/commit-msg
-		// during `savvy-commit init`) can flip a tracked file's executable bit
-		// without changing its content. A mode-sensitive `git status` reports it
-		// as modified, but committing file content via the GitHub API at mode
-		// 100644 yields an empty tree-diff — an empty commit + spurious PR.
-		// commitChanges must query status with core.fileMode=false so a mode-only
-		// dirty tree is treated as no change.
-		const responses = new Map<string, ScriptResult>([
-			// Mode-sensitive status (the buggy path) would surface a real, readable
-			// file as modified purely because of an executable-bit flip.
-			["git status --porcelain", { exit: 0, stdout: " M package.json\n", stderr: "" }],
-			// Mode-insensitive status (the correct path) reports nothing — the only
-			// working-tree difference was the chmod.
-			["git -c core.fileMode=false status --porcelain", { exit: 0, stdout: "", stderr: "" }],
-			["git fetch origin pnpm/config", { exit: 0, stdout: "", stderr: "" }],
-			["git reset --hard origin/pnpm/config", { exit: 0, stdout: "", stderr: "" }],
-		]);
-
+	it("creates no commit when the working tree is clean", async () => {
 		const { commitState, result } = runWithBranchManager(
 			Effect.gen(function* () {
 				const manager = yield* BranchManager;
 				return yield* manager.commitChanges("chore: update deps", "pnpm/config", process.cwd());
 			}),
 			undefined,
-			responses,
+			undefined,
+			[],
 		);
 
-		const either = await result;
-
-		expect(Result.isSuccess(either)).toBe(true);
-		// No commit should be created from a mode-only change.
+		expect(Result.isSuccess(await result)).toBe(true);
 		expect(commitState.commits).toHaveLength(0);
 	});
 
 	it("commits a renamed file as a delete of the old path plus content at the new one", async () => {
-		// End-to-end counterpart to the parseStatusLine unit tests: proves the fix
-		// reaches the actual commit payload, not just the parser. Before the fix the
-		// path was "old.ts -> new.ts", the read failed, and the commit contained
-		// NOTHING for this rename — the old file stayed and the new one never landed.
+		// THE bug: the old parser produced the single path "old.ts -> new.ts", which
+		// cannot be read from disk, so a renamed file silently never reached the
+		// commit at all — the old file stayed and the new one never landed.
 		const root = mkdtempSync(join(tmpdir(), "branch-rename-"));
 		try {
 			writeFileSync(join(root, "new.ts"), "export const moved = 1;\n", "utf-8");
 
 			const responses = new Map<string, ScriptResult>([
-				["git -c core.fileMode=false status --porcelain", { exit: 0, stdout: "R  old.ts -> new.ts\n", stderr: "" }],
 				["git fetch origin branch", { exit: 0, stdout: "", stderr: "" }],
 				["git reset --hard origin/branch", { exit: 0, stdout: "", stderr: "" }],
 			]);
@@ -344,6 +377,7 @@ describe("BranchManager.commitChanges", () => {
 				}),
 				undefined,
 				responses,
+				[entry("R", " ", "new.ts", "old.ts")],
 			);
 
 			expect(Result.isSuccess(await result)).toBe(true);
@@ -372,7 +406,6 @@ describe("BranchManager.commitChanges", () => {
 			writeFileSync(join(root, "package.json"), '{"name":"from-the-workspace-root"}\n', "utf-8");
 
 			const responses = new Map<string, ScriptResult>([
-				["git -c core.fileMode=false status --porcelain", { exit: 0, stdout: " M package.json\n", stderr: "" }],
 				["git fetch origin branch", { exit: 0, stdout: "", stderr: "" }],
 				["git reset --hard origin/branch", { exit: 0, stdout: "", stderr: "" }],
 			]);
@@ -384,6 +417,7 @@ describe("BranchManager.commitChanges", () => {
 				}),
 				undefined,
 				responses,
+				[entry(" ", "M", "package.json")],
 			);
 
 			const either = await result;
@@ -396,78 +430,6 @@ describe("BranchManager.commitChanges", () => {
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}
-	});
-});
-
-describe("parseStatusLine", () => {
-	// The two-character status field is column-aligned and BOTH columns are
-	// significant, so every case below is written as the exact bytes git emits.
-	it("reads a plain worktree modification", () => {
-		expect(parseStatusLine(" M package.json")).toEqual({
-			path: "package.json",
-			origPath: null,
-			renamed: false,
-			deleted: false,
-		});
-	});
-
-	it("reads a staged addition", () => {
-		expect(parseStatusLine("A  new.ts")).toEqual({ path: "new.ts", origPath: null, renamed: false, deleted: false });
-	});
-
-	it("reads an untracked file", () => {
-		expect(parseStatusLine("?? untracked.ts")).toEqual({
-			path: "untracked.ts",
-			origPath: null,
-			renamed: false,
-			deleted: false,
-		});
-	});
-
-	it("reads a deletion from either column", () => {
-		// " D" is an unstaged delete, "D " a staged one — both mean the path is gone.
-		expect(parseStatusLine(" D gone.ts").deleted).toBe(true);
-		expect(parseStatusLine("D  gone.ts").deleted).toBe(true);
-	});
-
-	it("reads a deletion whose columns disagree", () => {
-		// Regression: `substring(0,2).trim() === "D"` missed "AD" and "RD" entirely,
-		// so the file was treated as modified, failed to read, and was dropped.
-		expect(parseStatusLine("AD added-then-deleted.ts")).toEqual({
-			path: "added-then-deleted.ts",
-			origPath: null,
-			renamed: false,
-			deleted: true,
-		});
-	});
-
-	it("splits a rename into its origin and destination", () => {
-		// THE bug: the old parser produced the path "old.ts -> new.ts", which cannot
-		// be read from disk, so a renamed file silently never reached the commit.
-		expect(parseStatusLine("R  old.ts -> new.ts")).toEqual({
-			path: "new.ts",
-			origPath: "old.ts",
-			renamed: true,
-			deleted: false,
-		});
-	});
-
-	it("carries a copy's origin but does not mark it renamed", () => {
-		// A copy's origin still exists and must NOT be deleted.
-		expect(parseStatusLine("C  src.ts -> copy.ts")).toEqual({
-			path: "copy.ts",
-			origPath: "src.ts",
-			renamed: false,
-			deleted: false,
-		});
-	});
-
-	it("unquotes a path git had to quote", () => {
-		expect(parseStatusLine(' M "has space and \\"quote\\".ts"').path).toBe('has space and "quote".ts');
-	});
-
-	it("keeps an unquoted path containing spaces intact", () => {
-		expect(parseStatusLine(" M dir/file with spaces.ts").path).toBe("dir/file with spaces.ts");
 	});
 });
 

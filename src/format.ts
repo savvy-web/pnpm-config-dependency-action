@@ -85,7 +85,11 @@ export const describePmEvidence = (detected: DetectedPm): string | null => {
 export const INSTALL_LABEL: Record<SupportedPm, string> = {
 	pnpm: "pnpm clean --lockfile && pnpm install --frozen-lockfile=false",
 	bun: "bun install --force",
-	npm: "rm -f package-lock.json && npm install",
+	// `rmSync`, not a shelled `rm`: `rm` does not exist on a Windows runner. The
+	// label names what the code actually does, because a reader comparing this
+	// log line against a failure would otherwise be debugging a command the run
+	// never issued.
+	npm: "unlink package-lock.json && npm install",
 };
 
 // ══════════════════════════════════════════════════════════════════════════════

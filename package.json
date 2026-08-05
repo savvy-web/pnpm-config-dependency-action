@@ -42,6 +42,7 @@
 	"dependencies": {
 		"@effect/platform-node": "catalog:effect",
 		"@effected/commands": "^0.3.0",
+		"@effected/git": "^0.5.2",
 		"@effected/github": "^0.2.3",
 		"@effected/github-actions": "^0.5.1",
 		"@effected/lockfiles": "^0.3.2",

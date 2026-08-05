@@ -34,6 +34,7 @@ src/
 │   └── outputs.ts         # OUTPUT_NAMES tuple + initialOutputs + emitOutputs
 ├── steps/                 # one module per orchestration unit; each declares its own
 │   ├── detect-package-manager.ts   #   result type, an explicit requirement channel, and
+│   ├── configure-status.ts         #   pins core.fileMode=false on the checkout, once
 │   ├── branch.ts                   #   a tagged error ONLY if it can actually fail
 │   ├── lockfile-snapshot.ts        #   (four carry `never`)
 │   ├── upgrade-package-manager.ts
@@ -44,7 +45,7 @@ src/
 │   ├── install.ts                  #   runInstall lives here
 │   ├── format-workspace.ts
 │   ├── custom-commands.ts          #   runCommands; returns failures, does NOT conclude
-│   ├── detect-changes.ts           #   git status; the only I/O that was left in program.ts
+│   ├── detect-changes.ts           #   Git.status; the last I/O primitive out of program.ts
 │   ├── changesets.ts
 │   └── commit-and-pr.ts            #   one module: the PR must describe a commit that exists
 ├── layers/
@@ -141,7 +142,8 @@ graph TD
     B --> D[makeAppLayer dryRun runtimeLive: Build All Layers, GitHubToken.clientLayer]
     D --> E[CheckRun.withCheckRun]
     E --> PM[detectPackageManager: root + pm, yarn rejected]
-    PM --> EV[BranchManager.validateBranches source/target: fail fast if missing]
+    PM --> CFG[configureStatusStep: git config core.fileMode=false at the root]
+    CFG --> EV[BranchManager.validateBranches source/target: fail fast if missing]
     EV --> F[BranchManager.manage: GitBranch.upsert from source-branch]
     F --> J[captureLockfileState Before]
     J --> J2{upgrade-package-manager?}
@@ -168,7 +170,7 @@ graph TD
     P --> R{Commands Succeed?}
     R -->|No| S[conclude failure + fail]
     R -->|Yes| Q
-    Q --> T[compareLockfiles + git status --porcelain]
+    Q --> T[compareLockfiles + Git.status]
     T --> T2{Changes Detected?}
     T2 -->|No| U[conclude neutral + exit early]
     T2 -->|Yes| V{changesets input AND .changeset/ dir?}
@@ -269,11 +271,20 @@ const appLayer = makeAppLayer(dryRun, { runtimeLive });
   `LockfileReader.layer()` (all root-bound at build).
 - `Changesets.DepsRegenDefault` from `@savvy-web/silk-effects` over the platform
   layer.
-- Domain layers: `BranchManagerLive`, `PackageManagerUpgradeLive`,
+- Domain layers: `BranchManager.layer`, `PackageManagerUpgradeLive`,
   `ConfigDepsLive`, `CatalogConfigDepsLive`, `RegularDepsLive`, `ChangesetsLive`,
-  `ReportLive`, `RuntimeUpgradeLive`.
-- `ReleaseAgeLive()` over `NodeServices.layer` + `NpmRegistry`, provided to
+  `ReportLive`, `RuntimeUpgradeLive`. The two moved to the kit's `static layer`
+  convention (`BranchManager.layer`, `ReleaseAge.layer`, plus
+  `ReleaseAge.layerNoop`) are declared **in the class body** — a member attached
+  by post-class assignment is tree-shaken out of the bundled `dist`, a failure
+  that appears only in production because vitest runs the source. The remaining
+  `*Live` constants have not been converted.
+- `ReleaseAge.layer` over `WorkspaceCatalogs` + `NpmRegistry`, provided to
   `ConfigDepsLive` and `RegularDepsLive`.
+- `Git.layer` (from `@effected/git`) over the platform layer — read-mostly here:
+  `status` for the change verdict and the commit file list, `configSet` once for
+  the `core.fileMode` pin. Everything that mutates history still goes through the
+  GitHub API so the commit verifies.
 - Runtime resolver layers: `*Resolver.layerOffline` (default) or `*Resolver.layer`
   (live), selected by `runtimeLive`.
 
@@ -294,6 +305,17 @@ const appLayer = makeAppLayer(dryRun, { runtimeLive });
   source of truth.
 - Every subsequent step reads and writes at `detected.root`, not `process.cwd()`:
   the action can legitimately be invoked from a subdirectory of the workspace.
+
+### Step 4b: Pin `core.fileMode` on the Checkout
+
+- `configureStatusStep(detected.root)` writes `core.fileMode=false` into the
+  checkout's **local** git config, once, before anything reads status.
+- It runs here — after detection, before the branch is touched — because both
+  status readers (the change verdict and the commit file list) depend on it and
+  neither carries a per-command flag.
+- Failure propagates. A write that did not take leaves every later status read
+  reporting exec-bit flips as changes, and the run's whole change verdict is
+  wrong in a way nothing downstream can detect.
 
 ### Step 5: Branch Management
 
@@ -383,7 +405,10 @@ const appLayer = makeAppLayer(dryRun, { runtimeLive });
 
 ### Step 11: Sync Peer Dependencies
 
-- `syncPeers(config, regularUpdates, root)` — `peer-lock` syncs the peer range on
+- `syncPeers(config, regularUpdates)` — takes **no** workspace root:
+  `WorkspaceDiscovery` binds its root when the layer is built, so a root
+  parameter could only be ignored, and it was — silently, which is the problem.
+  `peer-lock` syncs the peer range on
   every version bump, `peer-minor` only on minor+ bumps (flooring patch to `.0`).
   Produces `peerDependency`-typed results that flow into reporting only; the
   changeset step derives its own content from git.
@@ -412,10 +437,15 @@ const appLayer = makeAppLayer(dryRun, { runtimeLive });
 
 ### Step 14: Run Custom Commands (if specified)
 
-- `runCommands` executes each `run` entry sequentially via `Run.collect` on
-  `sh -c …`. A non-zero exit is a **result**, not an error channel failure, so the
-  failure branch is driven by the exit code; the catch covers only a genuine spawn
+- `runCommands(commands, root)` executes each `run` entry sequentially via
+  `Run.collect` on `sh -c …`, **anchored at the detected workspace root**. A
+  non-zero exit is a **result**, not an error channel failure, so the failure
+  branch is driven by the exit code; the catch covers only a genuine spawn
   failure. All commands are attempted, errors collected.
+- The cwd is load-bearing and was missing: a command inheriting the process
+  directory lints, tests or builds a different tree than the run just edited when
+  the action is invoked from a subdirectory — and passes, which is a green signal
+  about the wrong tree rather than a failure.
 - If any command failed, the check run is concluded `failure`, outputs are set to
   no-changes, and the program fails.
 
@@ -424,11 +454,22 @@ const appLayer = makeAppLayer(dryRun, { runtimeLive });
 - `compareLockfiles(before, after, root)` produces `LockfileChange[]` (one record
   per catalog change × consuming importer × dep section, each carrying the precise
   type).
-- `git -c core.fileMode=false status --porcelain` supplies the file-level signal.
-  `core.fileMode=false` is deliberate: executable-bit-only flips (e.g. husky
-  chmod-ing hooks during a `run` command) do not survive the content-based GitHub
-  API commit, so counting them would produce an empty commit and a spurious PR.
-  `BranchManager.commitChanges` queries status the same way.
+- `Git.status(root)` from `@effected/git` supplies the file-level signal, as a
+  list of typed `StatusEntry` values rather than porcelain text this repo parses.
+  `BranchManager.commitChanges` reads the same way, which is what keeps the run's
+  verdict and the commit's contents from disagreeing.
+- `core.fileMode=false` is **not** a per-command flag any more. It is written
+  once into the checkout's own git config by `configureStatusStep`, immediately
+  after detection and before any status read. The reason for the setting is
+  unchanged — executable-bit-only flips (husky chmod-ing hooks during a `run`
+  command) do not survive the content-based GitHub API commit at mode 100644, so
+  counting them produces an empty commit and a spurious PR. What changed is that
+  there is now one place to get it right instead of two call sites that could
+  drift, and no way for a third reader to be added without it.
+- The cost, stated because it is real: the setting applies to every git command
+  in that checkout for the rest of the job, including silk's DepsRegen. Benign —
+  a mode flip is not a dependency change and cannot survive the API commit
+  regardless — and scoped to the workspace, not the runner.
 - `allUpdates` is the concatenation of the package-manager, runtime, config,
   regular and peer updates. No changes → conclude `neutral` and exit early.
 

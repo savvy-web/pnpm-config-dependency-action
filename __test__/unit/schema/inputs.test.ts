@@ -147,6 +147,32 @@ describe("readInputs — validation", () => {
 		expect(Exit.isFailure(exit)).toBe(true);
 	});
 
+	it("rejects a glob in peer-lock", async () => {
+		// `dependencies` entries ARE globs; peer entries are matched as exact
+		// package names. A `@scope/*` in `peer-lock` therefore matched nothing at
+		// all — and did so silently: the overlap check compares raw strings so it
+		// never fired, and the run reported success having synced no peer ranges.
+		// The only proportional signal for "this input did nothing" is rejection.
+		const exit = await read({ dependencies: "@scope/*", "peer-lock": "@scope/*" });
+
+		expect(Exit.isFailure(exit)).toBe(true);
+	});
+
+	it("rejects a glob in peer-minor", async () => {
+		const exit = await read({ dependencies: "effect*", "peer-minor": "effect*" });
+
+		expect(Exit.isFailure(exit)).toBe(true);
+	});
+
+	it("accepts a literal scoped package name in peer-lock", async () => {
+		// The control. Without it the rejection above is indistinguishable from a
+		// pattern that rejects every scoped name — `@scope/pkg` contains no glob
+		// metacharacter and must still be accepted.
+		const exit = await read({ dependencies: "@scope/*", "peer-lock": "@scope/pkg" });
+
+		expect(Exit.isSuccess(exit)).toBe(true);
+	});
+
 	it("fails on an unparseable semver range for a runtime input", async () => {
 		const exit = await read({ dependencies: "effect", "upgrade-runtime-node": "not-a-range" });
 

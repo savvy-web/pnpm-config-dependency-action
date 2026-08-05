@@ -338,7 +338,9 @@ Whether any dependency changes were detected (`"true"` or `"false"`).
 
 The complete run as a single JSON document. Its shape is published as a JSON Schema at [`docs/schema/run-result.schema.json`](./schema/run-result.schema.json), generated from the action's own types, which is the authoritative field list.
 
-The property to design around: `result` is **always valid JSON**. A run that did nothing, or that failed before it detected anything, publishes an empty-run document rather than an empty string, so a consuming step can call `fromJSON()` unconditionally instead of guarding for the empty case. Every array is present and empty rather than omitted, so indexing into one is safe without a length check.
+The property to design around: `result` is **always valid JSON**. A run that did nothing, or that failed before it detected anything, publishes an empty-run document rather than an empty string, so a consuming step can call `fromJSON()` unconditionally instead of guarding for the empty case. Every array is present and empty rather than omitted, so **iterating** one is safe without a presence check — `updates` is never `null` and never absent.
+
+Indexing is a different claim, and it does not follow. A present-but-empty array has no element `0`: in a workflow expression `fromJSON(...).updates[0].dependency` quietly evaluates to the empty string, and in a script consumer it throws. Check `updates.length` (or the `updates-count` output) before reaching for an element.
 
 | Field | Type | Meaning |
 | --- | --- | --- |

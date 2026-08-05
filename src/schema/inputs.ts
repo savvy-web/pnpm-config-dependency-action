@@ -175,6 +175,29 @@ export const readInputs = Effect.gen(function* () {
 		);
 	}
 
+	// Reject globs in the peer inputs BEFORE the overlap check.
+	//
+	// `peer-lock` and `peer-minor` entries are matched as literal package names
+	// (`strategyMap` in `syncPeers` is keyed by exact name), while
+	// `dependencies` entries ARE globs. A `@scope/*` typed into `peer-lock`
+	// therefore matches nothing, silently: the overlap check compares raw
+	// strings so it never fires, the "does not match any dependencies pattern"
+	// warning below DOES fire but reads as a configuration nit, and the run
+	// completes having synced no peer ranges at all. Rejecting is the only
+	// signal proportional to "this input did nothing".
+	const globbed = [...peerLock, ...peerMinor].filter((pkg) => /[*?[\]]/.test(pkg));
+	if (globbed.length > 0) {
+		yield* Effect.fail(
+			new InvalidInputError({
+				field: "peer-lock",
+				reason:
+					`Glob patterns are not supported in peer-lock/peer-minor (they match exact package names): ${globbed.join(", ")}. ` +
+					"Use `dependencies` for glob matching and list each peer dependency by name.",
+				value: undefined,
+			}),
+		);
+	}
+
 	// Validate peer-lock and peer-minor don't overlap
 	const peerOverlap = peerLock.filter((p) => peerMinor.includes(p));
 	if (peerOverlap.length > 0) {

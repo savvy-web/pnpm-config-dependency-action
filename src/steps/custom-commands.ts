@@ -32,9 +32,15 @@ export interface RunCommandsResult {
  *
  * Commands are executed sequentially. All commands are attempted even if some fail,
  * but failures are collected and returned for the caller to handle.
+ *
+ * Every command runs at `workspaceRoot` — the DETECTED root, not the process
+ * cwd. The two differ whenever the action is invoked from a subdirectory, and a
+ * command inheriting the process cwd would then lint, test or build a different
+ * tree than the one this run just edited: it would pass while proving nothing.
  */
 export const runCommands = (
 	commands: ReadonlyArray<string>,
+	workspaceRoot: string,
 ): Effect.Effect<RunCommandsResult, never, ChildProcessSpawner.ChildProcessSpawner> =>
 	Effect.gen(function* () {
 		const successful: string[] = [];
@@ -46,7 +52,9 @@ export const runCommands = (
 			// Run.collect treats a non-zero exit as a RESULT, so the failure branch
 			// is driven by the exit code rather than the error channel; the catch
 			// covers only a genuine spawn failure.
-			const result = yield* Run.collect(ChildProcess.make("sh", ["-c", command])).pipe(
+			const result = yield* Run.collect(
+				ChildProcess.make("sh", ["-c", command]).pipe(ChildProcess.setCwd(workspaceRoot)),
+			).pipe(
 				Effect.map((output) =>
 					output.succeeded
 						? { success: true as const }
@@ -89,6 +97,7 @@ export const runCommands = (
  */
 export const customCommandsStep = (
 	commands: ReadonlyArray<string>,
+	workspaceRoot: string,
 ): Effect.Effect<RunCommandsResult | null, never, ChildProcessSpawner.ChildProcessSpawner> =>
 	Effect.gen(function* () {
 		if (commands.length === 0) {
@@ -97,7 +106,7 @@ export const customCommandsStep = (
 		}
 
 		yield* Effect.logInfo(`Step: custom commands — ${commands.length} command(s)`);
-		const result = yield* runCommands(commands);
+		const result = yield* runCommands(commands, workspaceRoot);
 
 		if (result.failed.length > 0) {
 			const failedCommands = result.failed.map((f) => f.command).join(", ");

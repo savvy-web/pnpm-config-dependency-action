@@ -24,8 +24,10 @@
  */
 
 import { readFileSync } from "node:fs";
-import type { CommandOutputError } from "@effected/commands";
-import { CommandFailedError, Run } from "@effected/commands";
+import type { CommandFailedError, CommandOutputError } from "@effected/commands";
+import { Run } from "@effected/commands";
+import type { GitCommandError, GitShape, NotARepositoryError, UnknownRefError } from "@effected/git";
+import { Git } from "@effected/git";
 import type { FileChange, GitBranchShape, GitCommitShape, GitHubError, Repo } from "@effected/github";
 import { FileContent, FileDeletion, GitBranch, GitCommit } from "@effected/github";
 import { Context, Effect, Layer } from "effect";
@@ -36,6 +38,9 @@ import type { BranchResult } from "../schema/domain.js";
 
 /** Every failure a local `Run`-based git invocation in this module can produce. */
 type GitRunError = CommandFailedError | CommandOutputError;
+
+/** Every failure `@effected/git`'s typed members can produce. */
+type GitServiceError = GitCommandError | NotARepositoryError | UnknownRefError;
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Service Interface
@@ -64,7 +69,7 @@ export class BranchManager extends Context.Service<
 			message: string,
 			branchName: string,
 			workspaceRoot: string,
-		) => Effect.Effect<void, GitHubError | GitRunError, Repo>;
+		) => Effect.Effect<void, GitHubError | GitRunError | GitServiceError, Repo>;
 		readonly validateBranches: (
 			source: string,
 			target: string,
@@ -80,36 +85,43 @@ export class BranchManager extends Context.Service<
 		 */
 		readonly ensureBaseHistory: (base: string, workspaceRoot: string) => Effect.Effect<void, GitRunError>;
 	}
->()("BranchManager") {}
+>()("BranchManager") {
+	/**
+	 * Live layer.
+	 *
+	 * A `static readonly layer` on the class rather than a `BranchManagerLive`
+	 * const — the kit's own convention across every `@effected` service — and
+	 * declared IN the class body, because a member attached by post-class
+	 * assignment is tree-shaken out of the bundled `dist`. That failure appears
+	 * only in production, since vitest runs the source.
+	 */
+	static readonly layer = Layer.effect(
+		this,
+		Effect.gen(function* () {
+			const branch = yield* GitBranch;
+			const commit = yield* GitCommit;
+			const git = yield* Git;
+			// The spawner is ambient infrastructure, so resolving it once here is
+			// safe. `Repo` deliberately is NOT resolved here — see the module note.
+			const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+			const withSpawner = <A, E, R>(effect: Effect.Effect<A, E, R | ChildProcessSpawner.ChildProcessSpawner>) =>
+				effect.pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner)) as Effect.Effect<
+					A,
+					E,
+					Exclude<R, ChildProcessSpawner.ChildProcessSpawner>
+				>;
 
-// ══════════════════════════════════════════════════════════════════════════════
-// Live Layer
-// ══════════════════════════════════════════════════════════════════════════════
-
-export const BranchManagerLive = Layer.effect(
-	BranchManager,
-	Effect.gen(function* () {
-		const branch = yield* GitBranch;
-		const commit = yield* GitCommit;
-		// The spawner is ambient infrastructure, so resolving it once here is
-		// safe. `Repo` deliberately is NOT resolved here — see the module note.
-		const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-		const withSpawner = <A, E, R>(effect: Effect.Effect<A, E, R | ChildProcessSpawner.ChildProcessSpawner>) =>
-			effect.pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner)) as Effect.Effect<
-				A,
-				E,
-				Exclude<R, ChildProcessSpawner.ChildProcessSpawner>
-			>;
-
-		return {
-			manage: (branchName, defaultBranch = "main") => withSpawner(manageBranchImpl(branch, branchName, defaultBranch)),
-			commitChanges: (message, branchName, workspaceRoot) =>
-				withSpawner(commitChangesImpl(commit, message, branchName, workspaceRoot)),
-			validateBranches: (source, target) => validateBranchesImpl(branch, source, target),
-			ensureBaseHistory: (base, workspaceRoot) => withSpawner(ensureBaseHistoryImpl(base, workspaceRoot)),
-		};
-	}),
-);
+			return {
+				manage: (branchName, defaultBranch = "main") =>
+					withSpawner(manageBranchImpl(branch, branchName, defaultBranch)),
+				commitChanges: (message, branchName, workspaceRoot) =>
+					withSpawner(commitChangesImpl(git, commit, message, branchName, workspaceRoot)),
+				validateBranches: (source, target) => validateBranchesImpl(branch, source, target),
+				ensureBaseHistory: (base, workspaceRoot) => withSpawner(ensureBaseHistoryImpl(base, workspaceRoot)),
+			};
+		}),
+	);
+}
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Local git helpers
@@ -127,109 +139,6 @@ const gitRunIn = (
 	...args: ReadonlyArray<string>
 ): Effect.Effect<string, GitRunError, ChildProcessSpawner.ChildProcessSpawner> =>
 	Run.text(ChildProcess.make("git", [...args]).pipe(ChildProcess.setCwd(cwd)));
-
-/**
- * Run a git command in `cwd` and return stdout VERBATIM, failing on a non-zero
- * exit.
- *
- * `Run.text` trims, which silently corrupts `git status --porcelain`: its
- * two-character status field is column-aligned, so a leading space (" M path")
- * is load-bearing and trimming the first line shifts every subsequent
- * `substring` index by one.
- *
- * `cwd` is explicit because git reports `--porcelain` paths relative to the
- * directory it ran in, so the caller resolving those paths must anchor on the
- * same directory.
- */
-const gitRawIn = (
-	cwd: string,
-	...args: ReadonlyArray<string>
-): Effect.Effect<string, GitRunError, ChildProcessSpawner.ChildProcessSpawner> =>
-	Effect.gen(function* () {
-		const command = ChildProcess.make("git", [...args]).pipe(ChildProcess.setCwd(cwd));
-		const output = yield* Run.collect(command);
-		if (!output.succeeded) {
-			return yield* Effect.fail(CommandFailedError.nonZero(command, output));
-		}
-		return output.stdout;
-	});
-
-// ══════════════════════════════════════════════════════════════════════════════
-// Porcelain parsing
-// ══════════════════════════════════════════════════════════════════════════════
-
-/** One parsed `git status --porcelain` line. */
-export interface StatusLine {
-	/** The path the entry is about — for a rename or copy, the NEW path. */
-	readonly path: string;
-	/** The origin path of a rename or copy; `null` otherwise. */
-	readonly origPath: string | null;
-	/** True when this entry is a rename (so `origPath` must be deleted). */
-	readonly renamed: boolean;
-	/** True when the entry's net effect is that `path` no longer exists. */
-	readonly deleted: boolean;
-}
-
-/**
- * Undo git's C-style path quoting.
- *
- * `--porcelain` wraps a path in double quotes when it contains a control
- * character, a quote, a backslash or (with the default `core.quotePath`) a
- * non-ASCII byte. `JSON.parse` covers the `\" \\ \t \n \r` escapes git emits;
- * it does NOT cover git's octal `\NNN` form for raw bytes, so a path with a
- * non-ASCII name still round-trips incorrectly. That is a narrower bug than
- * the one this function exists to fix, and it fails loudly (the file read
- * misses and warns) rather than silently committing the wrong path.
- */
-const unquotePath = (raw: string): string => {
-	if (!raw.startsWith('"')) return raw;
-	try {
-		return JSON.parse(raw) as string;
-	} catch {
-		return raw;
-	}
-};
-
-/**
- * Parse one `git status --porcelain` (v1) line into its path and net effect.
- *
- * @remarks
- * The format is `XY PATH`, or `XY ORIG -> PATH` for a rename or copy, where `X`
- * is the index status and `Y` the worktree status. Both columns are
- * significant and a space in either is meaningful, which is why the line is
- * indexed rather than trimmed and split.
- *
- * **The bug this replaces:** the previous parser read `line.substring(3)` as the
- * whole path and compared `line.substring(0, 2).trim() === "D"`. On a rename it
- * produced the path `"old -> new"`, which cannot be read from disk, so the
- * change was dropped with a warning — a silently missing file in the commit.
- * It also missed a deletion whose index and worktree columns disagreed (`AD`,
- * `RD`), treating it as a modification and dropping it the same way.
- *
- * Exported for direct testing: the failure mode is entirely in the parsing, so
- * the test that guards it should not have to spawn git to reach it.
- */
-export const parseStatusLine = (line: string): StatusLine => {
-	const x = line[0] ?? " ";
-	const y = line[1] ?? " ";
-	const rest = line.substring(3);
-
-	// ` -> ` only ever separates the two halves of a rename/copy entry; a literal
-	// arrow inside a filename is quoted by git, so it cannot reach here unquoted.
-	const arrow = rest.indexOf(" -> ");
-	const renamedOrCopied = (x === "R" || x === "C" || y === "R" || y === "C") && arrow !== -1;
-
-	const path = unquotePath(renamedOrCopied ? rest.substring(arrow + 4) : rest);
-	const origPath = renamedOrCopied ? unquotePath(rest.substring(0, arrow)) : null;
-
-	// A rename's origin must be deleted; a copy's must not.
-	const renamed = renamedOrCopied && (x === "R" || y === "R");
-	// `D` in EITHER column means the path is gone in the state being committed.
-	// A rename entry is never a deletion of its new path.
-	const deleted = !renamedOrCopied && (x === "D" || y === "D");
-
-	return { path, origPath, renamed, deleted };
-};
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Implementation
@@ -328,62 +237,54 @@ const validateBranchesImpl = (
  * Commits are automatically verified/signed by GitHub when using a GitHub App token.
  */
 const commitChangesImpl = (
+	git: GitShape,
 	commit: GitCommitShape,
 	message: string,
 	branchName: string,
 	workspaceRoot: string,
-): Effect.Effect<void, GitHubError | GitRunError, Repo | ChildProcessSpawner.ChildProcessSpawner> =>
+): Effect.Effect<void, GitHubError | GitRunError | GitServiceError, Repo | ChildProcessSpawner.ChildProcessSpawner> =>
 	Effect.gen(function* () {
-		// Check if there are changes to commit.
+		// Read the change list through `@effected/git`, which runs
+		// `git status --porcelain -z` and models the two porcelain columns
+		// separately with `origPath` for renames. That shape is why this no longer
+		// hand-parses: a rename yielding "old -> new" as a single path, and a
+		// deletion whose columns disagree (`AD`, `RD`), were both real bugs here —
+		// and both are impossible against a typed entry.
 		//
-		// Use core.fileMode=false so a working tree dirtied only by executable-bit
-		// flips (e.g. husky chmod-ing .husky hook scripts during a `run` command)
-		// is not mistaken for a committable change. We commit file content via the
-		// GitHub API at mode 100644, so a mode-only change produces an empty
-		// tree-diff — committing it would create an empty commit and a spurious PR.
-		//
-		// Anchored at `workspaceRoot`, and the file reads below resolve against the
-		// same directory: git reports --porcelain paths relative to the directory it
-		// ran in, so the two must not disagree.
-		const statusOutput = yield* gitRawIn(workspaceRoot, "-c", "core.fileMode=false", "status", "--porcelain");
-		// `line.length > 0`, not `line.trim().length > 0`: --porcelain's status
-		// field is column-aligned and a leading space is load-bearing, so trimming
-		// to test emptiness invites trimming to parse. program.ts's change
-		// detection filters identically; the two must stay consistent.
-		const lines = statusOutput.split("\n").filter((l) => l.length > 0);
+		// `core.fileMode=false` is set on the checkout by `configureStatus` rather
+		// than passed per command: executable-bit-only flips do not survive the
+		// content-based API commit at mode 100644, so counting them would produce
+		// an empty commit and a spurious PR.
+		const entries = yield* git.status(workspaceRoot);
 
-		if (lines.length === 0) {
+		if (entries.length === 0) {
 			yield* Effect.logInfo("No changes to commit");
 			return;
 		}
 
 		yield* Effect.logInfo("Committing changes via GitHub API...");
 
-		// Build FileChange entries from git status
 		const fileChanges: FileChange[] = [];
 
-		for (const line of lines) {
-			const entry = parseStatusLine(line);
-
-			// A rename or copy reports BOTH sides. The old path has to be deleted
-			// explicitly: the commit is built as an explicit change set, not as a
-			// diff, so a tree that only adds the new path leaves the old one behind.
-			// A copy (`C`) carries an origin too, but must NOT delete it — the origin
-			// still exists — which is why the two are distinguished rather than both
-			// treated as "has an origPath".
-			if (entry.origPath !== null && entry.renamed) {
+		for (const entry of entries) {
+			// A rename reports both sides. The old path must be deleted explicitly:
+			// the commit is an explicit change set, not a diff, so a tree that only
+			// adds the new path leaves the old one behind. A COPY also carries an
+			// origin but must NOT delete it — the origin still exists.
+			const renamed = entry.x === "R" || entry.y === "R";
+			if (renamed && entry.origPath !== undefined) {
 				fileChanges.push(FileDeletion.make({ path: entry.origPath }));
 				yield* Effect.logDebug(`Deleting renamed-from file: ${entry.origPath}`);
 			}
 
-			if (entry.deleted) {
-				// Deleted file. The kit models a deletion as its own tagged member
-				// rather than a `sha: null` sentinel.
+			// `D` in EITHER column means the path is gone in the state being
+			// committed. A rename is never a deletion of its new path.
+			const deleted = !renamed && (entry.x === "D" || entry.y === "D");
+
+			if (deleted) {
 				fileChanges.push(FileDeletion.make({ path: entry.path }));
 				yield* Effect.logDebug(`Deleting file: ${entry.path}`);
 			} else {
-				// Added or modified file — read content, resolved against the same
-				// directory the status above was taken in.
 				const absolutePath = entry.path.startsWith("/") ? entry.path : `${workspaceRoot}/${entry.path}`;
 				try {
 					const content = readFileSync(absolutePath, "utf-8");

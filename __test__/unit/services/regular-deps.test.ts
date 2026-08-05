@@ -7,7 +7,7 @@ import { WorkspaceDiscovery, WorkspaceDiscoveryError } from "@effected/workspace
 import { Effect, Layer, References } from "effect";
 import { describe, expect, it } from "vitest";
 import { RegularDeps, RegularDepsLive } from "../../../src/services/regular-deps.js";
-import { ReleaseAge, ReleaseAgeNoop } from "../../../src/services/release-age.js";
+import { ReleaseAge } from "../../../src/services/release-age.js";
 import { matchesPattern, parseSpecifier } from "../../../src/utils/deps.js";
 import { seededRegistry } from "../../utils/fixtures.js";
 
@@ -67,7 +67,7 @@ const runWithService = <A, E>(
 	fn: (service: Effect.Success<typeof RegularDeps>) => Effect.Effect<A, E>,
 	packages?: Record<string, string | string[]>,
 	workspacesLayer?: Layer.Layer<WorkspaceDiscovery>,
-	releaseAge: Layer.Layer<ReleaseAge> = ReleaseAgeNoop,
+	releaseAge: Layer.Layer<ReleaseAge> = ReleaseAge.layerNoop,
 ) => {
 	// These suites describe a package as a bare version or a version list; the
 	// shared seeder takes the richer per-version shape.

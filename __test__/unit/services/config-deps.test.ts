@@ -6,7 +6,7 @@ import { Yaml } from "@effected/yaml";
 import { Effect, Layer, References } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ConfigDeps, ConfigDepsLive } from "../../../src/services/config-deps.js";
-import { ReleaseAge, ReleaseAgeNoop } from "../../../src/services/release-age.js";
+import { ReleaseAge } from "../../../src/services/release-age.js";
 import { parseConfigEntry } from "../../../src/utils/deps.js";
 import { seededRegistry } from "../../utils/fixtures.js";
 
@@ -17,7 +17,7 @@ import { seededRegistry } from "../../utils/fixtures.js";
 const runWithService = <A, E>(
 	fn: (service: Effect.Success<typeof ConfigDeps>) => Effect.Effect<A, E>,
 	packages?: Record<string, { version: string; integrity?: string; versions?: string[] }>,
-	releaseAge: Layer.Layer<ReleaseAge> = ReleaseAgeNoop,
+	releaseAge: Layer.Layer<ReleaseAge> = ReleaseAge.layerNoop,
 ) => {
 	const registryLayer = packages ? seededRegistry(packages) : seededRegistry({});
 	const layer = ConfigDepsLive.pipe(Layer.provide(Layer.merge(registryLayer, releaseAge)));

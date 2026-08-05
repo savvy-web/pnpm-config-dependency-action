@@ -17,7 +17,7 @@ implementation-plans: []
 [Back to index](./_index.md)
 
 **Framework:** Vitest with v8 coverage, forks pool for Effect-TS compatibility.
-Current suite: **546 tests, all passing**.
+Current suite: **575 tests, all passing**.
 
 ## Layout
 
@@ -95,6 +95,21 @@ Shared helpers currently in that directory:
   over a temp-dir fixture), as is `PackageManagerUpgradeLive` over an in-memory
   registry, so the dispatch and the unsatisfiable-range path are genuinely
   resolved rather than mocked into existence.
+  - It also pins the `core.fileMode=false` write — that it happens, and that it
+    targets the **detected root**. Two status readers now depend on it (the
+    change verdict and the commit file list) and neither passes a per-command
+    flag, so this one write is the only thing keeping an executable-bit-only
+    flip from producing an empty commit and a spurious PR.
+  - **And the `result` document on all three exit paths** — success, the
+    no-changes neutral exit, and the custom-command failure. All three are
+    asserted because they return through different branches, so one being
+    correct says nothing about the others. The two early returns used to publish
+    the *pre-run baseline* (`packageManager: null`, `workspaceRoot: ""`) after
+    detection had already succeeded; the success path had no assertion at all.
+    That gap surfaced by accident — a mutation aimed at one early-return path
+    landed on the success path instead, and the whole suite stayed green. A
+    misfire that reports green is evidence about the path it hit, not a wasted
+    attempt.
 - **Install dispatch** (`unit/steps/install.test.ts`) — `runInstall` per package
   manager over a `ScriptedSpawner`, asserting the command lines and their order,
   and that the npm path unlinks `package-lock.json` through `node:fs`.
@@ -140,6 +155,21 @@ Shared helpers currently in that directory:
   `GitCommit.commitFiles` (including the `ensureBaseHistory` merge-base probe and
   fetch fallback), `resolveTargetBranch`, catalog helpers, commit subjects,
   `devEngines.runtime` helpers and the semver range helpers.
+  - **The status-parsing tests moved a level up, deliberately.** `branch.test.ts`
+    used to hold a `parseStatusLine` block asserting on a parser this repo owned.
+    That parser is **deleted** — the reads go through `@effected/git`'s `status`,
+    whose `StatusEntry` models the two porcelain columns separately and carries
+    `origPath`. The three cases that expressed *behavior* rather than parsing
+    survive, re-pointed at `commitChanges`' commit payload: a rename emits a
+    delete of the origin plus content at the destination, a deletion whose
+    columns disagree (`AD`, `RD`) is a deletion, and a copy does **not** delete
+    its origin. Asserting on the payload rather than a parser return is what
+    keeps those three fixes pinned now that the parser they were fixed in no
+    longer exists — the defects became unrepresentable, and the tests still fail
+    if the mapping onto commit members regresses.
+  - The suite scripts `Git.layerTest({ status })` and lets every other `Git`
+    member die naming itself, which is what proves `BranchManager` reaches for
+    nothing else on that service.
 
 ## Coverage
 
@@ -208,6 +238,20 @@ const discoveryLayer = WorkspaceDiscovery.layer().pipe(
     specifier was being written as `\~0.2.0`. A path whose inputs cannot
     distinguish correct from corrupt output is unexercised in the only sense that
     matters, however green the suite is.
+- `configure-status.int.test.ts` — `configureStatusStep` against a **real** git
+  repository in a temp directory. Real IO rather than a scripted spawner because
+  the claim under test is that a config write takes effect on a *later,
+  independent* command — git's behavior, not ours. A scripted double could only
+  prove we issued a command we chose to issue.
+  - Three cases, and two of them exist because the first alone would not be
+    evidence. The exec-bit case carries a **control** asserting the change IS
+    visible under git's default, without which "the config worked" is
+    indistinguishable from "git never saw a change here." A second case asserts a
+    genuine content change is still visible, without which `core.fileMode=false`
+    is indistinguishable from a change-blind read that suppresses everything. The
+    third pins `--local` scope, because a global write would look identical here
+    while leaking the setting onto the runner for every later step.
+  - Mutation-verified: deleting the `configSet` call fails two of the three.
 - `runtime-upgrade.int.test.ts` — `RuntimeUpgrade.upgrade` against the real
   `*Resolver.layerOffline` layers (no network) over a temp `package.json`. An
   upstream-drift canary for the bundled snapshot: `auto` must resolve a real

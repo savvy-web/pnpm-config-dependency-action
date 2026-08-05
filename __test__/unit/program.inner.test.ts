@@ -32,6 +32,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NodeServices } from "@effect/platform-node";
 import type { ScriptResult, SpawnRecord } from "@effected/commands";
+import type { StatusEntry } from "@effected/git";
+import { Git } from "@effected/git";
 import { CheckRun } from "@effected/github";
 import { ActionOutputs } from "@effected/github-actions";
 import type { WorkspacePackage } from "@effected/workspaces";
@@ -168,8 +170,12 @@ interface HarnessOptions {
 	readonly configUpdates?: ReadonlyArray<DependencyUpdateResult>;
 	/** Updates `RegularDeps` reports (drives the install gate). */
 	readonly regularUpdates?: ReadonlyArray<DependencyUpdateResult>;
-	/** `git status --porcelain` output — non-empty means "the tree changed". */
-	readonly gitStatus?: string;
+	/**
+	 * Paths `git status` reports as changed — a non-empty list means "the tree
+	 * changed". Entries are typed now that the status read goes through
+	 * `@effected/git` rather than a porcelain parser this repo owned.
+	 */
+	readonly gitStatus?: ReadonlyArray<string>;
 	/** Registry contents for the real `PackageManagerUpgradeLive`. */
 	readonly registry?: Record<string, { version: string; versions?: ReadonlyArray<string> }>;
 	/** Replace the real package-manager upgrade with a fake returning this outcome. */
@@ -205,14 +211,23 @@ const makeHarness = (options: HarnessOptions = {}) => {
 		}>,
 	};
 
-	// `git status --porcelain` is the only command whose OUTPUT the program
-	// reads; everything else is asserted by which command line ran.
-	const spawner = fromMap(
-		new Map([
-			["git -c core.fileMode=false status --porcelain", { exit: 0, stdout: options.gitStatus ?? "", stderr: "" }],
-			...(options.commands ?? new Map()),
-		]),
-	);
+	// Every command whose OUTPUT the program reads now goes through `Git`;
+	// everything left on the spawner is asserted by which command line ran.
+	const spawner = fromMap(new Map([...(options.commands ?? new Map())]));
+
+	/** Config keys the run wrote, so the `core.fileMode` pin is observable. */
+	const gitConfig = new Map<string, string>();
+	/** The directories those writes targeted — the pin must land at the root. */
+	const gitConfigRoots: Array<string> = [];
+	const gitLayer = Git.layerTest({
+		status: () =>
+			Effect.succeed((options.gitStatus ?? []).map((path) => ({ x: " ", y: "M", path }) as unknown as StatusEntry)),
+		configSet: (cwd: string, key: string, value: string) =>
+			Effect.sync(() => {
+				gitConfig.set(key, value);
+				gitConfigRoots.push(cwd);
+			}),
+	} as never);
 	const execLines = spawner.spawns;
 
 	const spies: Spies = {
@@ -293,6 +308,7 @@ const makeHarness = (options: HarnessOptions = {}) => {
 				}) as never,
 		}),
 		spawner.layer,
+		gitLayer,
 		discovery,
 		detection,
 		packageManagerUpgrade,
@@ -330,6 +346,8 @@ const makeHarness = (options: HarnessOptions = {}) => {
 		outputs,
 		checkRunState,
 		spawner,
+		gitConfig,
+		gitConfigRoots,
 		layer: layer as unknown as ReturnType<typeof makeAppLayer>,
 	};
 };
@@ -579,7 +597,7 @@ describe("innerProgram — no silent skips", () => {
 		writeFixture("bun");
 		// A tree with changes, so the run proceeds past the change gate and the
 		// changeset / commit / PR steps are all reached and all skipped.
-		const harness = makeHarness({ gitStatus: " M package.json\n" });
+		const harness = makeHarness({ gitStatus: ["package.json"] });
 
 		const exit = await runInner(harness, baseInputs({ "upgrade-package-manager": "false", changesets: false }), true);
 
@@ -605,7 +623,7 @@ describe("innerProgram — no silent skips", () => {
 
 	it("skips the changeset step with a reason when the repo has no .changeset/ directory", async () => {
 		writeFixture("pnpm");
-		const harness = makeHarness({ gitStatus: " M package.json\n" });
+		const harness = makeHarness({ gitStatus: ["package.json"] });
 
 		const exit = await runInner(harness, baseInputs({ dependencies: ["effect"], changesets: true }), true);
 
@@ -618,7 +636,7 @@ describe("innerProgram — no silent skips", () => {
 		writeFixture("pnpm");
 		mkdirSync(join(root, ".changeset"));
 		writeFileSync(join(root, ".changeset", "config.json"), "{}\n");
-		const harness = makeHarness({ gitStatus: " M package.json\n" });
+		const harness = makeHarness({ gitStatus: ["package.json"] });
 
 		const exit = await runInner(
 			harness,
@@ -629,6 +647,63 @@ describe("innerProgram — no silent skips", () => {
 		expect(Exit.isSuccess(exit)).toBe(true);
 		// The diff baseline is the resolved target-branch, not the source branch.
 		expect(harness.spies.changesetsCreate).toHaveBeenCalledWith(realRoot, "main");
+	});
+
+	it("re-encodes `result` with the detected context on the no-changes exit", async () => {
+		// Regression: both early-return paths set the two scalar outputs and left
+		// `result` at the pre-run BASELINE, which carries `packageManager: null`
+		// and `workspaceRoot: ""`. Detection has already succeeded by then, so the
+		// document published to consumers was a false statement about the run —
+		// and silently so: it parses, every field is present, and nothing in the
+		// log distinguishes it from a run that genuinely never detected anything.
+		//
+		// The no-changes exit is the one a consumer is most likely to inspect
+		// programmatically, which is why it is pinned rather than assumed.
+		writeFixture("pnpm");
+		const harness = makeHarness({ gitStatus: [] });
+
+		const exit = await runInner(harness, baseInputs({ dependencies: ["effect"] }), true);
+
+		expect(Exit.isSuccess(exit)).toBe(true);
+		const document = JSON.parse(harness.outputs.get("result") ?? "{}");
+		expect(document.hasChanges).toBe(false);
+		expect(document.packageManager).toBe("pnpm");
+		expect(document.workspaceRoot).toBe(realRoot);
+	});
+
+	it("re-encodes `result` with the detected context when a custom command fails", async () => {
+		// The failure exit has the same defect and the same fix. It is asserted
+		// separately because the two paths return through different branches, so
+		// one being correct says nothing about the other.
+		writeFixture("pnpm");
+		const harness = makeHarness({
+			gitStatus: ["package.json"],
+			commands: new Map([["sh -c exit 1", { exit: 1, stdout: "", stderr: "boom" }]]),
+		});
+
+		const exit = await runInner(harness, baseInputs({ dependencies: ["effect"], run: ["exit 1"] }), true);
+
+		expect(Exit.isFailure(exit)).toBe(true);
+		const document = JSON.parse(harness.outputs.get("result") ?? "{}");
+		expect(document.hasChanges).toBe(false);
+		expect(document.packageManager).toBe("pnpm");
+		expect(document.workspaceRoot).toBe(realRoot);
+	});
+
+	it("pins core.fileMode=false on the checkout before any status read", async () => {
+		// The run's change verdict and the commit's file list are two separate
+		// status reads. Neither passes a per-command flag any more, so the ONLY
+		// thing keeping an executable-bit-only flip from producing an empty commit
+		// and a spurious PR is this one config write happening — and happening at
+		// the DETECTED workspace root, not wherever the process was invoked.
+		writeFixture("pnpm");
+		const harness = makeHarness({ gitStatus: ["package.json"] });
+
+		const exit = await runInner(harness, baseInputs({ dependencies: ["effect"] }), true);
+
+		expect(Exit.isSuccess(exit)).toBe(true);
+		expect(harness.gitConfig.get("core.fileMode")).toBe("false");
+		expect(harness.gitConfigRoots).toContain(realRoot);
 	});
 });
 
@@ -670,7 +745,7 @@ describe("innerProgram — workspace root threading", () => {
 
 		const harness = makeHarness({
 			regularUpdates: [update("effect", "^3.0.0", "^3.1.0")],
-			gitStatus: " M package.json\n",
+			gitStatus: ["package.json"],
 			packageManagerUpgrade: packageManagerUpgrade as unknown as Effect.Success<
 				typeof PackageManagerUpgrade
 			>["upgrade"],
@@ -705,6 +780,23 @@ describe("innerProgram — workspace root threading", () => {
 		);
 		expect(install).toBeDefined();
 		expect(install?.cwd).toBe(realRoot);
+
+		// And so did the `result` document. This is the SUCCESS path — the third
+		// exit, alongside the two early returns pinned above — and it had no
+		// assertion at all until a mis-aimed mutation replaced its `detected` with
+		// `{ pm: "npm", root: "" }` and the whole suite stayed green. A document
+		// that can be false and is never read is the same defect the early-return
+		// fix addressed, one path over.
+		//
+		// The subdirectory setup is what makes `workspaceRoot` discriminating here:
+		// a cwd-defaulted document would report `realSubdir` and still parse.
+		const document = JSON.parse(harness.outputs.get("result") ?? "{}");
+		expect(document.hasChanges).toBe(true);
+		expect(document.packageManager).toBe("pnpm");
+		expect(document.workspaceRoot).toBe(realRoot);
+		expect(document.updates).toContainEqual(
+			expect.objectContaining({ dependency: "effect", from: "^3.0.0", to: "^3.1.0" }),
+		);
 	});
 
 	it("passes the detected workspace root to the changeset step as the diff cwd", async () => {
@@ -718,7 +810,7 @@ describe("innerProgram — workspace root threading", () => {
 		mkdirSync(subdir, { recursive: true });
 		process.chdir(subdir);
 
-		const harness = makeHarness({ gitStatus: " M package.json\n" });
+		const harness = makeHarness({ gitStatus: ["package.json"] });
 
 		const exit = await runInner(
 			harness,
@@ -772,7 +864,7 @@ describe("innerProgram — custom commands", () => {
 		writeFixture("pnpm");
 		const harness = makeHarness({
 			configUpdates: [update("effect", "3.0.0", "3.1.0")],
-			gitStatus: " M package.json\n",
+			gitStatus: ["package.json"],
 			commands: new Map([["sh -c pnpm lint", { exit: 1, stdout: "", stderr: "lint exploded" }]]),
 		});
 

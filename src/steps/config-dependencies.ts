@@ -28,6 +28,7 @@ import type { CatalogDelta, DependencyUpdateResult } from "../schema/domain.js";
 import { CatalogConfigDeps } from "../services/catalog-config-deps.js";
 import { ConfigDeps } from "../services/config-deps.js";
 import type { SupportedPm } from "../services/package-manager.js";
+import { readWorkspaceYaml } from "../services/workspace-yaml.js";
 import { matchesPattern } from "../utils/deps.js";
 
 /**
@@ -63,6 +64,14 @@ export const configDependenciesStep = (
 		switch (pm) {
 			case "pnpm": {
 				yield* Effect.logInfo("Step: config dependencies — pnpm mode (pnpm-workspace.yaml)");
+				// The "before" snapshot is debug evidence for what this branch is about
+				// to rewrite. It lives here rather than in `program.ts` because it is a
+				// disk read about THIS step's file: composition should not be reaching
+				// for `pnpm-workspace.yaml` on behalf of a step, least of all on a run
+				// where the detected manager has no such file.
+				const workspaceBefore = yield* readWorkspaceYaml(workspaceRoot).pipe(Effect.catch(() => Effect.succeed(null)));
+				yield* Effect.logDebug(`pnpm-workspace.yaml (before): ${JSON.stringify(workspaceBefore)}`);
+
 				const configDepsService = yield* ConfigDeps;
 				const updates = yield* configDepsService.updateConfigDeps(configDependencies, workspaceRoot);
 				for (const u of updates) {

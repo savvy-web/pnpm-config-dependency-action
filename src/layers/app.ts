@@ -6,6 +6,7 @@
  * @module layers/app
  */
 
+import { Git } from "@effected/git";
 import { CheckRun, GitBranch, GitCommit, PullRequest, Repo } from "@effected/github";
 import { DryRun, GitHubToken } from "@effected/github-actions";
 import { NpmRegistry } from "@effected/npm";
@@ -20,13 +21,13 @@ import {
 import { Changesets as SilkChangesets } from "@savvy-web/silk-effects";
 import { Layer } from "effect";
 
-import { BranchManagerLive } from "../services/branch.js";
+import { BranchManager } from "../services/branch.js";
 import { CatalogConfigDepsLive } from "../services/catalog-config-deps.js";
 import { ChangesetsLive } from "../services/changesets.js";
 import { ConfigDepsLive } from "../services/config-deps.js";
 import { PackageManagerUpgradeLive } from "../services/package-manager-upgrade.js";
 import { RegularDepsLive } from "../services/regular-deps.js";
-import { ReleaseAgeLive } from "../services/release-age.js";
+import { ReleaseAge } from "../services/release-age.js";
 import { ReportLive } from "../services/report.js";
 import { RuntimeUpgradeLive } from "../services/runtime-upgrade.js";
 
@@ -107,7 +108,7 @@ export const makeAppLayer = (dryRun: boolean, options: { runtimeLive: boolean } 
 	const workspaceCatalogs = WorkspaceCatalogs.layerWithConfigDependenciesSubprocess().pipe(
 		Layer.provide(Layer.mergeAll(workspaceRoot, lockfileReader)),
 	);
-	const releaseAge = ReleaseAgeLive().pipe(Layer.provide(Layer.merge(npmRegistry, workspaceCatalogs)));
+	const releaseAge = ReleaseAge.layer.pipe(Layer.provide(Layer.merge(npmRegistry, workspaceCatalogs)));
 	// DepsRegen (from @savvy-web/silk-effects) is the source of truth for
 	// dependency changesets. DepsRegenDefault is the batteries-included layer: it
 	// bundles the point-in-time workspace reader, ConfigInspector, WorkspaceDiscovery,
@@ -124,6 +125,10 @@ export const makeAppLayer = (dryRun: boolean, options: { runtimeLive: boolean } 
 		CheckRun.layer.pipe(Layer.provide(githubClient)),
 		prLayer,
 		npmRegistry,
+		// `Git` is read-mostly here: `status` for the change verdict and the commit
+		// file list, `configSet` once to pin `core.fileMode`. Everything that
+		// mutates history still goes through the GitHub API so the commit verifies.
+		Git.layer,
 		DryRun.layerFrom(dryRun),
 	);
 
@@ -132,7 +137,7 @@ export const makeAppLayer = (dryRun: boolean, options: { runtimeLive: boolean } 
 		workspaceDiscovery,
 		packageManagerDetector,
 		ChangesetsLive.pipe(Layer.provide(depsRegen)),
-		BranchManagerLive.pipe(Layer.provide(Layer.merge(gitBranch, gitCommit))),
+		BranchManager.layer.pipe(Layer.provide(Layer.mergeAll(gitBranch, gitCommit, Git.layer))),
 		PackageManagerUpgradeLive.pipe(Layer.provide(npmRegistry)),
 		ConfigDepsLive.pipe(Layer.provide(Layer.merge(npmRegistry, releaseAge))),
 		CatalogConfigDepsLive.pipe(Layer.provide(Layer.merge(npmRegistry, lockfileReader))),

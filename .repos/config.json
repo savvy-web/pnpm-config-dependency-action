@@ -25,8 +25,8 @@
 		},
 		"effected": {
 			"url": "https://github.com/spencerbeggs/effected.git",
-			"ref": "@effected/github-actions@0.5.1",
-			"purpose": "Read-only source for the @effected package kit, pinned to the release tag matching the installed @effected/github-actions (0.5.1) — the authority on the kit's real export surface and intended usage.",
+			"ref": "@effected/workspaces@0.10.0",
+			"purpose": "Read-only source for the @effected package kit — the authority on its real export surface and intended usage. Pinned to the monorepo release wave whose tags carry the versions this repo installs; at this pin every vendored package matches node_modules exactly (github-actions 0.5.1, workspaces 0.10.0, commands 0.3.0, github 0.2.3, npm 0.8.3). Re-pin whenever a dependency bump moves any of them, in the same commit as the bump.",
 			"sparse": [
 				"packages",
 				"design",

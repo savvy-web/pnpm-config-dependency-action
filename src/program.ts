@@ -27,11 +27,11 @@ import { emitOutputs, encodeRunResult, initialOutputs } from "./schema/outputs.j
 import { LOCKFILE_NAMES, compareLockfiles } from "./services/lockfile.js";
 import type { DetectedPm } from "./services/package-manager.js";
 import { Report } from "./services/report.js";
-import { readWorkspaceYaml } from "./services/workspace-yaml.js";
 import { branchStep } from "./steps/branch.js";
 import { changesetsStep } from "./steps/changesets.js";
 import { commitAndPrStep } from "./steps/commit-and-pr.js";
 import { configDependenciesStep } from "./steps/config-dependencies.js";
+import { configureStatusStep } from "./steps/configure-status.js";
 import { customCommandsStep, failedCommandNames, formatCommandFailures } from "./steps/custom-commands.js";
 import { detectChangesStep } from "./steps/detect-changes.js";
 import { detectPackageManagerStep } from "./steps/detect-package-manager.js";
@@ -215,6 +215,11 @@ export const innerProgram = (
 						yield* Effect.logInfo(line);
 					}
 
+					// ── git config ──────────────────────────────────────────────────
+					// Before ANY status read, and once for the whole run, so this run's
+					// change verdict and the commit's contents cannot disagree.
+					yield* configureStatusStep(detected.root);
+
 					// ── branch ────────────────────────────────────────────────────
 					yield* branchStep(inputs.branch, inputs.sourceBranch, inputs.targetBranch);
 
@@ -239,11 +244,6 @@ export const innerProgram = (
 					const runtimeUpdates = (yield* upgradeRuntimesStep(inputs.runtime, detected.root)).updates;
 
 					// ── config dependencies ─────────────────────────────────────────
-					const workspaceBefore = yield* readWorkspaceYaml(detected.root).pipe(
-						Effect.catch(() => Effect.succeed(null)),
-					);
-					yield* Effect.logDebug(`pnpm-workspace.yaml (before): ${JSON.stringify(workspaceBefore)}`);
-
 					const configResult = yield* configDependenciesStep(
 						inputs["config-dependencies"],
 						inputs.dependencies,
@@ -269,7 +269,6 @@ export const innerProgram = (
 					const peerResult = yield* peerSyncStep(
 						{ lock: inputs["peer-lock"], minor: inputs["peer-minor"] },
 						regularUpdates,
-						detected.root,
 					);
 					const peerUpdates = peerResult.updates;
 					const peerConfigured = peerResult.configured;
@@ -289,7 +288,7 @@ export const innerProgram = (
 					// The step reports what happened; concluding the check run and
 					// publishing outputs stay here, because the run's verdict is a
 					// composition concern.
-					const commandsResult = yield* customCommandsStep(inputs.run);
+					const commandsResult = yield* customCommandsStep(inputs.run, detected.root);
 					if (commandsResult !== null && commandsResult.failed.length > 0) {
 						yield* conclude(
 							"failure",
@@ -301,6 +300,29 @@ export const innerProgram = (
 
 						yield* outputs.set("has-changes", "false");
 						yield* outputs.set("updates-count", "0");
+						// Re-encode `result` rather than leaving the pre-run baseline in
+						// place. By this point detection HAS succeeded, so the baseline's
+						// `packageManager: null` and `workspaceRoot: ""` would be false
+						// statements about a run that got this far — and a consumer reading
+						// the document to explain a failed run is exactly who needs the
+						// context. `hasChanges` stays false: nothing was committed.
+						yield* outputs.set(
+							"result",
+							encodeRunResult(
+								buildRunResult({
+									hasChanges: false,
+									dryRun,
+									detected,
+									branch: inputs.branch,
+									targetBranch: inputs.targetBranch,
+									updates: [],
+									deltas: [],
+									lockfileChanges: [],
+									changesets: [],
+									pullRequest: null,
+								}),
+							),
+						);
 
 						return yield* Effect.fail(new Error(`Custom commands failed: ${failedCommandNames(commandsResult)}`));
 					}
@@ -323,10 +345,10 @@ export const innerProgram = (
 						`Total updates: ${allUpdates.length} (config: ${configUpdates.length + configUpdatesFromPackageManager.length}, dev: ${regularUpdates.length}, peer: ${peerUpdates.length})`,
 					);
 
-					const { changedLines, hasChanges } = yield* detectChangesStep();
+					const { entries: changedEntries, hasChanges } = yield* detectChangesStep(detected.root);
 
 					yield* Effect.logInfo(
-						`Step: changes — ${allUpdates.length} dependency change(s), ${changes.length} lockfile change(s), ${changedLines.length} file(s) modified`,
+						`Step: changes — ${allUpdates.length} dependency change(s), ${changes.length} lockfile change(s), ${changedEntries.length} file(s) modified`,
 					);
 
 					if (!hasChanges && changes.length === 0) {
@@ -344,6 +366,28 @@ export const innerProgram = (
 
 						yield* outputs.set("has-changes", "false");
 						yield* outputs.set("updates-count", "0");
+						// Same reasoning as the custom-commands exit: detection succeeded,
+						// so the baseline document no longer describes this run. A
+						// no-changes run is the case a consumer is MOST likely to inspect
+						// programmatically, and "which package manager and root did you
+						// find nothing in?" is the first question it would ask.
+						yield* outputs.set(
+							"result",
+							encodeRunResult(
+								buildRunResult({
+									hasChanges: false,
+									dryRun,
+									detected,
+									branch: inputs.branch,
+									targetBranch: inputs.targetBranch,
+									updates: allUpdates,
+									deltas: configDeltas,
+									lockfileChanges: changes,
+									changesets: [],
+									pullRequest: null,
+								}),
+							),
+						);
 
 						return;
 					}
@@ -361,7 +405,7 @@ export const innerProgram = (
 						updates: allUpdates,
 						changesets: changesetFiles,
 						deltas: configDeltas,
-						changedFileCount: changedLines.length,
+						changedFileCount: changedEntries.length,
 						workspaceRoot: detected.root,
 						dryRun,
 					});

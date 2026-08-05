@@ -58,6 +58,9 @@ importers:
       '@effected/commands':
         specifier: ^0.3.0
         version: 0.3.0(effect@4.0.0-beta.101)
+      '@effected/git':
+        specifier: ^0.5.2
+        version: 0.5.2(effect@4.0.0-beta.101)
       '@effected/github':
         specifier: ^0.2.3
         version: 0.2.3(effect@4.0.0-beta.101)

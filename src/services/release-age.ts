@@ -26,7 +26,7 @@
  * install and the worst case of missing data is exactly the pre-gate behavior —
  * whereas aborting a dependency-update run over an unreadable workspace file
  * would be a strictly worse trade. That wrapper is at the one call site in
- * `ReleaseAgeLive`.
+ * `ReleaseAge.layer`.
  *
  * @module services/release-age
  */
@@ -80,16 +80,20 @@ export class ReleaseAge extends Context.Service<
 		 */
 		readonly filterVersions: (pkg: string, versions: ReadonlyArray<string>) => Effect.Effect<ReadonlyArray<string>>;
 	}
->()("ReleaseAge") {}
-
-/**
- * Live layer factory. The workspace root is bound when the layer is built
- * (mirroring the `@effected/workspaces` root-bound layer idiom); the gate is
- * assembled once on first use and cached for the layer's lifetime.
- */
-export const ReleaseAgeLive = (): Layer.Layer<ReleaseAge, never, WorkspaceCatalogs | NpmRegistry> =>
-	Layer.effect(
-		ReleaseAge,
+>()("ReleaseAge") {
+	/**
+	 * Live layer. The gate is assembled once on first use and cached for the
+	 * layer's lifetime; discovery and root binding both live in
+	 * `WorkspaceCatalogs`, so this layer takes no arguments.
+	 *
+	 * A `static readonly layer` on the class rather than a `ReleaseAgeLive`
+	 * const: that is the kit's own convention across every `@effected` service,
+	 * and it must be declared IN the class body — a member attached by
+	 * post-class assignment is tree-shaken out of the bundled `dist`, which
+	 * fails only in production where vitest runs the source.
+	 */
+	static readonly layer: Layer.Layer<ReleaseAge, never, WorkspaceCatalogs | NpmRegistry> = Layer.effect(
+		this,
 		Effect.gen(function* () {
 			// Both dependencies are resolved once here, so every member's R is
 			// `never` — which is what keeps `filterVersions` usable from the
@@ -166,11 +170,16 @@ export const ReleaseAgeLive = (): Layer.Layer<ReleaseAge, never, WorkspaceCatalo
 		}),
 	);
 
-/**
- * Inert test layer: the zero gate, identity filtering. What non-pnpm and
- * unit-test paths should wire.
- */
-export const ReleaseAgeNoop: Layer.Layer<ReleaseAge> = Layer.succeed(ReleaseAge, {
-	gate: () => Effect.succeed(ReleaseAgeGate.combine()),
-	filterVersions: (_pkg, versions) => Effect.succeed(versions),
-});
+	/**
+	 * Inert layer: the zero gate, identity filtering. What non-pnpm paths and
+	 * unit tests should wire.
+	 *
+	 * Named `layerNoop` rather than `ReleaseAgeNoop` for the same reason
+	 * {@link ReleaseAge.layer} is a static — a half-applied convention is worse
+	 * than either convention applied consistently.
+	 */
+	static readonly layerNoop: Layer.Layer<ReleaseAge> = Layer.succeed(this, {
+		gate: () => Effect.succeed(ReleaseAgeGate.combine()),
+		filterVersions: (_pkg, versions) => Effect.succeed(versions),
+	});
+}

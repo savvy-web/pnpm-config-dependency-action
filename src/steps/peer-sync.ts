@@ -29,11 +29,18 @@ export interface PeerSyncResult {
 	readonly configured: boolean;
 }
 
-/** Sync peer ranges for the packages the two peer inputs name. */
+/**
+ * Sync peer ranges for the packages the two peer inputs name.
+ *
+ * Takes no workspace root: `WorkspaceDiscovery` binds its root when the layer
+ * is built, so a root parameter here could only be ignored. It previously was —
+ * silently, which is the problem: a caller passing the wrong root would see no
+ * error and no effect, and a reader would reasonably conclude the root was
+ * honoured.
+ */
 export const peerSyncStep = (
 	config: PeerSyncConfig,
 	regularUpdates: ReadonlyArray<DependencyUpdateResult>,
-	workspaceRoot: string,
 ): Effect.Effect<PeerSyncResult, FileSystemError, WorkspaceDiscovery> =>
 	Effect.gen(function* () {
 		const configured = config.lock.length > 0 || config.minor.length > 0;
@@ -48,7 +55,7 @@ export const peerSyncStep = (
 				config.minor.join(", ") || "none"
 			}`,
 		);
-		const updates = yield* syncPeers(config, regularUpdates, workspaceRoot);
+		const updates = yield* syncPeers(config, regularUpdates);
 		yield* Effect.logInfo(`  synced ${updates.length} peer dependency range(s)`);
 
 		return { updates, configured };
