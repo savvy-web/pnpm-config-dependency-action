@@ -17,7 +17,7 @@ import { WorkspaceDiscovery } from "@effected/workspaces";
 import { Context, Effect, Layer } from "effect";
 
 import { FileSystemError } from "../errors/errors.js";
-import type { DependencyUpdateResult } from "../schemas/domain.js";
+import type { DependencyUpdateResult } from "../schema/domain.js";
 import { matchesPattern, parseSpecifier } from "../utils/deps.js";
 import { detectIndent } from "../utils/pnpm.js";
 import { resolutionRangeForSpecifier, resolveLatestSatisfying } from "../utils/semver.js";

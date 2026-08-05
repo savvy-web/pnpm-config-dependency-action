@@ -111,9 +111,28 @@ just-committed working-copy state.
   chmod-ing hooks during a `run` command) do not survive a content-based API
   commit at mode 100644, so counting them would create an empty commit and a
   spurious PR. `program.ts`'s change detection queries status the same way.
-- Status output is read through a local `gitRaw` helper using `Run.collect`, not
-  `Run.text`: **`Run.text` trims**, and `--porcelain`'s two-character status field
-  is column-aligned, so trimming a leading space shifts every `substring` index.
+- Status output is read through a local `gitRawIn(cwd, …)` helper using
+  `Run.collect`, not `Run.text`: **`Run.text` trims**, and `--porcelain`'s
+  two-character status field is column-aligned, so trimming a leading space
+  shifts every index. `cwd` is explicit because git reports `--porcelain` paths
+  relative to the directory it ran in, so the caller resolving those paths must
+  anchor on the same directory — `commitChanges` takes the workspace root as a
+  parameter for exactly this reason.
+- **Parsing goes through the exported `parseStatusLine`**, not inline
+  `substring` arithmetic. The format is `XY PATH`, or `XY ORIG -> PATH` for a
+  rename or copy, and **both** status columns are significant. The previous
+  parser read `substring(3)` as the whole path and tested
+  `substring(0, 2).trim() === "D"`, which produced two silent data-loss bugs: a
+  rename yielded the unreadable path `"old.ts -> new.ts"`, so the file never
+  reached the commit at all; and a deletion whose columns disagreed (`AD`, `RD`)
+  was treated as a modification and dropped the same way. A rename now emits a
+  `FileDeletion` for the origin plus a `FileContent` at the destination — the
+  commit is an explicit change set, not a diff, so a tree that only adds the new
+  path leaves the old one behind. A **copy** carries an origin but must not
+  delete it, which is why the two are distinguished rather than both treated as
+  "has an origPath". Quoted paths are unquoted; git's octal `\NNN` form for
+  non-ASCII bytes is a known remaining gap that fails loudly (the read misses
+  and warns) rather than committing a wrong path.
 
 **Base-history preflight.** `ensureBaseHistory(base)` probes
 `git merge-base <base> HEAD` (via `Run.succeeds`); if it resolves — the
@@ -472,7 +491,8 @@ exists (`hasChangesets(workspaceRoot?)`, also exported for the skip messaging).
 ### src/services/report.ts - Report
 
 PR management and report generation over the kit's `PullRequest` service, using
-the local `GithubMarkdown` builders.
+the kit's `GitHubMarkdown` writer (plus `bold` / `rule` from `utils/markdown.ts`,
+the only two builders it does not ship).
 
 ```typescript
 export class Report extends Context.Service<Report, {
@@ -621,21 +641,43 @@ Pure catalog-map helpers behind `CatalogConfigDeps`:
 - `parseSpecifier(specifier)` — parse a version specifier; `null` for
   `catalog:`/`workspace:`.
 
-### src/utils/github-markdown.ts
+### src/utils/github-markdown.ts — DELETED
 
-The GitHub-flavored Markdown builders for PR bodies, job summaries and check-run
-output: `heading`, `code`, `bold`, `link`, `rule`, `list`, `codeBlock`, `details`,
-`table`, plus the `GithubMarkdown` namespace object matching the destructuring
-call style `Report` uses.
+The GFM writer is **`GitHubMarkdown` from `@effected/github-actions`** (note the
+capital H). `Report` imports it directly and destructures its statics, which are
+self-contained (no `this`), so destructuring is safe.
 
-These replace `GithubMarkdown` from the deleted `@savvy-web/github-action-effects`.
-The kit deliberately ships **no successor**: report shaping is consumer policy, so
-the strings a given action emits belong to that action. They are pure string
-builders with no service dependency, which is why they live in `utils/` rather
-than `services/`. Two details worth keeping: `table` escapes only `\` and `|` and
-returns an empty string when there are no rows (so a caller can push
-unconditionally); `codeBlock` grows its fence past any backtick run in the content
-so an embedded fence cannot terminate the block early.
+**This module existed on a misreading, and the misreading is worth recording so
+it is not repeated.** The router skill's absence list says the kit ships "no
+report-shaping construct — report shaping is consumer policy," and that was read
+here as "no markdown writer," which became settled fact in five documents. The
+kit does ship the writer; only the *arrangement* of a report is consumer policy.
+`GithubMarkdown` → `GitHubMarkdown` is a **rename**, not a removal.
+
+The kit's writer is also strictly better than what it replaced: it renders
+through `@effected/markdown`'s node classes and serializer rather than string
+joining, so a cell cannot corrupt the table around it.
+
+**Verified output-identical before the swap.** A full PR body and job summary
+were rendered with both writers over fixtures carrying pipes, backslashes,
+underscores, tildes, embedded fences and multi-package grouping. The documents
+were byte-for-byte identical except one cell: a literal backslash, which the old
+builder double-escaped (`a\\b`) and the kit escapes minimally (`a\b`). The kit is
+correct, and a backslash in a dependency name or version is not reachable in
+practice.
+
+Two behavioral notes carried over from the old module:
+
+- `codeBlock` still grows its fence past any backtick run in the content
+  (verified identical).
+- **`table` no longer returns `""` for zero rows** — the kit renders a
+  headers-only table. Every call site is inside a loop over a non-empty map, so
+  zero rows is unreachable today; a future caller that can pass an empty row set
+  must guard it itself.
+
+`bold` and `rule` are the only two builders the kit does not ship. They live in
+`src/utils/markdown.ts` as literal one-liners with no escaping and no structure —
+deliberately not a second writer.
 
 ### src/utils/input.ts — DELETED
 

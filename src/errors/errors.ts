@@ -8,13 +8,7 @@
 
 import { Schema } from "effect";
 
-import {
-	DependencyUpdateResult,
-	FileSystemOperation,
-	GitOperation,
-	LockfileOperation,
-	NonEmptyString,
-} from "../schemas/domain.js";
+import { FileSystemOperation, LockfileOperation, NonEmptyString } from "../schema/domain.js";
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Error Schemas
@@ -36,83 +30,6 @@ export class InvalidInputError extends Schema.TaggedErrorClass<InvalidInputError
 }) {
 	get message() {
 		return `Invalid input for "${this.field}": ${this.reason}`;
-	}
-}
-
-/**
- * GitHub API error.
- */
-export class GitHubApiError extends Schema.TaggedErrorClass<GitHubApiError>()("GitHubApiError", {
-	operation: NonEmptyString.annotate({
-		description: "The GitHub API operation that failed",
-	}),
-	statusCode: Schema.optional(Schema.Number.check(Schema.isBetween({ minimum: 100, maximum: 599 }))).annotate({
-		description: "HTTP status code returned by the API",
-	}),
-	message: NonEmptyString.annotate({
-		description: "Error message from GitHub API",
-	}),
-}) {
-	get isRateLimited(): boolean {
-		return this.statusCode === 429;
-	}
-
-	get isServerError(): boolean {
-		return this.statusCode !== undefined && this.statusCode >= 500;
-	}
-
-	get isRetryable(): boolean {
-		return this.isRateLimited || this.isServerError;
-	}
-}
-
-/**
- * Git command execution error.
- */
-export class GitError extends Schema.TaggedErrorClass<GitError>()("GitError", {
-	operation: GitOperation.annotate({
-		description: "The git operation that failed",
-	}),
-	exitCode: Schema.Number.check(Schema.isInt()).annotate({
-		description: "Exit code from the git command",
-	}),
-	stderr: Schema.String.annotate({
-		description: "Standard error output from git",
-	}),
-}) {
-	get message() {
-		return `Git ${this.operation} failed (exit ${this.exitCode}): ${this.stderr}`;
-	}
-
-	get isRetryable(): boolean {
-		return this.operation === "fetch" || this.operation === "push";
-	}
-}
-
-/**
- * pnpm command execution error.
- */
-export class PnpmError extends Schema.TaggedErrorClass<PnpmError>()("PnpmError", {
-	command: NonEmptyString.annotate({
-		description: "The pnpm command that failed",
-	}),
-	dependency: Schema.optional(Schema.String).annotate({
-		description: "The dependency being operated on",
-	}),
-	exitCode: Schema.Number.check(Schema.isInt()).annotate({
-		description: "Exit code from the pnpm command",
-	}),
-	stderr: Schema.String.annotate({
-		description: "Standard error output from pnpm",
-	}),
-}) {
-	get message() {
-		const depInfo = this.dependency ? ` for "${this.dependency}"` : "";
-		return `pnpm ${this.command}${depInfo} failed (exit ${this.exitCode}): ${this.stderr}`;
-	}
-
-	get isRetryable(): boolean {
-		return this.command === "install";
 	}
 }
 
@@ -168,88 +85,30 @@ export class LockfileError extends Schema.TaggedErrorClass<LockfileError>()("Loc
 	}
 }
 
-/**
- * Failure entry for a single dependency update.
- */
-export const DependencyFailure = Schema.Struct({
-	dependency: NonEmptyString,
-	error: Schema.instanceOf(PnpmError),
-});
-
-export type DependencyFailure = typeof DependencyFailure.Type;
-
-/**
- * Aggregate error for collecting multiple dependency update failures.
- * Used when some updates succeed and others fail.
- */
-export class DependencyUpdateFailures extends Schema.TaggedErrorClass<DependencyUpdateFailures>()(
-	"DependencyUpdateFailures",
-	{
-		failures: Schema.Array(
-			Schema.Struct({
-				dependency: NonEmptyString,
-				// Use a simpler schema for the nested error to avoid circular issues
-				error: Schema.Struct({
-					command: Schema.String,
-					dependency: Schema.optional(Schema.String),
-					exitCode: Schema.Number,
-					stderr: Schema.String,
-				}),
-			}),
-		).annotate({
-			description: "List of dependencies that failed to update",
-		}),
-		successful: Schema.Array(DependencyUpdateResult).annotate({
-			description: "Dependencies that were successfully updated",
-		}),
-	},
-) {
-	get message() {
-		const failedDeps = this.failures.map((f) => f.dependency).join(", ");
-		return `Failed to update ${this.failures.length} dependencies: ${failedDeps}. ${this.successful.length} succeeded.`;
-	}
-
-	get partialSuccess(): boolean {
-		return this.successful.length > 0;
-	}
-}
-
 // ══════════════════════════════════════════════════════════════════════════════
 // Union Types
 // ══════════════════════════════════════════════════════════════════════════════
 
 /**
- * Union type of all expected errors in the action.
+ * Union of every error this action actually raises.
+ *
+ * Each member has at least one construction site in `src/`. `GitHubApiError`,
+ * `GitError`, `PnpmError` and `DependencyUpdateFailures` used to sit here and
+ * were removed: nothing constructed them. GitHub failures arrive as the kit's
+ * single `GitHubError` (discriminated with `hasKind`) and subprocess failures
+ * as `@effected/commands`' `CommandFailedError` / `CommandOutputError`, so
+ * neither the API nor the subprocess members had a reachable failure path.
+ * `isRetryableError` went with them — it dispatched only on those three tags
+ * and had no caller in `src/`.
+ *
+ * Keep it that way: an error channel with no construction site is a claim the
+ * type system will happily carry and no test can falsify.
  */
-export type ActionError =
-	| InvalidInputError
-	| GitHubApiError
-	| GitError
-	| PnpmError
-	| ChangesetError
-	| FileSystemError
-	| LockfileError
-	| DependencyUpdateFailures;
+export type ActionError = InvalidInputError | ChangesetError | FileSystemError | LockfileError;
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Error Utilities
 // ══════════════════════════════════════════════════════════════════════════════
-
-/**
- * Check if an error is retryable (transient failure).
- */
-export const isRetryableError = (error: ActionError): boolean => {
-	switch (error._tag) {
-		case "GitHubApiError":
-			return error.isRetryable;
-		case "GitError":
-			return error.isRetryable;
-		case "PnpmError":
-			return error.isRetryable;
-		default:
-			return false;
-	}
-};
 
 /**
  * Get a human-readable error message for any action error.

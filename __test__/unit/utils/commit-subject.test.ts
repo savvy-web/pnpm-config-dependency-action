@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { DependencyUpdateResult } from "../../../src/schemas/domain.js";
+import type { DependencyUpdateResult } from "../../../src/schema/domain.js";
 import { buildUpdateSubject } from "../../../src/utils/commit-subject.js";
 
 /** Concise factory for a DependencyUpdateResult. */

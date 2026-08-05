@@ -18,7 +18,7 @@ import { Lockfile as LockfileModel } from "@effected/lockfiles";
 import { WorkspaceDiscovery } from "@effected/workspaces";
 import { Context, Effect, Layer } from "effect";
 import { LockfileError } from "../errors/errors.js";
-import type { LockfileChange } from "../schemas/domain.js";
+import type { LockfileChange } from "../schema/domain.js";
 import type { SupportedPm } from "./package-manager.js";
 
 // ══════════════════════════════════════════════════════════════════════════════

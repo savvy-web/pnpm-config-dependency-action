@@ -17,7 +17,11 @@ export default async () => {
 			...(projects ? { projects } : {}),
 			tags,
 			pool: "forks",
-			globalSetup: ["vitest.setup.ts"],
+			// `vitest.setup.ts` is NOT registered here: AgentPlugin.discover()
+			// already points each project's `setupFiles` at it, which is the only
+			// registration that works. A `globalSetup` entry runs in a separate
+			// process from the test workers, so the runner env vars it strips would
+			// still be present in the processes that actually import `src/`.
 			coverage: {
 				enabled: true,
 				provider: "v8",

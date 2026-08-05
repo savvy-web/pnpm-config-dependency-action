@@ -13,6 +13,11 @@
 import { Action } from "@effected/github-actions";
 import { program } from "./program.js";
 
-// Run the main action — Action.run handles all error formatting via formatCause
-/* v8 ignore next */
-Action.run(program);
+// Run the main action — Action.run handles all error formatting via formatCause.
+// Guarded on the runner's own marker variable, identically to `pre.ts` and
+// `post.ts`: without it, merely importing this module runs the whole action as
+// a side effect, in any process that touches it.
+/* v8 ignore next 3 -- entry-point guard, only runs in GitHub Actions */
+if (process.env.GITHUB_ACTIONS) {
+	await Action.run(program);
+}

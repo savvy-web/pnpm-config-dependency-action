@@ -27,7 +27,7 @@ import { Changesets as SilkChangesets } from "@savvy-web/silk-effects";
 import { Context, Effect, Layer } from "effect";
 
 import { ChangesetError } from "../errors/errors.js";
-import type { ChangesetFile } from "../schemas/domain.js";
+import type { ChangesetFile } from "../schema/domain.js";
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Service Interface

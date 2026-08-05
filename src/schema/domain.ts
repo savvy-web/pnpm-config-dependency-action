@@ -38,20 +38,6 @@ export const DependencyType = Schema.Literals([
 ]);
 
 /**
- * Git operation type.
- */
-export const GitOperation = Schema.Literals([
-	"status",
-	"diff",
-	"commit",
-	"push",
-	"rebase",
-	"checkout",
-	"fetch",
-	"branch",
-]);
-
-/**
  * File system operation type.
  */
 export const FileSystemOperation = Schema.Literals(["read", "write", "delete", "exists"]);

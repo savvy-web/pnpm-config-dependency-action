@@ -13,7 +13,7 @@ import type { WorkspacePackage } from "@effected/workspaces";
 import { WorkspaceDiscovery } from "@effected/workspaces";
 import { Effect, Layer, Logger, References, Result } from "effect";
 import { describe, expect, it } from "vitest";
-import type { LockfileChange } from "../../../src/schemas/domain.js";
+import type { LockfileChange } from "../../../src/schema/domain.js";
 import { LOCKFILE_NAMES, Lockfile, LockfileLive, groupChangesByPackage } from "../../../src/services/lockfile.js";
 
 /**

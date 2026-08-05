@@ -6,7 +6,6 @@
  * @module layers/app
  */
 
-import { NodeServices } from "@effect/platform-node";
 import { CheckRun, GitBranch, GitCommit, PullRequest, Repo } from "@effected/github";
 import { DryRun, GitHubToken } from "@effected/github-actions";
 import { NpmRegistry } from "@effected/npm";
@@ -14,7 +13,6 @@ import { BunResolver, DenoResolver, NodeResolver, GitHubClient as RuntimesGitHub
 import { LockfileReader, PackageManagerDetector, WorkspaceDiscovery, WorkspaceRoot } from "@effected/workspaces";
 import { Changesets as SilkChangesets } from "@savvy-web/silk-effects";
 import { Layer } from "effect";
-import { FetchHttpClient } from "effect/unstable/http";
 
 import { BranchManagerLive } from "../services/branch.js";
 import { CatalogConfigDepsLive } from "../services/catalog-config-deps.js";
@@ -40,8 +38,12 @@ const makeRuntimeResolvers = (live: boolean) => {
 	// so the live graph is self-contained (E = never). Each resolver's `.layer`
 	// falls back to the bundled snapshot on any fetch failure (logging a warning).
 	const github = RuntimesGitHubClient.layerDefault;
+	// NodeResolver.layer needs only `HttpClient.HttpClient`, which ActionServices
+	// already provides — so it stays in the requirement channel rather than
+	// getting a private FetchHttpClient. (GitHubClient.layerDefault is genuinely
+	// self-contained, so Deno/Bun keep their provide.)
 	return Layer.mergeAll(
-		NodeResolver.layer.pipe(Layer.provide(FetchHttpClient.layer)),
+		NodeResolver.layer,
 		DenoResolver.layer.pipe(Layer.provide(github)),
 		BunResolver.layer.pipe(Layer.provide(github)),
 	);
@@ -62,25 +64,31 @@ export const makeAppLayer = (dryRun: boolean, options: { runtimeLive: boolean } 
 
 	// GraphQL is a member of GitHubClient in the kit — there is no separate
 	// GitHubGraphQL service to wire.
-	const npmRegistry = NpmRegistry.layer.pipe(Layer.provide(FetchHttpClient.layer));
+	//
+	// NpmRegistry needs an HttpClient and the workspace layers need
+	// FileSystem/Path/ChildProcessSpawner. NEITHER is built here: both are members
+	// of `ActionServices`, which `Action.run`'s `ActionRuntime.layer` already
+	// provides, so they stay in this layer's REQUIREMENT channel and are satisfied
+	// at the boundary. Building them here instead meant the action shipped a second
+	// copy of the Node platform and the fetch client in its bundle, and forced a
+	// direct `@effect/platform-node` dependency the program has no business naming.
+	const npmRegistry = NpmRegistry.layer;
 	// Effective pnpm minimumReleaseAge gate (inline pnpm-workspace.yaml keys +
 	// config-dependency hook replay), applied by ConfigDeps/RegularDeps before
 	// version resolution. Inert when the workspace declares no gate.
-	const releaseAge = ReleaseAgeLive().pipe(Layer.provide(Layer.merge(NodeServices.layer, npmRegistry)));
+	const releaseAge = ReleaseAgeLive().pipe(Layer.provide(npmRegistry));
 	const gitBranch = GitBranch.layer.pipe(Layer.provide(githubClient));
 	const gitCommit = GitCommit.layer.pipe(Layer.provide(githubClient));
 	const prLayer = PullRequest.layer.pipe(Layer.provide(githubClient));
 
-	// Platform layer (FileSystem, Path, ChildProcessSpawner, …) for @effected/workspaces.
-	const platform = NodeServices.layer;
-	const workspaceRoot = WorkspaceRoot.layer.pipe(Layer.provide(platform));
-	const workspaceDiscovery = WorkspaceDiscovery.layer().pipe(Layer.provide(Layer.merge(workspaceRoot, platform)));
-	const packageManagerDetector = PackageManagerDetector.layer.pipe(Layer.provide(platform));
+	const workspaceRoot = WorkspaceRoot.layer;
+	const workspaceDiscovery = WorkspaceDiscovery.layer().pipe(Layer.provide(workspaceRoot));
+	const packageManagerDetector = PackageManagerDetector.layer;
 	// The lockfile is the record of which config-dependency version is actually
 	// installed — the merge base for CatalogConfigDeps' three-way catalog merge.
 	// @effected/workspaces' LockfileReader also depends on WorkspaceDiscovery.
 	const lockfileReader = LockfileReader.layer().pipe(
-		Layer.provide(Layer.mergeAll(workspaceRoot, packageManagerDetector, workspaceDiscovery, platform)),
+		Layer.provide(Layer.mergeAll(workspaceRoot, packageManagerDetector, workspaceDiscovery)),
 	);
 
 	// DepsRegen (from @savvy-web/silk-effects) is the source of truth for
@@ -89,7 +97,7 @@ export const makeAppLayer = (dryRun: boolean, options: { runtimeLive: boolean } 
 	// silk's adaptive PublishabilityDetector, and ChangesetConfig internally, so its
 	// gating is silk "versionable-minus-ignored" and the only residual requirements
 	// are the platform services (FileSystem/Path/CommandExecutor from NodeContext).
-	const depsRegen = SilkChangesets.DepsRegenDefault.pipe(Layer.provide(platform));
+	const depsRegen = SilkChangesets.DepsRegenDefault;
 
 	const libraryLayers = Layer.mergeAll(
 		githubClient,
@@ -99,11 +107,7 @@ export const makeAppLayer = (dryRun: boolean, options: { runtimeLive: boolean } 
 		CheckRun.layer.pipe(Layer.provide(githubClient)),
 		prLayer,
 		npmRegistry,
-		// The subprocess seam Run needs, plus FileSystem/Path for the workspace
-		// layers below.
-		NodeServices.layer,
 		DryRun.layerFrom(dryRun),
-		FetchHttpClient.layer,
 	);
 
 	const domainLayers = Layer.mergeAll(
@@ -111,12 +115,10 @@ export const makeAppLayer = (dryRun: boolean, options: { runtimeLive: boolean } 
 		workspaceDiscovery,
 		packageManagerDetector,
 		ChangesetsLive.pipe(Layer.provide(depsRegen)),
-		BranchManagerLive.pipe(Layer.provide(Layer.mergeAll(gitBranch, gitCommit, NodeServices.layer))),
+		BranchManagerLive.pipe(Layer.provide(Layer.merge(gitBranch, gitCommit))),
 		PackageManagerUpgradeLive.pipe(Layer.provide(npmRegistry)),
 		ConfigDepsLive.pipe(Layer.provide(Layer.merge(npmRegistry, releaseAge))),
-		CatalogConfigDepsLive.pipe(
-			Layer.provide(Layer.mergeAll(npmRegistry, lockfileReader, FetchHttpClient.layer, NodeServices.layer)),
-		),
+		CatalogConfigDepsLive.pipe(Layer.provide(Layer.merge(npmRegistry, lockfileReader))),
 		RegularDepsLive.pipe(Layer.provide(Layer.mergeAll(npmRegistry, workspaceDiscovery, releaseAge))),
 		ReportLive.pipe(Layer.provide(prLayer)),
 		RuntimeUpgradeLive.pipe(Layer.provide(makeRuntimeResolvers(options.runtimeLive))),

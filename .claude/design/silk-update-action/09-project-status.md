@@ -112,13 +112,51 @@ rather than silently performing a package-manager-only run.
   which came in transitively through the deleted `github-action-effects` and no
   longer appears in the lockfile at all. Harmless, but the comment there still
   describes the old provenance.
-- `GitHubApiError` and `PnpmError` remain in `src/errors/errors.ts` and in the
-  `ActionError` union but are no longer constructed anywhere; GitHub failures are
-  the kit's `GitHubError` and subprocess failures are `@effected/commands`' error
-  types.
 - Two duplicate resolutions (`@effected/workspaces` 0.8.0, `@effected/npm` 0.4.0)
   come entirely from the `@vitest-agent/plugin` devDependency tree and clear when
   that plugin bumps; neither reaches the shipped artifact.
+- **`@effected/package-json` is deliberately NOT adopted** (upstream
+  spencerbeggs/effected#286), and the reason is
+  measured rather than stylistic. `Package.decode` requires both `name` and
+  `version`, with `version` a strict semver — so it rejects a private monorepo
+  root (`{ "private": true, "packageManager": …, "devEngines": … }`), which is
+  exactly the file `RuntimeUpgrade` and `PackageManagerUpgrade` edit. It also
+  rejects a caret `packageManager` pin (`pnpm@^11.20.0`), a form `parsePnpmVersion`
+  supports and `PackageManagerUpgrade` reads as a reference. Separately, the
+  write path sorts keys canonically, so adopting it would reformat unrelated
+  regions of a manifest the action then commits to someone else's repo; the
+  current surgical edit (mutate the parsed object, `JSON.stringify` with
+  `detectIndent`) preserves key order exactly.
+
+  Four helpers therefore stay, each a **deliberate divergence with its own
+  reason** — recorded so the next audit does not re-propose them:
+
+  | helper | why it stays |
+  | --- | --- |
+  | `parsePnpmVersion` / `formatPnpmVersion` | `PackageManager.FromString` rejects the caret pin (`pnpm@^11.20.0`) these accept and `PackageManagerUpgrade` documents |
+  | `findRuntimeEntry` | returns the **live object** inside `devEngines`, so assigning `.version` rewrites in place and preserves the entry's other keys; `DevEngine` decoding yields a detached copy |
+  | `detectIndent` | serves the surgical write path that `PackageIndent` would replace only if the kit's writer were adopted |
+  | `corepackHashFromIntegrity` | the kit has no SRI (`sha512-<base64>`) → corepack (`sha512.<hex>`) converter — upstream #281 |
+
+- **`@effected/git` is deliberately NOT adopted** (upstream spencerbeggs/effected#279).
+  It covers 2 of the 9 local git operations `services/branch.ts` performs, so
+  adopting it would leave two subprocess mechanisms in one module while fixing
+  nothing; git stays entirely on `Run`. Missing upstream: `-c core.fileMode=false` on
+  `status` (spencerbeggs/effected#279, load-bearing here), an explicit-refspec
+  `fetch` (load-bearing for single-branch checkouts), `checkout -B`,
+  `reset --hard`, `fetch --unshallow`, `branch -f`, and
+  `rev-parse --is-shallow-repository`. The `GIT_CONFIG_COUNT` /
+  `GIT_CONFIG_KEY_n` / `GIT_CONFIG_VALUE_n` env route **does** reach the child
+  (`GitCommand` spawns with `extendEnv: true`, verified against a real repo) but
+  can only be set process-globally, which would change every git command in the
+  run including silk's DepsRegen — rejected on blast radius. The rename bug the
+  kit's `StatusEntry` would have fixed was fixed directly instead; see
+  `parseStatusLine` in @./05-module-library.md.
+- **Deferred fix, not yet applied:** `BranchManager.ensureBaseHistory` still runs
+  its git commands at `process.cwd()` while every other step uses `detected.root`
+  — the same defect class as the `commitChanges` bug fixed in the entry-guard
+  wave. Held back deliberately so it does not ride along inside the `steps/`
+  restructure, which must stay behavior-preserving.
 
 **Next steps:**
 
@@ -164,8 +202,10 @@ Splitting into focused kit packages made each surface independently versionable
 and let the shapes improve: one `GitHubError` instead of per-service error classes,
 `upsert` instead of exists/delete/create, `Run` free functions instead of a
 `CommandRunner` service, `ActionInput` accessors that actually know the runner's
-`INPUT_*` mangling. The one deliberate non-successor is `GithubMarkdown`: report
-shaping is consumer policy, so those builders live in `src/utils/`.
+`INPUT_*` mangling, and `GithubMarkdown` → `GitHubMarkdown` (capital H), which is
+a rename rather than a removal. This repo spent a release believing the kit
+shipped no markdown writer and hand-rolled one; only `bold` and `rule` genuinely
+have no kit equivalent.
 
 ### Why Three-Phase (Pre/Main/Post)?
 

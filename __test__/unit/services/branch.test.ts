@@ -1,9 +1,12 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { ScriptResult } from "@effected/commands";
 import type { FileChange, Repo } from "@effected/github";
 import { GitBranch, GitCommit, GitHubError, RepoRef, Repo as RepoTag } from "@effected/github";
 import { Effect, Layer, References, Result } from "effect";
 import { describe, expect, it } from "vitest";
-import { BranchManager, BranchManagerLive } from "../../../src/services/branch.js";
+import { BranchManager, BranchManagerLive, parseStatusLine } from "../../../src/services/branch.js";
 import { fromMap } from "../../utils/spawner.js";
 
 /** Every resource method resolves `Repo` per call, so tests provide one. */
@@ -197,7 +200,7 @@ describe("BranchManager.commitChanges", () => {
 		const { commitState, result } = runWithBranchManager(
 			Effect.gen(function* () {
 				const manager = yield* BranchManager;
-				return yield* manager.commitChanges("test commit", "pnpm/config");
+				return yield* manager.commitChanges("test commit", "pnpm/config", process.cwd());
 			}),
 			undefined,
 			responses,
@@ -220,7 +223,7 @@ describe("BranchManager.commitChanges", () => {
 		const { commitState, result } = runWithBranchManager(
 			Effect.gen(function* () {
 				const manager = yield* BranchManager;
-				return yield* manager.commitChanges("chore: update deps", "pnpm/config");
+				return yield* manager.commitChanges("chore: update deps", "pnpm/config", process.cwd());
 			}),
 			undefined,
 			responses,
@@ -249,7 +252,7 @@ describe("BranchManager.commitChanges", () => {
 		const { commitState, result } = runWithBranchManager(
 			Effect.gen(function* () {
 				const manager = yield* BranchManager;
-				return yield* manager.commitChanges("update", "branch");
+				return yield* manager.commitChanges("update", "branch", process.cwd());
 			}),
 			undefined,
 			responses,
@@ -271,7 +274,7 @@ describe("BranchManager.commitChanges", () => {
 		const { commitState, result } = runWithBranchManager(
 			Effect.gen(function* () {
 				const manager = yield* BranchManager;
-				return yield* manager.commitChanges("update", "branch");
+				return yield* manager.commitChanges("update", "branch", process.cwd());
 			}),
 			undefined,
 			responses,
@@ -306,7 +309,7 @@ describe("BranchManager.commitChanges", () => {
 		const { commitState, result } = runWithBranchManager(
 			Effect.gen(function* () {
 				const manager = yield* BranchManager;
-				return yield* manager.commitChanges("chore: update deps", "pnpm/config");
+				return yield* manager.commitChanges("chore: update deps", "pnpm/config", process.cwd());
 			}),
 			undefined,
 			responses,
@@ -317,6 +320,154 @@ describe("BranchManager.commitChanges", () => {
 		expect(Result.isSuccess(either)).toBe(true);
 		// No commit should be created from a mode-only change.
 		expect(commitState.commits).toHaveLength(0);
+	});
+
+	it("commits a renamed file as a delete of the old path plus content at the new one", async () => {
+		// End-to-end counterpart to the parseStatusLine unit tests: proves the fix
+		// reaches the actual commit payload, not just the parser. Before the fix the
+		// path was "old.ts -> new.ts", the read failed, and the commit contained
+		// NOTHING for this rename — the old file stayed and the new one never landed.
+		const root = mkdtempSync(join(tmpdir(), "branch-rename-"));
+		try {
+			writeFileSync(join(root, "new.ts"), "export const moved = 1;\n", "utf-8");
+
+			const responses = new Map<string, ScriptResult>([
+				["git -c core.fileMode=false status --porcelain", { exit: 0, stdout: "R  old.ts -> new.ts\n", stderr: "" }],
+				["git fetch origin branch", { exit: 0, stdout: "", stderr: "" }],
+				["git reset --hard origin/branch", { exit: 0, stdout: "", stderr: "" }],
+			]);
+
+			const { commitState, result } = runWithBranchManager(
+				Effect.gen(function* () {
+					const manager = yield* BranchManager;
+					return yield* manager.commitChanges("chore: move", "branch", root);
+				}),
+				undefined,
+				responses,
+			);
+
+			expect(Result.isSuccess(await result)).toBe(true);
+			expect(commitState.commits).toHaveLength(1);
+			expect(commitState.commits[0].changes).toEqual([
+				{ _tag: "FileDeletion", path: "old.ts" },
+				{ _tag: "FileContent", path: "new.ts", content: "export const moved = 1;\n" },
+			]);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("reads changed files from the workspace root it is given, not the process cwd", async () => {
+		// Regression: commitChanges used to resolve every status path against
+		// `process.cwd()` while every other step in the run reads and writes at the
+		// DETECTED workspace root. The two are not the same thing — the action can
+		// legitimately be invoked from a subdirectory — and when they diverged the
+		// file read failed and the change was silently dropped with a warning.
+		//
+		// This test discriminates precisely because the file exists ONLY under the
+		// temp root: resolving against `process.cwd()` cannot find it, so the buggy
+		// path records zero commits while the fixed path records the content.
+		const root = mkdtempSync(join(tmpdir(), "branch-root-"));
+		try {
+			writeFileSync(join(root, "package.json"), '{"name":"from-the-workspace-root"}\n', "utf-8");
+
+			const responses = new Map<string, ScriptResult>([
+				["git -c core.fileMode=false status --porcelain", { exit: 0, stdout: " M package.json\n", stderr: "" }],
+				["git fetch origin branch", { exit: 0, stdout: "", stderr: "" }],
+				["git reset --hard origin/branch", { exit: 0, stdout: "", stderr: "" }],
+			]);
+
+			const { commitState, result } = runWithBranchManager(
+				Effect.gen(function* () {
+					const manager = yield* BranchManager;
+					return yield* manager.commitChanges("chore: update deps", "branch", root);
+				}),
+				undefined,
+				responses,
+			);
+
+			const either = await result;
+
+			expect(Result.isSuccess(either)).toBe(true);
+			expect(commitState.commits).toHaveLength(1);
+			expect(commitState.commits[0].changes).toEqual([
+				{ _tag: "FileContent", path: "package.json", content: '{"name":"from-the-workspace-root"}\n' },
+			]);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("parseStatusLine", () => {
+	// The two-character status field is column-aligned and BOTH columns are
+	// significant, so every case below is written as the exact bytes git emits.
+	it("reads a plain worktree modification", () => {
+		expect(parseStatusLine(" M package.json")).toEqual({
+			path: "package.json",
+			origPath: null,
+			renamed: false,
+			deleted: false,
+		});
+	});
+
+	it("reads a staged addition", () => {
+		expect(parseStatusLine("A  new.ts")).toEqual({ path: "new.ts", origPath: null, renamed: false, deleted: false });
+	});
+
+	it("reads an untracked file", () => {
+		expect(parseStatusLine("?? untracked.ts")).toEqual({
+			path: "untracked.ts",
+			origPath: null,
+			renamed: false,
+			deleted: false,
+		});
+	});
+
+	it("reads a deletion from either column", () => {
+		// " D" is an unstaged delete, "D " a staged one — both mean the path is gone.
+		expect(parseStatusLine(" D gone.ts").deleted).toBe(true);
+		expect(parseStatusLine("D  gone.ts").deleted).toBe(true);
+	});
+
+	it("reads a deletion whose columns disagree", () => {
+		// Regression: `substring(0,2).trim() === "D"` missed "AD" and "RD" entirely,
+		// so the file was treated as modified, failed to read, and was dropped.
+		expect(parseStatusLine("AD added-then-deleted.ts")).toEqual({
+			path: "added-then-deleted.ts",
+			origPath: null,
+			renamed: false,
+			deleted: true,
+		});
+	});
+
+	it("splits a rename into its origin and destination", () => {
+		// THE bug: the old parser produced the path "old.ts -> new.ts", which cannot
+		// be read from disk, so a renamed file silently never reached the commit.
+		expect(parseStatusLine("R  old.ts -> new.ts")).toEqual({
+			path: "new.ts",
+			origPath: "old.ts",
+			renamed: true,
+			deleted: false,
+		});
+	});
+
+	it("carries a copy's origin but does not mark it renamed", () => {
+		// A copy's origin still exists and must NOT be deleted.
+		expect(parseStatusLine("C  src.ts -> copy.ts")).toEqual({
+			path: "copy.ts",
+			origPath: "src.ts",
+			renamed: false,
+			deleted: false,
+		});
+	});
+
+	it("unquotes a path git had to quote", () => {
+		expect(parseStatusLine(' M "has space and \\"quote\\".ts"').path).toBe('has space and "quote".ts');
+	});
+
+	it("keeps an unquoted path containing spaces intact", () => {
+		expect(parseStatusLine(" M dir/file with spaces.ts").path).toBe("dir/file with spaces.ts");
 	});
 });
 

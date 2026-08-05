@@ -17,10 +17,11 @@
  * @module program.inputs.test
  */
 
+import { readFileSync } from "node:fs";
 import { ActionInput } from "@effected/github-actions";
 import { Effect, Exit, References } from "effect";
 import { describe, expect, it } from "vitest";
-import { readInputs } from "../../src/program.js";
+import { INPUT_NAMES, readInputs } from "../../../src/schema/inputs.js";
 
 /**
  * The variables the runner actually exports: `INPUT_` + the input name
@@ -234,5 +235,30 @@ describe("readInputs — enumerated inputs", () => {
 		// while the workflow had asked for live data.
 		const exit = await read({ dependencies: "effect", "runtime-data": "offline-ish" });
 		expect(Exit.isFailure(exit)).toBe(true);
+	});
+});
+
+describe("INPUT_NAMES", () => {
+	/**
+	 * The input names `action.yml` declares, read straight from the manifest.
+	 *
+	 * Narrow regex rather than a YAML dependency: the `inputs:` block is a flat
+	 * map of `  <name>:` keys, and anchoring on the block keeps a nested
+	 * `description:`/`default:` from being mistaken for an input.
+	 */
+	const manifestInputNames = (): ReadonlyArray<string> => {
+		const yaml = readFileSync(new URL("../../../action.yml", import.meta.url), "utf-8");
+		const block = /\ninputs:\n([\s\S]*?)(?=\noutputs:)/.exec(yaml);
+		if (block === null) throw new Error("action.yml has no inputs: block");
+		return [...block[1].matchAll(/^ {2}([a-z][a-z0-9-]*):/gm)].map((m) => m[1]);
+	};
+
+	it("mirrors action.yml exactly", () => {
+		// action.yml is the single source of input names; this tuple is a mirror,
+		// and a mirror nobody checks is just a second source. The regression it
+		// guards is an input added to the manifest and never read, or read under a
+		// name the manifest does not declare — both of which resolve to a silent
+		// default under the runner rather than failing.
+		expect([...INPUT_NAMES].sort()).toEqual([...manifestInputNames()].sort());
 	});
 });

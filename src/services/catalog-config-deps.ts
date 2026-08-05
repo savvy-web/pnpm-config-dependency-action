@@ -33,7 +33,7 @@ import type { HttpClient } from "effect/unstable/http";
 import type { ChildProcessSpawner } from "effect/unstable/process";
 
 import { FileSystemError } from "../errors/errors.js";
-import type { CatalogDelta, DependencyUpdateResult } from "../schemas/domain.js";
+import type { CatalogDelta, DependencyUpdateResult } from "../schema/domain.js";
 import type { CatalogMap } from "../utils/catalogs.js";
 import { readManifestCatalogs, threeWayMergeCatalogs, writeManifestCatalogs } from "../utils/catalogs.js";
 import { parseSpecifier } from "../utils/deps.js";

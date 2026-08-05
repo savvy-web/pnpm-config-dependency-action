@@ -51,8 +51,7 @@ src/
     ├── catalogs.ts        # CatalogMap, normalize/read/write/threeWayMergeCatalogs
     ├── commit-subject.ts  # buildUpdateSubject (PR title / commit subject)
     ├── deps.ts            # parseConfigEntry, matchesPattern, parseSpecifier
-    ├── github-markdown.ts # GithubMarkdown builders (local; no kit successor)
-    ├── markdown.ts        # npmUrl, cleanVersion
+    ├── markdown.ts        # bold, rule (the 2 builders the kit lacks), npmUrl, cleanVersion
     ├── pnpm.ts            # parsePnpmVersion, formatPnpmVersion, detectIndent, corepackHashFromIntegrity
     ├── runtime.ts         # isStaticVersion, findRuntimeEntry
     └── semver.ts          # resolveLatestSatisfying, configDepUpgradeRange, …

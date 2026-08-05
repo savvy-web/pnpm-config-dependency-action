@@ -1,4 +1,4 @@
-import type { DependencyUpdateResult } from "../schemas/domain.js";
+import type { DependencyUpdateResult } from "../schema/domain.js";
 import type { RuntimeName } from "./runtime.js";
 
 /**

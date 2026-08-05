@@ -232,26 +232,32 @@ metadata. The local `ActionError` union covers:
   `program.ts`, the branch-ref preflight in `services/branch.ts`, and the
   yarn/no-workspace rejection in `services/package-manager.ts` all raise this
   local error instead.
-- `GitHubApiError` — `{ operation, statusCode?, message }`; exposes
-  `isRateLimited` (429), `isServerError` (>= 500) and `isRetryable`.
-- `GitError` — `{ operation, exitCode, stderr }`; `isRetryable` for `fetch`/`push`.
-- `PnpmError` — `{ command, dependency?, exitCode, stderr }`; `isRetryable` for
-  `install`.
 - `ChangesetError` — `{ reason, packages? }`.
 - `FileSystemError` — `{ operation, path, reason }`.
 - `LockfileError` — `{ operation, reason }`.
-- `DependencyUpdateFailures` — aggregate `{ failures, successful }` for
-  partial-success batch updates; exposes `partialSuccess`.
 
-`isRetryableError(error)` and `getErrorMessage(error)` are exported helpers over
-the union.
+`getErrorMessage(error)` is the one exported helper over the union.
 
-**Which of these are actually raised today:** `InvalidInputError` (program,
-branch, package-manager), `FileSystemError` (every manifest/YAML writer),
-`ChangesetError` and `GitError` (the changesets adapter's error mapping) and
-`LockfileError` (lockfile capture/compare). `GitHubApiError` and `PnpmError` are
-no longer constructed anywhere in `src/` — GitHub failures now arrive as the
-kit's single `GitHubError` (discriminated with `hasKind`) and subprocess failures
-as `@effected/commands`' `CommandFailedError` / `CommandOutputError`. They remain
-in the union with their retry predicates; treat them as vestigial rather than as
-a description of current behavior.
+**Four members were deleted**, along with `isRetryableError` and the
+`GitOperation` schema in `schemas/domain.ts` that only `GitError` consumed:
+`GitHubApiError`, `GitError`, `PnpmError` and `DependencyUpdateFailures`. None
+had a construction site anywhere in `src/` — the only code that ever built one
+was the test suite asserting on its retry predicates, so the tests passed
+precisely because they were the sole callers. `isRetryableError` dispatched only
+on those three tags and had no caller in `src/` either.
+
+`__test__/unit/errors/errors.test.ts` now pins the exported error set, so
+re-adding a class without a construction site fails a test rather than passing
+silently.
+
+**Every member of the union is raised.** `InvalidInputError` (program, branch,
+package-manager), `FileSystemError` (every manifest/YAML writer), `ChangesetError`
+(the changesets adapter's error mapping) and `LockfileError` (lockfile
+capture/compare). Failures the action does not define itself arrive as the kit's
+types: GitHub failures as the single `GitHubError` (discriminated with `hasKind`)
+and subprocess failures as `@effected/commands`' `CommandFailedError` /
+`CommandOutputError`.
+
+Keep it that way: an error channel with no construction site is a claim the type
+system will carry indefinitely and no test can falsify. Demonstrate the failure
+path with a test, or leave it out of the signature.

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import { GitHubError, PullRequest, Repo, RepoRef } from "@effected/github";
 import { Cause, Effect, Layer, References } from "effect";
-import type { CatalogDelta } from "../../../src/schemas/domain.js";
+import type { CatalogDelta } from "../../../src/schema/domain.js";
 import { Report, ReportLive } from "../../../src/services/report.js";
 import type { PullRequestTestState } from "../../utils/fixtures.js";
 import { emptyPullRequestState, fakeSha, pnpmUpgradeUpdate, pullRequestTestLayer } from "../../utils/fixtures.js";

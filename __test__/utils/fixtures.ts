@@ -13,7 +13,7 @@ import type {
 	DependencyUpdateResult,
 	LockfileChange,
 	PullRequestResult,
-} from "../../src/schemas/domain.js";
+} from "../../src/schema/domain.js";
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Logging

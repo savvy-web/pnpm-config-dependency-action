@@ -160,9 +160,10 @@ the `Config.withDefault([])` on each list read is load-bearing, not decoration.
 Validation performed in `readInputs`:
 
 - `upgrade-package-manager` and each `upgrade-runtime-*` value must be one of the
-  input's keywords or a parseable semver range — checked with the **standalone**
-  `Range.parse` from `@effected/semver` (the static alias is tree-shaken out of
-  the bundled dist), raising `InvalidInputError` on failure.
+  input's keywords or a parseable semver range — checked with `Range.parse` from
+  `@effected/semver`, raising `InvalidInputError` on failure. (An earlier note here
+  warned that the static alias was tree-shaken out of the bundled dist; that was
+  fixed upstream — see @./01-dependencies.md.)
 - At least one update type must be active. Since `upgrade-package-manager`
   defaults to `"false"`, a workflow configuring nothing now fails here.
 - `peer-lock` / `peer-minor` must not overlap; peer entries matching no

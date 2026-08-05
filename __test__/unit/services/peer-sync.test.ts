@@ -5,7 +5,7 @@ import type { WorkspacePackage } from "@effected/workspaces";
 import { WorkspaceDiscovery, WorkspaceDiscoveryError } from "@effected/workspaces";
 import { Effect, Layer, References } from "effect";
 import { describe, expect, it, vi } from "vitest";
-import type { DependencyUpdateResult } from "../../../src/schemas/domain.js";
+import type { DependencyUpdateResult } from "../../../src/schema/domain.js";
 import { computePeerRange, syncPeers } from "../../../src/services/peer-sync.js";
 
 // ══════════════════════════════════════════════════════════════════════════════

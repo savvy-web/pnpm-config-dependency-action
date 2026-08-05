@@ -16,7 +16,7 @@ import { Yaml } from "@effected/yaml";
 import { Context, Effect, Layer, Option } from "effect";
 
 import { FileSystemError } from "../errors/errors.js";
-import type { DependencyUpdateResult } from "../schemas/domain.js";
+import type { DependencyUpdateResult } from "../schema/domain.js";
 import { parseConfigEntry } from "../utils/deps.js";
 import { configDepUpgradeRange, resolveLatestSatisfying } from "../utils/semver.js";
 import { ReleaseAge } from "./release-age.js";

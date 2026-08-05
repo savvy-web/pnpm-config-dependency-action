@@ -32,7 +32,7 @@ The action runs on **Effect v4** (`effect` / `@effect/platform-node` both resolv
 | `GitHubApp`, `GitHubClient`, `GitHubGraphQL`, `GitBranch`, `GitCommit`, `CheckRun`, `PullRequest`, `AutoMerge` | `@effected/github` |
 | `NpmRegistry`, `SemverResolver`-adjacent registry reads | `@effected/npm` |
 | `CommandRunner` (a service) | `@effected/commands`' `Run` free functions over core `ChildProcessSpawner` |
-| `GithubMarkdown` | local `src/utils/github-markdown.ts` (no kit successor — deliberately) |
+| `GithubMarkdown` | `GitHubMarkdown` (capital H) in `@effected/github-actions` — a **rename**, not a removal |
 | `ActionInputError` | this repo's own `InvalidInputError` (`src/errors/errors.ts`) |
 | `*Live` layer constants | `.layer` / `.layer(...)` statics on the service classes |
 | `@savvy-web/github-action-effects/testing` (`ActionStateTest`, `GitHubAppTest`, `ActionOutputsTest`) | `__test__/utils/action-doubles.ts` over each service's `layerTest` |
@@ -158,12 +158,17 @@ The action runs on **Effect v4** (`effect` / `@effect/platform-node` both resolv
   (pre-wiring auth + `FetchHttpClient`) for the Bun/Deno GitHub-release fetchers. Both the
   snapshot and the live API **exclude end-of-life major lines** — resolving an EOL line
   returns `VersionNotFoundError` and the runtime is skipped with a warning.
-- `@effected/semver` — semver parsing/comparison. Used via the standalone `parseValidSemVer`
-  in `services/peer-sync.ts` and the standalone `Range.parse` in `program.ts` for validating
-  explicit-range `upgrade-runtime-*` / `upgrade-package-manager` values. The action calls the
-  **standalone** functions rather than the static aliases: an alias attached by post-class
-  assignment is tree-shaken out of the bundled dist (`"sideEffects": false`), producing
-  `Range.parse is not a function` at runtime.
+- `@effected/semver` — semver parsing/comparison. Used via `parseValidSemVer` in
+  `services/peer-sync.ts` and `Range.parse` in `program.ts` for validating explicit-range
+  `upgrade-runtime-*` / `upgrade-package-manager` values, plus `Range.maxSatisfying` and
+  `SemVer.parse` in `utils/semver.ts`.
+  - **Historical note, now resolved:** these static parsers used to be attached by
+    post-class assignment (`Range.parse = parseRange`), which the bundler tree-shook out
+    of `dist` under `"sideEffects": false`, producing `Range.parse is not a function` at
+    runtime — so the action deliberately called the standalone functions instead. As of
+    `@effected/semver@0.3.2` they are **in-class static fields**
+    (`static parse = Effect.fn("Range.parse")(...)`, `Range.js:111` / `SemVer.js:171`), so
+    the hazard is gone and the static form is the correct one to call.
 - `@effected/lockfiles` — package-manager-agnostic lockfile parser and model.
   `Lockfile.parse(content, { format })` is a **pure** parser (no memoized reader service), so
   a "before" and an "after" snapshot can be parsed in the same process; it normalizes

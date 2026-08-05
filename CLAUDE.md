@@ -63,7 +63,10 @@ pnpm vitest run --testNamePattern="parsePnpmVersion"          # by name
 ### Effect-TS Patterns
 
 - **Kit services**: `@effected/github-actions` (`Action`, `ActionInput`,
-  `ActionEnvironment`, `ActionOutputs`, `ActionState`, `DryRun`, `GitHubToken`);
+  `ActionEnvironment`, `ActionOutputs`, `ActionState`, `DryRun`, `GitHubToken`,
+  **`GitHubMarkdown`** — the GFM writer, capital H; `GithubMarkdown` was a
+  *rename*, not a removal, and this repo hand-rolled a copy for a release on
+  that misreading. Only `bold`/`rule` have no kit equivalent);
   `@effected/github` (`GitHubApp`, `Repo`, `GitBranch`, `GitCommit`, `CheckRun`,
   `PullRequest` — all failing with a single `GitHubError`, discriminated by
   `hasKind`); `@effected/commands` (`Run` free functions over core
@@ -81,10 +84,13 @@ pnpm vitest run --testNamePattern="parsePnpmVersion"          # by name
   which owns the cumulative `merge-base(base) → worktree` diff, consolidation and
   versionable-minus-ignored gating — this repo computes none of it. `plan`
   refreshes workspace discovery, so it sees manifests edited earlier in the run.
-- **Errors actually raised**: `InvalidInputError` (inputs, branch refs,
-  yarn/no-workspace), `FileSystemError`, `ChangesetError`, `LockfileError`, plus
-  kit `GitHubError` and `CommandFailedError`/`CommandOutputError`. `GitHubApiError`
-  and `PnpmError` remain in the union but are **no longer constructed**.
+- **Errors**: the `ActionError` union is exactly `InvalidInputError` (inputs,
+  branch refs, yarn/no-workspace), `FileSystemError`, `ChangesetError` and
+  `LockfileError` — every member has a construction site. Kit failures arrive as
+  `GitHubError` and `CommandFailedError`/`CommandOutputError`. `GitHubApiError`,
+  `GitError`, `PnpmError` and `DependencyUpdateFailures` were **deleted** for
+  having none; `__test__/unit/errors/errors.test.ts` pins the exported set, so
+  re-adding one fails a test.
 - **Effect v4 spellings**: `Context.Service`; `NodeServices.layer`;
   `FileSystem`/`Path` from `effect`, `HttpClient`/`FetchHttpClient` from
   `effect/unstable/http`, `ChildProcess`/`ChildProcessSpawner` from

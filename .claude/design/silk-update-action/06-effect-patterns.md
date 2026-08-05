@@ -180,8 +180,9 @@ Effect distinguishes **expected errors** (typed, recoverable) from **defects**.
 - `CommandFailedError` / `CommandOutputError` (kit) — subprocess failures.
 - `ConfigError` (core) — a malformed/absent input from `ActionInput`.
 
-`GitHubApiError` and `PnpmError` remain defined in `src/errors/errors.ts` but are
-no longer constructed anywhere; see @./03-type-definitions.md.
+That list is exhaustive, and `src/errors/errors.ts` defines nothing beyond it.
+`GitHubApiError`, `GitError`, `PnpmError` and `DependencyUpdateFailures` were
+deleted for having no construction site; see @./03-type-definitions.md.
 
 **Strategy by scenario:**
 

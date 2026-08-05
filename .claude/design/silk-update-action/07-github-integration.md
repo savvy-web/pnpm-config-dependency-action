@@ -227,7 +227,9 @@ _This PR was automatically created by [silk-update-action](https://github.com/sa
 
 The Catalog Changes section appears only for bun compat-mode runs, built from the
 `CatalogDelta[]` the config-dependency step returns — on a plugin bump that table
-is the actual payload of the run. The Markdown is assembled with the local
-`GithubMarkdown` builders in `src/utils/github-markdown.ts`; the kit ships no
-successor to the deleted library's version, because report shaping is consumer
-policy.
+is the actual payload of the run. The Markdown is assembled with the kit's
+`GitHubMarkdown` writer from `@effected/github-actions` — the successor to the
+deleted library's `GithubMarkdown`, under a renamed capital H. Only `bold` and
+`rule` are local (`src/utils/markdown.ts`). What *is* consumer policy is the
+arrangement of the report — which sections exist and in what order — not the
+markdown primitives.
