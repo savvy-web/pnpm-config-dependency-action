@@ -164,10 +164,27 @@ rather than silently performing a package-manager-only run.
   for tarball extraction).
   - **Correction to the original audit.** That finding claimed "14 modules" while
     enumerating only 12, and the enumeration omitted `services/lockfile.ts`
-    because the grep it came from silently skipped that file (see the NUL-byte
-    note below). The count, the list, and each other all disagreed. The
+    because the grep it came from silently skipped that file — see the
+    NUL-byte note below. The count, the list, and each other all disagreed. The
     conclusion — that the drift is pervasive — was right; the evidence presented
     as exhaustive was not. Do not cite the original enumeration.
+- **Resolved, worth keeping:** `services/lockfile.ts` used to carry a **raw NUL
+  byte** — the separator in `` `${dep.name}\0${dep.depType}` ``, written as a
+  literal `U+0000` rather than the `\0` escape. The NUL itself is correct (a
+  package name cannot contain one, so it is a safe composite-key separator); the
+  raw encoding was not. `file(1)` reported the source as `data`, and **grep
+  treated the whole 531-line file as binary and silently skipped it** — returning
+  what looks exactly like a clean no-match.
+  - That is why the audit enumeration above was wrong, and it is worth
+    remembering as a class rather than an incident: a search that returns nothing
+    because it could not read the file is indistinguishable, at the call site,
+    from a search that returns nothing because there was nothing to find.
+  - Fixed by replacing the raw byte with the `\0` escape. The runtime string is
+    unchanged — verified both by an escape-equivalence probe
+    (`\0` === `String.fromCharCode(0)`) and by `dist/main.js` rebuilding
+    **byte-identical**. Note that the test suite could *not* have caught a broken
+    escape here: `depKey` is used symmetrically on both sides of every
+    comparison, so a wrong separator would still compare equal to itself.
 - **Deferred fix, not yet applied:** `BranchManager.ensureBaseHistory` still runs
   its git commands at `process.cwd()` while every other step uses `detected.root`
   — the same defect class as the `commitChanges` bug fixed in the entry-guard
