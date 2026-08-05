@@ -1,8 +1,8 @@
 import type { ScriptResult } from "@effected/commands";
 import { Effect, References } from "effect";
 import { describe, expect, it } from "vitest";
-import { runCommands } from "../../src/program.js";
-import { fromMap } from "../utils/spawner.js";
+import { runCommands } from "../../../src/steps/custom-commands.js";
+import { fromMap } from "../../utils/spawner.js";
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Test Helpers

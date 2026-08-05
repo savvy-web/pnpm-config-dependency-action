@@ -11,10 +11,21 @@
  * `formatCatalogCountsCompact` are the same tally rendered for two audiences,
  * and they live side by side precisely so that stays visible.
  *
- * The boundary with `services/report.ts`: this module renders the *run's* own
- * output (logs and the decision record), `Report` renders the *PR's* output (body,
- * summary, commit message) over `GitHubMarkdown`. Both are rendering, but they
- * have different sinks and different lifetimes, so they are not merged.
+ * ## The boundary with `services/report.ts` — settled, do not re-litigate
+ *
+ * **`format.ts` renders the run's log output; `report.ts` renders the PR's.**
+ * Two named rendering modules, split by sink:
+ *
+ * | | `format.ts` | `services/report.ts` |
+ * | --- | --- | --- |
+ * | sink | the runner log / decision record | the PR body, job summary, commit message |
+ * | lifetime | written once, scrolls | upserted and re-rendered across runs |
+ * | shape | pure functions, no services | a `Context.Service` over `PullRequest` |
+ *
+ * The single-rendering-surface rule exists to stop rendering being scattered
+ * through step bodies — which it is not. Merging these two would drag a service
+ * dependency into a pure module, or strand `Report`'s statics. Two named modules
+ * with a clear split satisfies the rule rather than violating it.
  *
  * Pure and service-free — every function takes data and returns a string, so
  * every line here is testable without a runtime.

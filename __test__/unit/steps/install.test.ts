@@ -3,8 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect, References } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
-import { runInstall } from "../../src/program.js";
-import { fromMap } from "../utils/spawner.js";
+import { runInstall } from "../../../src/steps/install.js";
+import { fromMap } from "../../utils/spawner.js";
 
 /**
  * Records the command lines runInstall spawns.
