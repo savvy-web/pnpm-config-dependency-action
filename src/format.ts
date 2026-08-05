@@ -34,7 +34,7 @@
  */
 
 import { existsSync, readFileSync } from "node:fs";
-import type { CatalogDelta } from "./schema/domain.js";
+import type { CatalogDelta, DependencyUpdateResult } from "./schema/domain.js";
 import type { DetectedPm, SupportedPm } from "./services/package-manager.js";
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -128,4 +128,95 @@ export const formatCatalogCountsCompact = (counts: CatalogActionCounts): string 
 	if (counts.updated > 0) parts.push(`~${counts.updated}`);
 	if (counts.removed > 0) parts.push(`-${counts.removed}`);
 	return parts.length > 0 ? parts.join(" ") : "no changes";
+};
+
+// ══════════════════════════════════════════════════════════════════════════════
+// The run's decision record
+// ══════════════════════════════════════════════════════════════════════════════
+
+/** Everything the opening Run-context block reports. */
+export interface RunContext {
+	readonly detected: DetectedPm;
+	readonly evidence: string | null;
+	readonly packageCount: number | null;
+	readonly lockfileName: string;
+	readonly branch: string;
+	readonly sourceBranch: string;
+	readonly targetBranch: string;
+	readonly dryRun: boolean;
+	readonly changesets: boolean;
+	readonly runtimeData: string;
+}
+
+/**
+ * The opening Run-context block: what this run was asked to do, before any work.
+ *
+ * Returned as lines rather than logged here so the module stays pure — the
+ * caller logs them in order. The leading `"Run context"` header is included, so
+ * the block is emitted as one unit and cannot drift apart.
+ *
+ * The exact text is part of the log contract `program.inner.test.ts` asserts on;
+ * that suite is authoritative over these strings.
+ */
+export const runContextLines = (context: RunContext): ReadonlyArray<string> => [
+	"Run context",
+	`  package manager  ${context.detected.pm}${context.detected.version ? ` ${context.detected.version}` : ""}${
+		context.evidence ? `   (${context.evidence})` : ""
+	}`,
+	`  workspace root   ${context.detected.root}${
+		context.packageCount !== null ? ` (${context.packageCount} package${context.packageCount === 1 ? "" : "s"})` : ""
+	}`,
+	`  lockfile         ${context.lockfileName}`,
+	`  branches         update ${context.branch} ← source ${context.sourceBranch} → target ${context.targetBranch}`,
+	`  mode             ${context.dryRun ? "dry run" : "live"} · changesets ${
+		context.changesets ? "on" : "off"
+	} · runtime data ${context.runtimeData}`,
+];
+
+/** Everything the closing Result block reports. */
+export interface RunResult {
+	readonly updates: ReadonlyArray<DependencyUpdateResult>;
+	readonly deltas: ReadonlyArray<CatalogDelta>;
+	/** Reasons a step gave for not running, in report order; `null` means it ran. */
+	readonly packageManagerSkip: string | null;
+	readonly peerConfigured: boolean;
+	readonly isPnpm: boolean;
+	readonly customCommandsConfigured: boolean;
+	readonly changesetsSkip: string | null;
+}
+
+/**
+ * The closing Result block: what changed, and what did not run and why.
+ *
+ * The skipped-summary is the half that matters — a step that did not run must
+ * always say so, and this is where those reasons are collected into one line
+ * rather than being scattered through the stream.
+ */
+export const resultLines = (result: RunResult): ReadonlyArray<string> => {
+	const lines: string[] = ["Result"];
+
+	if (result.updates.length > 0) {
+		const updateLines = result.updates.map((u) => `${u.dependency} ${u.from ?? "added"} -> ${u.to} (${u.type})`);
+		lines.push(`  updated   ${updateLines.join(", ")}`);
+	}
+
+	if (result.deltas.length > 0) {
+		const catalogLines = Array.from(
+			groupCatalogDeltas(result.deltas),
+			([catalog, counts]) => `${catalog}: ${formatCatalogCountsCompact(counts)}`,
+		);
+		lines.push(`  catalogs  ${catalogLines.join(", ")}`);
+	}
+
+	const skipped: string[] = [];
+	if (result.packageManagerSkip !== null) skipped.push(`package-manager upgrade (${result.packageManagerSkip})`);
+	if (!result.peerConfigured) skipped.push("peer sync (not configured)");
+	if (!result.isPnpm) skipped.push("workspace formatting (not pnpm)");
+	if (!result.customCommandsConfigured) skipped.push("custom commands (not configured)");
+	if (result.changesetsSkip !== null) skipped.push(`changesets (${result.changesetsSkip})`);
+	if (skipped.length > 0) {
+		lines.push(`  skipped   ${skipped.join(" · ")}`);
+	}
+
+	return lines;
 };

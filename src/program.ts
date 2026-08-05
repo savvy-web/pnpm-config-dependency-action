@@ -11,7 +11,7 @@
 import { CheckRun, CheckRunOutput } from "@effected/github";
 import { ActionEnvironment, ActionOutputs } from "@effected/github-actions";
 import { Duration, Effect, References } from "effect";
-import { formatCatalogCountsCompact, groupCatalogDeltas } from "./format.js";
+import { resultLines, runContextLines } from "./format.js";
 import { makeAppLayer } from "./layers/app.js";
 import type { InnerProgramInputs } from "./schema/inputs.js";
 import { readInputs } from "./schema/inputs.js";
@@ -158,26 +158,20 @@ export const innerProgram = (
 					const { detected, evidence, packageCount } = yield* detectPackageManagerStep();
 					const lockfileName = LOCKFILE_NAMES[detected.pm];
 
-					yield* Effect.logInfo("Run context");
-					yield* Effect.logInfo(
-						`  package manager  ${detected.pm}${detected.version ? ` ${detected.version}` : ""}${
-							evidence ? `   (${evidence})` : ""
-						}`,
-					);
-					yield* Effect.logInfo(
-						`  workspace root   ${detected.root}${
-							packageCount !== null ? ` (${packageCount} package${packageCount === 1 ? "" : "s"})` : ""
-						}`,
-					);
-					yield* Effect.logInfo(`  lockfile         ${lockfileName}`);
-					yield* Effect.logInfo(
-						`  branches         update ${inputs.branch} ← source ${inputs.sourceBranch} → target ${inputs.targetBranch}`,
-					);
-					yield* Effect.logInfo(
-						`  mode             ${dryRun ? "dry run" : "live"} · changesets ${
-							inputs.changesets ? "on" : "off"
-						} · runtime data ${inputs.runtimeData}`,
-					);
+					for (const line of runContextLines({
+						detected,
+						evidence,
+						packageCount,
+						lockfileName,
+						branch: inputs.branch,
+						sourceBranch: inputs.sourceBranch,
+						targetBranch: inputs.targetBranch,
+						dryRun,
+						changesets: inputs.changesets,
+						runtimeData: inputs.runtimeData,
+					})) {
+						yield* Effect.logInfo(line);
+					}
 
 					// ── branch ────────────────────────────────────────────────────
 					yield* branchStep(inputs.branch, inputs.sourceBranch, inputs.targetBranch);
@@ -331,26 +325,16 @@ export const innerProgram = (
 					});
 
 					// ── Result ───────────────────────────────────────────────────────
-					yield* Effect.logInfo("Result");
-					if (allUpdates.length > 0) {
-						const updateLines = allUpdates.map((u) => `${u.dependency} ${u.from ?? "added"} -> ${u.to} (${u.type})`);
-						yield* Effect.logInfo(`  updated   ${updateLines.join(", ")}`);
-					}
-					if (configDeltas.length > 0) {
-						const catalogLines = Array.from(
-							groupCatalogDeltas(configDeltas),
-							([catalog, counts]) => `${catalog}: ${formatCatalogCountsCompact(counts)}`,
-						);
-						yield* Effect.logInfo(`  catalogs  ${catalogLines.join(", ")}`);
-					}
-					const skippedSummary: string[] = [];
-					if (pmSkipReason !== null) skippedSummary.push(`package-manager upgrade (${pmSkipReason})`);
-					if (!peerConfigured) skippedSummary.push("peer sync (not configured)");
-					if (detected.pm !== "pnpm") skippedSummary.push("workspace formatting (not pnpm)");
-					if (inputs.run.length === 0) skippedSummary.push("custom commands (not configured)");
-					if (changesetsSkipReason !== null) skippedSummary.push(`changesets (${changesetsSkipReason})`);
-					if (skippedSummary.length > 0) {
-						yield* Effect.logInfo(`  skipped   ${skippedSummary.join(" · ")}`);
+					for (const line of resultLines({
+						updates: allUpdates,
+						deltas: configDeltas,
+						packageManagerSkip: pmSkipReason,
+						peerConfigured,
+						isPnpm: detected.pm === "pnpm",
+						customCommandsConfigured: inputs.run.length > 0,
+						changesetsSkip: changesetsSkipReason,
+					})) {
+						yield* Effect.logInfo(line);
 					}
 
 					// Update check run
