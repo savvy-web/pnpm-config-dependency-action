@@ -461,7 +461,7 @@ const compareCatalogs = (
  * Key an importer dependency by (name, section), so a dep declared in more than
  * one section of the same package is compared section by section.
  */
-const depKey = (dep: ImporterDependency): string => `${dep.name} ${dep.depType}`;
+const depKey = (dep: ImporterDependency): string => `${dep.name}\0${dep.depType}`;
 
 const keyDependencies = (importer: LockfileImporter): Map<string, ImporterDependency> => {
 	const out = new Map<string, ImporterDependency>();
