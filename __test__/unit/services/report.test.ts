@@ -2,7 +2,7 @@ import { describe, expect, it } from "@effect/vitest";
 import { GitHubError, PullRequest, Repo, RepoRef } from "@effected/github";
 import { Cause, Effect, Layer, References } from "effect";
 import type { CatalogDelta } from "../../../src/schema/domain.js";
-import { Report, ReportLive } from "../../../src/services/report.js";
+import { Report } from "../../../src/services/report.js";
 import type { PullRequestTestState } from "../../utils/fixtures.js";
 import { emptyPullRequestState, fakeSha, pnpmUpgradeUpdate, pullRequestTestLayer } from "../../utils/fixtures.js";
 
@@ -14,7 +14,7 @@ const repoLayer = Repo.layer(RepoRef.make({ owner: "test", repo: "repo" }));
 // ══════════════════════════════════════════════════════════════════════════════
 
 const makeReportLayer = (state: PullRequestTestState) =>
-	Layer.merge(ReportLive.pipe(Layer.provide(pullRequestTestLayer(state))), repoLayer);
+	Layer.merge(Report.layer.pipe(Layer.provide(pullRequestTestLayer(state))), repoLayer);
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Tests
@@ -216,7 +216,7 @@ describe("createOrUpdatePR", () => {
 						}),
 					),
 			});
-			const layer = Layer.merge(ReportLive.pipe(Layer.provide(failingPrLayer)), repoLayer);
+			const layer = Layer.merge(Report.layer.pipe(Layer.provide(failingPrLayer)), repoLayer);
 
 			const exit = yield* Effect.exit(
 				Effect.gen(function* () {

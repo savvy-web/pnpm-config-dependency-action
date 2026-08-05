@@ -50,7 +50,24 @@ export class Changesets extends Context.Service<
 			base: string,
 		) => Effect.Effect<ReadonlyArray<ChangesetFile>, ChangesetError>;
 	}
->()("Changesets") {}
+>()("Changesets") {
+	/**
+	 * Live layer.
+	 *
+	 * Declared IN the class body, which is load-bearing rather than stylistic: a
+	 * member attached by post-class assignment is tree-shaken out of the bundled
+	 * `dist`, and that fails only in production because vitest runs the source.
+	 */
+	static readonly layer = Layer.effect(
+		this,
+		Effect.gen(function* () {
+			const depsRegen = yield* SilkChangesets.DepsRegen;
+			return {
+				create: (workspaceRoot, base) => createChangesetsImpl(workspaceRoot, base, depsRegen),
+			};
+		}),
+	);
+}
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Module-Level Exports
@@ -65,16 +82,6 @@ export const hasChangesets = (workspaceRoot: string = process.cwd()): boolean =>
 // ══════════════════════════════════════════════════════════════════════════════
 // Live Layer
 // ══════════════════════════════════════════════════════════════════════════════
-
-export const ChangesetsLive = Layer.effect(
-	Changesets,
-	Effect.gen(function* () {
-		const depsRegen = yield* SilkChangesets.DepsRegen;
-		return {
-			create: (workspaceRoot, base) => createChangesetsImpl(workspaceRoot, base, depsRegen),
-		};
-	}),
-);
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Implementation

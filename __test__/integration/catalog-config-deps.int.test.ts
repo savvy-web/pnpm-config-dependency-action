@@ -17,7 +17,7 @@ import { LockfileReadError, LockfileReader } from "@effected/workspaces";
 import { Effect, Exit, Layer, Option, References } from "effect";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { CatalogConfigDeps, CatalogConfigDepsLive } from "../../src/services/catalog-config-deps.js";
+import { CatalogConfigDeps } from "../../src/services/catalog-config-deps.js";
 import { seededRegistry } from "../utils/fixtures.js";
 import { makeTarball } from "./__fixtures__/tarball.js";
 
@@ -135,7 +135,7 @@ const failingLockfileStub = Layer.succeed(LockfileReader, {
 } as never);
 
 const layers = (packages: Record<string, ReadonlyArray<string>>, lockfile: Layer.Layer<LockfileReader>) =>
-	CatalogConfigDepsLive.pipe(Layer.provide(Layer.mergeAll(registry(packages), lockfile, httpStub, realRunner)));
+	CatalogConfigDeps.layer.pipe(Layer.provide(Layer.mergeAll(registry(packages), lockfile, httpStub, realRunner)));
 
 const runWith = (
 	deps: ReadonlyArray<string>,

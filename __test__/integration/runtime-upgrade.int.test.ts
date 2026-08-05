@@ -5,7 +5,7 @@ import { BunResolver, DenoResolver, NodeResolver } from "@effected/runtimes";
 import { Range, SemVer } from "@effected/semver";
 import { Effect, Layer, References } from "effect";
 import { describe, expect, it } from "vitest";
-import { RuntimeUpgrade, RuntimeUpgradeLive } from "../../src/services/runtime-upgrade.js";
+import { RuntimeUpgrade } from "../../src/services/runtime-upgrade.js";
 
 // NOTE: The plan originally used Node 20 here, but the bundled offline cache in
 // runtime-resolver only contains active-LTS/current entries (24.x and 26.x).
@@ -13,7 +13,7 @@ import { RuntimeUpgrade, RuntimeUpgradeLive } from "../../src/services/runtime-u
 // as the drift-canary fixture instead.
 
 const offlineResolvers = Layer.mergeAll(NodeResolver.layerOffline, DenoResolver.layerOffline, BunResolver.layerOffline);
-const layer = RuntimeUpgradeLive.pipe(Layer.provide(offlineResolvers));
+const layer = RuntimeUpgrade.layer.pipe(Layer.provide(offlineResolvers));
 
 describe("RuntimeUpgrade integration (offline cache)", () => {
 	it("auto resolves a real Node 24.x from the bundled cache and writes it EXACT", async () => {

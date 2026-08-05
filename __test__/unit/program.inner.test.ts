@@ -15,7 +15,7 @@
  *   detection derived from files on disk, not a mock's say-so. The library's
  *   in-memory `ActionOutputs` / `CheckRun` test layers. `formatWorkspaceYaml`,
  *   `captureLockfileState` and `runInstall` run for real against the fixture.
- *   The package-manager tests use the real `PackageManagerUpgradeLive` over an
+ *   The package-manager tests use the real `PackageManagerUpgrade.layer` over an
  *   in-memory npm registry, so the "nothing satisfies this range" path is
  *   genuinely resolved rather than asserted into existence.
  * - **Faked:** the domain services whose own behavior is covered by their
@@ -49,7 +49,7 @@ import { BranchManager } from "../../src/services/branch.js";
 import { CatalogConfigDeps } from "../../src/services/catalog-config-deps.js";
 import { Changesets } from "../../src/services/changesets.js";
 import { ConfigDeps } from "../../src/services/config-deps.js";
-import { PackageManagerUpgrade, PackageManagerUpgradeLive } from "../../src/services/package-manager-upgrade.js";
+import { PackageManagerUpgrade } from "../../src/services/package-manager-upgrade.js";
 import { RegularDeps } from "../../src/services/regular-deps.js";
 import { Report } from "../../src/services/report.js";
 import { RuntimeUpgrade } from "../../src/services/runtime-upgrade.js";
@@ -176,7 +176,7 @@ interface HarnessOptions {
 	 * `@effected/git` rather than a porcelain parser this repo owned.
 	 */
 	readonly gitStatus?: ReadonlyArray<string>;
-	/** Registry contents for the real `PackageManagerUpgradeLive`. */
+	/** Registry contents for the real `PackageManagerUpgrade.layer`. */
 	readonly registry?: Record<string, { version: string; versions?: ReadonlyArray<string> }>;
 	/** Replace the real package-manager upgrade with a fake returning this outcome. */
 	readonly packageManagerUpgrade?: Effect.Success<typeof PackageManagerUpgrade>["upgrade"];
@@ -266,7 +266,7 @@ const makeHarness = (options: HarnessOptions = {}) => {
 	// actual release list, not against a mock that was told the answer.
 	const packageManagerUpgrade = options.packageManagerUpgrade
 		? Layer.succeed(PackageManagerUpgrade, { upgrade: options.packageManagerUpgrade })
-		: PackageManagerUpgradeLive.pipe(Layer.provide(npmRegistry));
+		: PackageManagerUpgrade.layer.pipe(Layer.provide(npmRegistry));
 
 	const layer = Layer.mergeAll(
 		ActionOutputs.layerTest({

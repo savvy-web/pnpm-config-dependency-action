@@ -42,20 +42,27 @@ export class RegularDeps extends Context.Service<
 			exclude?: ReadonlySet<string>,
 		) => Effect.Effect<ReadonlyArray<DependencyUpdateResult>>;
 	}
->()("RegularDeps") {}
-
-export const RegularDepsLive = Layer.effect(
-	RegularDeps,
-	Effect.gen(function* () {
-		const registry = yield* NpmRegistry;
-		const discovery = yield* WorkspaceDiscovery;
-		const releaseAge = yield* ReleaseAge;
-		return {
-			updateRegularDeps: (patterns, workspaceRoot = process.cwd(), exclude) =>
-				updateRegularDepsImpl(patterns, registry, discovery, releaseAge, workspaceRoot, exclude),
-		};
-	}),
-);
+>()("RegularDeps") {
+	/**
+	 * Live layer.
+	 *
+	 * Declared IN the class body, which is load-bearing rather than stylistic: a
+	 * member attached by post-class assignment is tree-shaken out of the bundled
+	 * `dist`, and that fails only in production because vitest runs the source.
+	 */
+	static readonly layer = Layer.effect(
+		this,
+		Effect.gen(function* () {
+			const registry = yield* NpmRegistry;
+			const discovery = yield* WorkspaceDiscovery;
+			const releaseAge = yield* ReleaseAge;
+			return {
+				updateRegularDeps: (patterns, workspaceRoot = process.cwd(), exclude) =>
+					updateRegularDepsImpl(patterns, registry, discovery, releaseAge, workspaceRoot, exclude),
+			};
+		}),
+	);
+}
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Internal Helpers

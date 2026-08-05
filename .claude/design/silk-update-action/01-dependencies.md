@@ -83,11 +83,28 @@ The action runs on **Effect v4** (`effect` / `@effect/platform-node` both resolv
   non-zero exit is a value rather than an error), `Run.text` / `Run.lines` / `Run.json`
   (typed failure on a non-zero exit) and `Run.succeeds` (boolean probe). Also ships
   `ScriptedSpawner`, the public test fixture the suites script command responses with.
-  - **`Run.text` trims.** That silently corrupts column-aligned output: `git status
-    --porcelain`'s two-character status field means a leading space (`" M path"`) is
-    load-bearing, and trimming shifts every subsequent `substring` index by one. Code
-    reading such output uses `Run.collect` and checks `succeeded` itself (see the `gitRaw`
-    helper in `src/services/branch.ts`).
+  - **`Run.text` trims**, which silently corrupts column-aligned output — a leading
+    space is load-bearing in some formats, and trimming shifts every subsequent index.
+    This used to be a live constraint on `services/branch.ts`, whose `gitRaw` helper
+    read `git status --porcelain` through `Run.collect` for exactly that reason. **That
+    helper and its rationale are gone**: the status reads moved to `@effected/git`, so
+    no code here parses column-aligned text any more. The trimming is still true of
+    `Run.text` and still worth knowing before reading a fixed-width format with it;
+    it is no longer a property this action depends on.
+- **`@effected/git` (`^0.5.2`) — adopted for `status` only.** `Git.status(cwd)` runs
+  `git status --porcelain -z` and returns typed `StatusEntry` values (`x`, `y`, `path`,
+  `origPath`), and `Git.configSet(cwd, key, value)` writes the checkout's local config.
+  Both status readers use it — `services/branch.ts` for the commit file list and
+  `steps/detect-changes.ts` for the change verdict — and `steps/configure-status.ts`
+  pins `core.fileMode=false` through `configSet` once per run.
+  - Adopting it **deleted `parseStatusLine`**, where three silent wrong answers had
+    lived. `-z` also removes git's path-quoting layer, so the octal `\NNN` gap this
+    repo used to carry is the kit's concern now.
+  - The **mutating** tier is still not adopted: the other seven local git operations
+    (refspec `fetch`, `checkout -B`, `reset --hard`, `--unshallow`, `branch -f`,
+    `rev-parse --is-shallow-repository`, `merge-base`) stay on `Run`. So this module
+    runs two subprocess mechanisms for git, accepted deliberately —
+    @./09-project-status.md carries the reasoning and the revisit condition.
 - `@effect/platform-node` — Node platform bundle (`NodeServices.layer`), providing
   FileSystem, Path and **ChildProcessSpawner** (the seam `Run` needs). Provided by
   `Action.run`'s runtime at the platform level and also pulled in directly by

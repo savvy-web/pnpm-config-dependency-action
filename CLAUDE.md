@@ -85,15 +85,22 @@ pnpm vitest run --testNamePattern="parsePnpmVersion"          # by name
   `@effected/github` (`GitHubApp`, `Repo`, `GitBranch`, `GitCommit`, `CheckRun`,
   `PullRequest` — all failing with a single `GitHubError`, discriminated by
   `hasKind`); `@effected/commands` (`Run` free functions over core
-  `ChildProcessSpawner` — no `CommandRunner` service); `@effected/npm`,
-  `workspaces`, `lockfiles`, `runtimes`, `semver`, `yaml`. Layers are `.layer` /
+  `ChildProcessSpawner` — no `CommandRunner` service); `@effected/git`
+  (`Git.status` / `Git.configSet` only — the mutating tier is declined);
+  `@effected/npm`, `workspaces`, `lockfiles`, `runtimes`, `semver`, `yaml`.
+  Layers are `.layer` /
   `.layer(opts)` **statics on the service class**, not `*Live` constants; services
   expose companion `*Shape` interfaces; workspace layers are **root-bound at
   build**, so their methods are arg-less.
 - **Domain services**: `BranchManager`, `PackageManagerUpgrade`, `ConfigDeps`,
   `CatalogConfigDeps`, `RegularDeps`, `ReleaseAge`, `RuntimeUpgrade`, `Lockfile`,
-  `Changesets`, `Report`; stateless helpers `detectPackageManager`, `syncPeers`,
-  `fetchModuleCatalogs`, `WorkspaceYaml`.
+  `Changesets`, `Report` — **every one wired as a `static layer` on the class**,
+  the same convention as the kit, declared *in* the class body (a member attached
+  after the class is tree-shaken out of `dist` and fails only in production). No
+  `*Live` constant survives in `src/services/`. Stateless helpers:
+  `detectPackageManager`, `syncPeers`, `fetchModuleCatalogs`, and the
+  `workspace-yaml` functions — the `WorkspaceYaml` **tag and layer were deleted**,
+  since nothing in `src/` wired them and their only consumer was their own test.
 - **Changesets**: `services/changesets.ts` is a thin adapter over
   `Changesets.DepsRegen` (`@savvy-web/silk-effects`, wired as `DepsRegenDefault`),
   which owns the cumulative `merge-base(base) → worktree` diff, consolidation and
@@ -306,7 +313,7 @@ Composite builds with project references, strict mode, ES2022/ES2023.
   `NpmRegistry.publishTimes`. **What stays local is the fail-open posture**: the
   kit fails typed with `CatalogAssemblyFailure`, correct for a library, and this
   action degrades it to "no gate" with a warning in a one-line `Effect.catch` at
-  the single call site in `ReleaseAgeLive`, because pnpm re-enforces the gate at
+  the single call site in `ReleaseAge.layer`, because pnpm re-enforces the gate at
   install. Depth in
   `@./.claude/design/silk-update-action/05-module-library.md`
 - Runtime bumps (`upgrade-runtime-*`) **upgrade only, never add** — in *every*
@@ -318,21 +325,33 @@ Composite builds with project references, strict mode, ES2022/ES2023.
 - `@effected/workspaces`' `PackageManagerDetector` recognizes bun/pnpm from the
   **lockfile conjoined with the manifest**, not `devEngines.packageManager` alone —
   a repo naming a manager only in `devEngines` with no lockfile detects as **npm**
-- **`Run.text` trims**, which corrupts column-aligned output: read
-  `git status --porcelain` with `Run.collect` (see `gitRaw` in `services/branch.ts`).
-  Status is always queried with `-c core.fileMode=false` — exec-bit-only flips do
-  not survive the content-based API commit and would produce an empty commit
+- **`git status` is read through `@effected/git`'s `Git.status(cwd)`**, which
+  returns typed `StatusEntry` values (`x`, `y`, `path`, `origPath`). Both readers
+  use it — `services/branch.ts` (commit file list) and `steps/detect-changes.ts`
+  (change verdict). `parseStatusLine` and the `gitRaw`/`Run.collect` helper it
+  needed are **deleted**; `Run.text` still trims, but nothing here parses
+  column-aligned text any more
+- **`core.fileMode=false` is set once on the checkout, not per command.**
+  `steps/configure-status.ts` writes it via `Git.configSet` right after detection,
+  before any status read — exec-bit-only flips do not survive the content-based
+  API commit at mode 100644 and would produce an empty commit and a spurious PR.
+  Repository scope, so it also applies to silk's DepsRegen commands in that
+  checkout (benign, and stated in the design docs rather than assumed)
 - Auto-merge requires GraphQL (no REST endpoint) and is a **separate**
   `setAutoMerge` call whose failure degrades to a warning
-- **`@effected/package-json` and `@effected/git` were evaluated and DECLINED on
-  evidence — do not re-propose them.** `package-json`: `Package.decode` requires
-  `name` + a strict-semver `version`, so it **rejects the private workspace root**
-  this action must edit, and its write path reorders keys in a manifest the action
-  then commits to someone else's repo (upstream spencerbeggs/effected#286).
-  `git`: it covers 2 of the 9 local git operations `services/branch.ts` performs
-  and cannot express `-c core.fileMode=false` on `status`
-  (spencerbeggs/effected#279), which is load-bearing here. Detail and the "what
-  would change the answer" conditions live in
+- **`@effected/package-json` was evaluated and DECLINED on evidence — do not
+  re-propose it.** `Package.decode` requires `name` + a strict-semver `version`,
+  so it **rejects the private workspace root** this action must edit, and its
+  write path reorders keys in a manifest the action then commits to someone
+  else's repo (upstream spencerbeggs/effected#286)
+- **`@effected/git` is adopted for `status` only.** The mutating tier is still
+  declined — it covers 2 of the 9 local git operations `services/branch.ts`
+  performs, so seven stay on `Run` (spencerbeggs/effected#279). The earlier
+  blanket decline rested on "`-c core.fileMode=false` cannot be scoped", which
+  was **wrong**: that enumerated per-command and process-global and treated the
+  list as exhaustive, when repository config is a third scope and the ordinary
+  one. Worth remembering as a shape — every individual claim in that ruling was
+  true. Detail and the "what would change the answer" conditions live in
   `@./.claude/design/silk-update-action/09-project-status.md`
 - **A caret on a `0.x` dependency pins the minor.** `^0.9.5` does **not** admit
   `0.10.0`; `^0.2.1` does not admit `0.3.0`. A plain `pnpm update` therefore

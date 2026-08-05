@@ -78,19 +78,26 @@ export class RuntimeUpgrade extends Context.Service<
 			workspaceRoot?: string,
 		) => Effect.Effect<readonly RuntimeUpgradeResult[], FileSystemError>;
 	}
->()("RuntimeUpgrade") {}
-
-export const RuntimeUpgradeLive = Layer.effect(
-	RuntimeUpgrade,
-	Effect.gen(function* () {
-		const node = yield* NodeResolver;
-		const deno = yield* DenoResolver;
-		const bun = yield* BunResolver;
-		return {
-			upgrade: (config, workspaceRoot = process.cwd()) => upgradeImpl({ node, deno, bun }, config, workspaceRoot),
-		};
-	}),
-);
+>()("RuntimeUpgrade") {
+	/**
+	 * Live layer.
+	 *
+	 * Declared IN the class body, which is load-bearing rather than stylistic: a
+	 * member attached by post-class assignment is tree-shaken out of the bundled
+	 * `dist`, and that fails only in production because vitest runs the source.
+	 */
+	static readonly layer = Layer.effect(
+		this,
+		Effect.gen(function* () {
+			const node = yield* NodeResolver;
+			const deno = yield* DenoResolver;
+			const bun = yield* BunResolver;
+			return {
+				upgrade: (config, workspaceRoot = process.cwd()) => upgradeImpl({ node, deno, bun }, config, workspaceRoot),
+			};
+		}),
+	);
+}
 
 // ── Implementation ──────────────────────────────────────────────────────────────
 

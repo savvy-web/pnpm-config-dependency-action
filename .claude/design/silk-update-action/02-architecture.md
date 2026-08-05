@@ -271,16 +271,24 @@ const appLayer = makeAppLayer(dryRun, { runtimeLive });
   `LockfileReader.layer()` (all root-bound at build).
 - `Changesets.DepsRegenDefault` from `@savvy-web/silk-effects` over the platform
   layer.
-- Domain layers: `BranchManager.layer`, `PackageManagerUpgradeLive`,
-  `ConfigDepsLive`, `CatalogConfigDepsLive`, `RegularDepsLive`, `ChangesetsLive`,
-  `ReportLive`, `RuntimeUpgradeLive`. The two moved to the kit's `static layer`
-  convention (`BranchManager.layer`, `ReleaseAge.layer`, plus
-  `ReleaseAge.layerNoop`) are declared **in the class body** — a member attached
-  by post-class assignment is tree-shaken out of the bundled `dist`, a failure
-  that appears only in production because vitest runs the source. The remaining
-  `*Live` constants have not been converted.
+- Domain layers, all on the kit's `static layer` convention: `BranchManager.layer`,
+  `PackageManagerUpgrade.layer`, `ConfigDeps.layer`, `CatalogConfigDeps.layer`,
+  `RegularDeps.layer`, `Changesets.layer`, `Report.layer`, `RuntimeUpgrade.layer`.
+  **No `*Live` constant survives** — the migration is complete rather than
+  partial, which matters because two-of-eleven reads as an abandoned convention
+  and invites the same review comment on every later pass.
+  - Every one is declared **in the class body** (`static readonly layer =
+    Layer.effect(this, …)`). That placement is load-bearing, not stylistic: a
+    member attached by post-class assignment is tree-shaken out of the bundled
+    `dist`, and it fails only in production because vitest runs the source.
+  - `WorkspaceYamlLive` was **deleted rather than renamed**: nothing in `src/`
+    wired it, so its only consumer was its own test suite. See
+    @./05-module-library.md.
+  - `PreLive` / `PostLive` in the entry points are untouched. They are aliases
+    for `GitHubApp.layer`, not service layers, so the convention does not apply.
 - `ReleaseAge.layer` over `WorkspaceCatalogs` + `NpmRegistry`, provided to
-  `ConfigDepsLive` and `RegularDepsLive`.
+  `ConfigDeps.layer` and `RegularDeps.layer`; `ReleaseAge.layerNoop` is the inert
+  variant unit tests and non-pnpm paths wire.
 - `Git.layer` (from `@effected/git`) over the platform layer — read-mostly here:
   `status` for the change verdict and the commit file list, `configSet` once for
   the `core.fileMode` pin. Everything that mutates history still goes through the

@@ -138,20 +138,14 @@ rather than silently performing a package-manager-only run.
   | `detectIndent` | serves the surgical write path that `PackageIndent` would replace only if the kit's writer were adopted |
   | `corepackHashFromIntegrity` | the kit has no SRI (`sha512-<base64>`) → corepack (`sha512.<hex>`) converter — upstream #281 |
 
-- **`@effected/git` is deliberately NOT adopted** (upstream spencerbeggs/effected#279).
-  It covers 2 of the 9 local git operations `services/branch.ts` performs, so
-  adopting it would leave two subprocess mechanisms in one module while fixing
-  nothing; git stays entirely on `Run`. Missing upstream: `-c core.fileMode=false` on
-  `status` (spencerbeggs/effected#279, load-bearing here), an explicit-refspec
-  `fetch` (load-bearing for single-branch checkouts), `checkout -B`,
-  `reset --hard`, `fetch --unshallow`, `branch -f`, and
-  `rev-parse --is-shallow-repository`. The `GIT_CONFIG_COUNT` /
-  `GIT_CONFIG_KEY_n` / `GIT_CONFIG_VALUE_n` env route **does** reach the child
-  (`GitCommand` spawns with `extendEnv: true`, verified against a real repo) but
-  can only be set process-globally, which would change every git command in the
-  run including silk's DepsRegen — rejected on blast radius. The rename bug the
-  kit's `StatusEntry` would have fixed was fixed directly instead; see
-  `parseStatusLine` in @./05-module-library.md.
+- **`@effected/git` is adopted for `status`, not for the mutating tier**
+  (upstream spencerbeggs/effected#279; local ruling
+  savvy-web/silk-update-action#246). Both status readers use `Git.status`, and
+  `Git.configSet` writes the `core.fileMode` pin; the other seven local git
+  operations stay on `Run`. Detail and the corrected reasoning are in the
+  settled-decisions section below — **the earlier "deliberately NOT adopted"
+  ruling was overturned in part**, and the reason it was overturned matters more
+  than the verdict.
 - **Raw `node:fs` / `node:path` use is pervasive and unresolved.** Core
   `FileSystem` / `Path` are ambient (they are members of `ActionServices`), so
   these are drift rather than necessity — the kit's rule is that a raw `node:`
@@ -213,25 +207,50 @@ and an order-preserving single-field edit. Both are asked for in #286.
 by lint-staged, so the reordering is a no-op *here*. Checking only against this
 repo would have made it look safe.
 
-### `@effected/git` — not adopted (upstream #279)
+### `@effected/git` — adopted for `status`, declined for the mutating tier (upstream #279)
 
-It covers **2 of the 9** local git operations `services/branch.ts` performs.
-Missing: `-c core.fileMode=false` on `status` (load-bearing — exec-bit-only
-flips do not survive the content-based API commit, so counting them makes an
-empty commit and a spurious PR), an explicit-refspec `fetch` (load-bearing on a
-single-branch `actions/checkout`, which otherwise never materializes
-`origin/<branch>`), `fetch --unshallow`, `checkout -B`, `reset --hard`,
-`branch -f`, and `rev-parse --is-shallow-repository`. `refExists` is covered but
-unused — branch existence goes through the **API** (`GitBranch.exists`), not git.
+**This entry previously read "not adopted", and that ruling was overturned in
+part.** The verdict still holds for the seven mutating operations. It was wrong
+about `status`, and *how* it was wrong is the durable lesson — so the original
+argument is reproduced rather than quietly replaced.
 
-Adopting for the remaining two would leave two subprocess mechanisms in one
-module while fixing nothing.
+**What the original ruling said.** `@effected/git` covers 2 of the 9 local git
+operations `services/branch.ts` performs. Missing: `-c core.fileMode=false` on
+`status`, an explicit-refspec `fetch` (load-bearing on a single-branch
+`actions/checkout`, which otherwise never materializes `origin/<branch>`),
+`fetch --unshallow`, `checkout -B`, `reset --hard`, `branch -f`, and
+`rev-parse --is-shallow-repository`. Adopting for the covered two would leave two
+subprocess mechanisms in one module while fixing nothing. On the config flag it
+said: the `GIT_CONFIG_COUNT` / `KEY_n` / `VALUE_n` env route *does* reach the
+child (`GitCommand` spawns with `extendEnv: true`, verified against a real repo),
+but only process-globally — rejected on blast radius.
 
-**What would change the answer:** the mutating tier landing upstream. The
-`GIT_CONFIG_COUNT` / `GIT_CONFIG_KEY_n` / `GIT_CONFIG_VALUE_n` env route *does*
-reach the child (`GitCommand` spawns with `extendEnv: true`, verified against a
-real repo), but only process-globally — which would change every git command in
-the run including silk's DepsRegen. Rejected on blast radius, not capability.
+**Where it was wrong.** That argument treats *per-command* and *process-global*
+as the only two scopes. There is a third: `git config core.fileMode false`
+writes the **repository's own** config. It is scoped to the checkout, persists
+for the job, and needs no per-command seam — so the flag was never the blocker
+it was recorded as. The enumeration was complete about what the kit lacked and
+incomplete about what git offers, which is a harder error to notice than a
+factual one: every individual claim in it was true.
+
+**What adoption bought.** `parseStatusLine` is deleted. `StatusEntry` models the
+two porcelain columns separately and carries `origPath`, so the three defects
+that had shipped in that parser — a dropped rename, an `AD`/`RD` deletion read as
+a modification, and a copy deleting its own origin — become *unrepresentable*
+rather than merely fixed. `-z` also removes git's path-quoting layer, retiring a
+known octal-escape gap. Their tests survive, re-pointed at the commit payload.
+
+**What it cost, stated because it is real.** Two subprocess mechanisms for git
+now live in `services/branch.ts` — precisely the outcome the original ruling was
+avoiding. Accepted deliberately: deleting a parser with three shipped silent
+wrong answers outweighs mechanism uniformity. And the config write applies to
+every git command in that checkout for the rest of the job, including silk's
+DepsRegen — benign, since a mode flip is not a dependency change and cannot
+survive a content-based API commit regardless, but not nothing.
+
+**What would change the remaining answer:** refspec support on `fetch`,
+`-B`/force on `checkout`, `reset`, `--unshallow`, `branch -f`, and the boolean
+`rev-parse` queries. A per-command config override is **no longer on that list**.
 
 ### `format.ts` and `services/report.ts` stay separate
 
@@ -299,6 +318,15 @@ pattern is worth naming because it recurs:
   upstream, and left asserting a hazard that no longer existed.
 - The raw-`node:` enumeration claimed 14 modules, listed 12, and the true count
   was 13 — the number, the list, and each other all disagreed.
+- "`-c core.fileMode=false` cannot be scoped" — the ruling that kept
+  `@effected/git` out for a release. **Every individual claim in it was true**,
+  which is what made it hard to see: the kit really has no per-command config
+  seam, and the `GIT_CONFIG_*` env route really is process-global. The argument
+  failed by *enumerating two options and treating the list as exhaustive*.
+  Repository config is a third scope, and it is the ordinary one. A complete
+  survey of what a dependency lacks is not a survey of what is possible — when a
+  decision rests on "the only ways to do X are A and B", the load-bearing part is
+  the word *only*, and it is the part no amount of checking A and B will verify.
 
 Each read as evidence and was an author's account of a property. **Where a
 document here asserts that something is load-bearing, it should say what would

@@ -35,12 +35,19 @@ export class Lockfile extends Context.Service<
 			workspaceRoot?: string,
 		) => Effect.Effect<ReadonlyArray<LockfileChange>, LockfileError, WorkspaceDiscovery>;
 	}
->()("Lockfile") {}
-
-export const LockfileLive = Layer.succeed(Lockfile, {
-	capture: (pm, workspaceRoot = process.cwd()) => captureLockfileStateImpl(pm, workspaceRoot),
-	compare: (before, after, workspaceRoot = process.cwd()) => compareLockfilesImpl(before, after, workspaceRoot),
-});
+>()("Lockfile") {
+	/**
+	 * Live layer.
+	 *
+	 * Declared IN the class body, which is load-bearing rather than stylistic: a
+	 * member attached by post-class assignment is tree-shaken out of the bundled
+	 * `dist`, and that fails only in production because vitest runs the source.
+	 */
+	static readonly layer = Layer.succeed(this, {
+		capture: (pm, workspaceRoot = process.cwd()) => captureLockfileStateImpl(pm, workspaceRoot),
+		compare: (before, after, workspaceRoot = process.cwd()) => compareLockfilesImpl(before, after, workspaceRoot),
+	});
+}
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Standalone Function Exports

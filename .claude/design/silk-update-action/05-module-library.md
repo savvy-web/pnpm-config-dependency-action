@@ -74,20 +74,29 @@ export const detectPackageManager = (
 ### src/services/branch.ts - BranchManager
 
 Branch management and commit operations over `GitBranch` / `GitCommit` (from
-`@effected/github`) for the API half, and `@effected/commands`' `Run` for the
-local git half.
+`@effected/github`) for the API half, `@effected/git`'s `Git.status` for reading
+the working tree, and `@effected/commands`' `Run` for the remaining local git
+commands.
+
+**Two subprocess mechanisms for git live in this one module, deliberately.** That
+is the outcome the earlier "decline `@effected/git`" ruling was trying to avoid,
+and it was accepted anyway — see the settled-decisions note in
+@./09-project-status.md for why deleting a parser that had shipped three silent
+wrong answers outweighs mechanism uniformity.
 
 ```typescript
 export class BranchManager extends Context.Service<BranchManager, {
  readonly manage: (branchName: string, defaultBranch?: string) =>
   Effect.Effect<BranchResult, GitHubError | GitRunError, Repo>;
  readonly commitChanges: (message: string, branchName: string, workspaceRoot: string) =>
-  Effect.Effect<void, GitHubError | GitRunError, Repo>;
+  Effect.Effect<void, GitHubError | GitRunError | GitServiceError, Repo>;
  readonly validateBranches: (source: string, target: string) =>
   Effect.Effect<void, GitHubError | InvalidInputError, Repo>;
  readonly ensureBaseHistory: (base: string, workspaceRoot: string) =>
   Effect.Effect<void, GitRunError>;
-}>()("BranchManager") {}
+}>()("BranchManager") {
+ // `static readonly layer`, declared IN the class body — see the layer note below.
+}
 ```
 
 **Both git-touching methods take the workspace root explicitly.** `commitChanges`
@@ -125,29 +134,35 @@ just-committed working-copy state.
 - `core.fileMode=false` is load-bearing: executable-bit-only flips (e.g. husky
   chmod-ing hooks during a `run` command) do not survive a content-based API
   commit at mode 100644, so counting them would create an empty commit and a
-  spurious PR. `program.ts`'s change detection queries status the same way.
-- Status output is read through a local `gitRawIn(cwd, …)` helper using
-  `Run.collect`, not `Run.text`: **`Run.text` trims**, and `--porcelain`'s
-  two-character status field is column-aligned, so trimming a leading space
-  shifts every index. `cwd` is explicit because git reports `--porcelain` paths
-  relative to the directory it ran in, so the caller resolving those paths must
-  anchor on the same directory — `commitChanges` takes the workspace root as a
-  parameter for exactly this reason.
-- **Parsing goes through the exported `parseStatusLine`**, not inline
-  `substring` arithmetic. The format is `XY PATH`, or `XY ORIG -> PATH` for a
-  rename or copy, and **both** status columns are significant. The previous
-  parser read `substring(3)` as the whole path and tested
-  `substring(0, 2).trim() === "D"`, which produced two silent data-loss bugs: a
-  rename yielded the unreadable path `"old.ts -> new.ts"`, so the file never
-  reached the commit at all; and a deletion whose columns disagreed (`AD`, `RD`)
-  was treated as a modification and dropped the same way. A rename now emits a
-  `FileDeletion` for the origin plus a `FileContent` at the destination — the
-  commit is an explicit change set, not a diff, so a tree that only adds the new
-  path leaves the old one behind. A **copy** carries an origin but must not
-  delete it, which is why the two are distinguished rather than both treated as
-  "has an origPath". Quoted paths are unquoted; git's octal `\NNN` form for
-  non-ASCII bytes is a known remaining gap that fails loudly (the read misses
-  and warns) rather than committing a wrong path.
+  spurious PR. **It is no longer a per-command flag**: `steps/configure-status.ts`
+  writes it into the checkout's own git config once per run, before any status
+  read. Two readers depend on it — this one and `steps/detect-changes.ts` — and
+  one config write is a thing a reviewer can check, whereas two call sites
+  carrying the same flag is a thing that drifts.
+- **The status read goes through `Git.status(cwd)`**, which returns typed
+  `StatusEntry` values rather than porcelain text. The local `gitRawIn` helper and
+  the `Run.collect`-not-`Run.text` reasoning it existed for are **gone**: they
+  were about reading column-aligned text safely, and this module no longer reads
+  text. (`Run.text` still trims; that is now a fact about `@effected/commands`,
+  not a constraint on this module.)
+- **`parseStatusLine` is deleted.** The format is `XY PATH`, or `XY ORIG -> PATH`
+  for a rename or copy, and **both** status columns are significant — which the
+  original parser got wrong twice, reading `substring(3)` as the whole path and
+  testing `substring(0, 2).trim() === "D"`. That produced two silent data-loss
+  bugs: a rename yielded the unreadable path `"old.ts -> new.ts"`, so the file
+  never reached the commit at all; and a deletion whose columns disagreed (`AD`,
+  `RD`) was treated as a modification and dropped the same way.
+  - `StatusEntry` models `x`, `y` and `origPath` separately, so **both defects
+    become unrepresentable** rather than merely fixed. The mapping onto commit
+    members stays here and is still tested: a rename emits a `FileDeletion` for
+    the origin plus a `FileContent` at the destination — the commit is an
+    explicit change set, not a diff, so a tree that only adds the new path leaves
+    the old one behind — while a **copy** carries an origin that must *not* be
+    deleted, which is why the two are distinguished rather than both treated as
+    "has an origPath".
+  - Quoting and git's octal `\NNN` form for non-ASCII bytes are the kit's
+    problem now, not this repo's; `Git.status` reads `--porcelain -z`, which
+    sidesteps the quoting layer entirely.
 
 **Base-history preflight.** `ensureBaseHistory(base, workspaceRoot)` probes
 `git merge-base <base> HEAD` (via `Run.succeeds`); if it resolves — the
@@ -176,11 +191,20 @@ alphabetically but keep `packages` first, and stringify with `indent: 2`,
 `lineWidth: 0`, `singleQuote: false`.
 
 **Exported helpers:** `formatWorkspaceYaml(workspaceRoot?)`,
-`readWorkspaceYaml(workspaceRoot?)`, `sortContent(content)`, `STRINGIFY_OPTIONS`,
-plus a `WorkspaceYaml` tag/`WorkspaceYamlLive` that the program does not wire (the
-standalone helpers are what `program.ts`, `ConfigDeps` and `ReleaseAge` use).
-Parsing/stringifying goes through `@effected/yaml`, whose `Yaml.parse` /
-`Yaml.stringify` return Effects, mapped into `FileSystemError`.
+`readWorkspaceYaml(workspaceRoot?)`, `sortContent(content)` and
+`STRINGIFY_OPTIONS`. Parsing/stringifying goes through `@effected/yaml`, whose
+`Yaml.parse` / `Yaml.stringify` return Effects, mapped into `FileSystemError`.
+
+**There is no `WorkspaceYaml` tag or layer — both were deleted**, and the reason
+generalizes. They were a pure pass-through to the same `*Impl` functions the
+standalone helpers call, and **nothing in `src/` ever wired them**: the only code
+that resolved the tag was this module's own test suite, so those tests passed
+precisely because they were the sole callers. That is the same argument that
+removed four unconstructed error classes from `errors/errors.ts`, and renaming
+the layer to the kit's `static layer` convention would only have produced tidier
+dead code. The suite now drives the standalone helpers, which is what
+`ConfigDeps`, `ReleaseAge` and the config-dependency step actually call — so it
+exercises the production path rather than a parallel one.
 
 ### src/services/package-manager-upgrade.ts - PackageManagerUpgrade
 
@@ -263,10 +287,10 @@ for a library. This action instead degrades to "no gate" with a warning, because
 pnpm re-enforces the gate at install, so missing data lands on exactly the
 pre-gate behavior — whereas aborting a dependency-update run over one broken
 plugin would be strictly worse. That `Effect.catch` lives at the single call site
-in `ReleaseAgeLive`.
+in `ReleaseAge.layer`.
 
 `release-age.int.test.ts` pins **both halves** of that split: that the kit's own
-surface fails typed on a throwing pnpmfile, *and* that `ReleaseAgeLive` turns
+surface fails typed on a throwing pnpmfile, *and* that `ReleaseAge.layer` turns
 that into the inert gate. Asserting only the outcome would still pass if someone
 deleted the wrapper.
 
@@ -304,12 +328,14 @@ minimatch), or publish times are unavailable. Otherwise the upstream pure
 **fails open**: the worst case of missing data is exactly the pre-gate behavior,
 and pnpm still enforces the gate at install.
 
-**Layers:** `ReleaseAgeLive(workspaceRoot?)` is a parameterized factory (root
-bound at build) requiring `ChildProcessSpawner` **and** `NpmRegistry`; both are
-resolved once inside the layer so every member's `R` is `never` — which is what
-keeps `filterVersions` callable from `ConfigDeps` / `RegularDeps` without
-threading requirements. `ReleaseAgeNoop` is the inert layer (zero gate, identity
-filtering) for unit tests and non-pnpm paths.
+**Layers:** `ReleaseAge.layer` — a `static readonly layer` on the class, not a
+`ReleaseAgeLive()` factory, and **no longer parameterized by a workspace root**:
+the root is bound when `WorkspaceCatalogs`' layer is built, so a root parameter
+here could only be ignored. It requires `WorkspaceCatalogs` **and**
+`NpmRegistry`; both are resolved once inside the layer so every member's `R` is
+`never`, which is what keeps `filterVersions` callable from `ConfigDeps` /
+`RegularDeps` without threading requirements. `ReleaseAge.layerNoop` is the inert
+layer (zero gate, identity filtering) for unit tests and non-pnpm paths.
 
 ### src/services/config-deps.ts - ConfigDeps (pnpm)
 
@@ -449,8 +475,13 @@ by `program.ts`. Yields `WorkspaceDiscovery` to resolve package paths and uses t
 standalone `parseValidSemVer` from `@effected/semver`.
 
 - `computePeerRange(params)` — compute the new range for a strategy.
-- `syncPeers(config, devUpdates, workspaceRoot?)` —
+- `syncPeers(config, devUpdates)` —
   `Effect<readonly DependencyUpdateResult[], FileSystemError, WorkspaceDiscovery>`.
+  **No workspace root**, at either this level or `peerSyncStep`'s:
+  `WorkspaceDiscovery` binds its root when the layer is built, so the parameter
+  both used to take could only be ignored — and was, silently. A caller passing
+  the wrong root saw no error and no effect, while a reader would reasonably
+  conclude the root was honoured.
 - `lock`: sync on every version bump. `minor`: sync only on minor+ bumps, flooring
   patch to `.0`.
 
@@ -583,8 +614,17 @@ export class Report extends Context.Service<Report, {
 `makeAppLayer(dryRun, { runtimeLive })` wires every kit and domain layer. The
 whole function body is `/* v8 ignore */`-d as pure wiring, exercised indirectly.
 
+**Every domain layer is a `static layer` on its service class** — `Report.layer`,
+`Changesets.layer`, `ConfigDeps.layer` and the rest — matching the kit's own
+convention. No `*Live` constant survives. Each is declared *in* the class body,
+which is load-bearing: a member attached by post-class assignment is tree-shaken
+out of the bundled `dist`, and that fails only in production because vitest runs
+the source. The sketch below is illustrative, not a transcript — read
+`src/layers/app.ts` for the current wiring.
+
 ```typescript
 import { NodeServices } from "@effect/platform-node";
+import { Git } from "@effected/git";
 import { CheckRun, GitBranch, GitCommit, PullRequest, Repo } from "@effected/github";
 import { DryRun, GitHubToken } from "@effected/github-actions";
 import { NpmRegistry } from "@effected/npm";
@@ -606,7 +646,8 @@ export const makeAppLayer = (dryRun: boolean, options: { runtimeLive: boolean } 
 
  // GraphQL is a member of GitHubClient in the kit — no separate service.
  const npmRegistry = NpmRegistry.layer.pipe(Layer.provide(FetchHttpClient.layer));
- const releaseAge = ReleaseAgeLive().pipe(Layer.provide(Layer.merge(NodeServices.layer, npmRegistry)));
+ // ReleaseAge.layer, not a factory: the root is bound by WorkspaceCatalogs.
+ const releaseAge = ReleaseAge.layer.pipe(Layer.provide(Layer.merge(workspaceCatalogs, npmRegistry)));
  const gitBranch = GitBranch.layer.pipe(Layer.provide(githubClient));
  const gitCommit = GitCommit.layer.pipe(Layer.provide(githubClient));
  const prLayer = PullRequest.layer.pipe(Layer.provide(githubClient));
@@ -629,22 +670,25 @@ export const makeAppLayer = (dryRun: boolean, options: { runtimeLive: boolean } 
   CheckRun.layer.pipe(Layer.provide(githubClient)),
   prLayer, npmRegistry,
   NodeServices.layer,
+  // Read-mostly: status for the change verdict and commit file list, configSet
+  // once for the core.fileMode pin. History still moves through the API.
+  Git.layer,
   DryRun.layerFrom(dryRun),
   FetchHttpClient.layer,
  );
 
  const domainLayers = Layer.mergeAll(
   workspaceRoot, workspaceDiscovery, packageManagerDetector,
-  ChangesetsLive.pipe(Layer.provide(depsRegen)),
-  BranchManagerLive.pipe(Layer.provide(Layer.mergeAll(gitBranch, gitCommit, NodeServices.layer))),
-  PackageManagerUpgradeLive.pipe(Layer.provide(npmRegistry)),
-  ConfigDepsLive.pipe(Layer.provide(Layer.merge(npmRegistry, releaseAge))),
-  CatalogConfigDepsLive.pipe(
+  Changesets.layer.pipe(Layer.provide(depsRegen)),
+  BranchManager.layer.pipe(Layer.provide(Layer.mergeAll(gitBranch, gitCommit, Git.layer))),
+  PackageManagerUpgrade.layer.pipe(Layer.provide(npmRegistry)),
+  ConfigDeps.layer.pipe(Layer.provide(Layer.merge(npmRegistry, releaseAge))),
+  CatalogConfigDeps.layer.pipe(
    Layer.provide(Layer.mergeAll(npmRegistry, lockfileReader, FetchHttpClient.layer, NodeServices.layer)),
   ),
-  RegularDepsLive.pipe(Layer.provide(Layer.mergeAll(npmRegistry, workspaceDiscovery, releaseAge))),
-  ReportLive.pipe(Layer.provide(prLayer)),
-  RuntimeUpgradeLive.pipe(Layer.provide(makeRuntimeResolvers(options.runtimeLive))),
+  RegularDeps.layer.pipe(Layer.provide(Layer.mergeAll(npmRegistry, workspaceDiscovery, releaseAge))),
+  Report.layer.pipe(Layer.provide(prLayer)),
+  RuntimeUpgrade.layer.pipe(Layer.provide(makeRuntimeResolvers(options.runtimeLive))),
  );
 
  return Layer.provideMerge(domainLayers, libraryLayers);

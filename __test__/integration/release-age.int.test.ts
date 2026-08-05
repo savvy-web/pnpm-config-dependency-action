@@ -241,7 +241,7 @@ describe("release-age", () => {
 			expect(gate.ageMinutes).toBe(0);
 		});
 
-		it("fails typed when a pnpmfile throws — and ReleaseAgeLive degrades it to no gate", async () => {
+		it("fails typed when a pnpmfile throws — and ReleaseAge.layer degrades it to no gate", async () => {
 			// This is the division of responsibility the adoption created, and it is
 			// worth pinning on both sides.
 			//

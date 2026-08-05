@@ -103,6 +103,14 @@ Every declared output is now published on every exit path. Previously a run that
   above become unrepresentable rather than merely fixed. `core.fileMode=false` is
   written to the checkout's own git config once per run instead of being passed
   per command, so the two readers cannot drift apart.
-- `BranchManagerLive` and `ReleaseAgeLive` are now `BranchManager.layer` and
-  `ReleaseAge.layer`, matching the `@effected` kit's own convention. Neither was
-  part of a documented public API.
+- **Every domain service layer moved from an `XLive` constant to a `static layer`
+  on its class**, matching the `@effected` kit's own convention:
+  `BranchManager.layer`, `ReleaseAge.layer` (plus `ReleaseAge.layerNoop`),
+  `Report.layer`, `Changesets.layer`, `ConfigDeps.layer`,
+  `CatalogConfigDeps.layer`, `RegularDeps.layer`, `RuntimeUpgrade.layer`,
+  `PackageManagerUpgrade.layer` and `Lockfile.layer`. None was part of a
+  documented public API — the action ships as a bundle, not a library.
+- `WorkspaceYamlLive` and its `WorkspaceYaml` tag were **deleted** rather than
+  renamed: nothing outside their own test suite ever wired them. The standalone
+  `formatWorkspaceYaml` / `readWorkspaceYaml` helpers are unchanged and are what
+  the action actually calls.

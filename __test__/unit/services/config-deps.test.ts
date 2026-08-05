@@ -5,7 +5,7 @@ import { ReleaseAgeGate } from "@effected/npm";
 import { Yaml } from "@effected/yaml";
 import { Effect, Layer, References } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { ConfigDeps, ConfigDepsLive } from "../../../src/services/config-deps.js";
+import { ConfigDeps } from "../../../src/services/config-deps.js";
 import { ReleaseAge } from "../../../src/services/release-age.js";
 import { parseConfigEntry } from "../../../src/utils/deps.js";
 import { seededRegistry } from "../../utils/fixtures.js";
@@ -20,7 +20,7 @@ const runWithService = <A, E>(
 	releaseAge: Layer.Layer<ReleaseAge> = ReleaseAge.layerNoop,
 ) => {
 	const registryLayer = packages ? seededRegistry(packages) : seededRegistry({});
-	const layer = ConfigDepsLive.pipe(Layer.provide(Layer.merge(registryLayer, releaseAge)));
+	const layer = ConfigDeps.layer.pipe(Layer.provide(Layer.merge(registryLayer, releaseAge)));
 	return Effect.runPromise(
 		Effect.gen(function* () {
 			const service = yield* ConfigDeps;

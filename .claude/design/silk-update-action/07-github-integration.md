@@ -184,16 +184,31 @@ the commit.
 **Why this matters:** verified commits show authenticity, need no SSH or GPG keys,
 work automatically with GitHub App tokens, and match how GitHub's own bots behave.
 
-**File mode:** the change list comes from
-`git -c core.fileMode=false status --porcelain`. Executable-bit-only flips (e.g.
-husky chmod-ing hooks during a `run` command) do not survive a content-based API
-commit at mode 100644, so counting them would produce an empty commit and a
-spurious PR. The run's change-detection step (`steps/detect-changes.ts`) queries
-status the same way, and **the two must stay consistent** — that module's own doc
-comment says so, because a divergence would make the run's verdict and the
-commit's contents disagree. The status output is read verbatim (via
-`Run.collect`, not the trimming `Run.text`) because `--porcelain`'s
-two-character status field is column-aligned.
+**File mode:** the change list comes from `@effected/git`'s `Git.status(root)`
+(`git status --porcelain -z`), which returns typed `StatusEntry` values rather
+than text this repo parses. The run's change-detection step
+(`steps/detect-changes.ts`) reads the same way, and **the two must stay
+consistent** — a divergence would make the run's verdict and the commit's
+contents disagree.
+
+`core.fileMode=false` is what keeps that verdict honest: executable-bit-only
+flips (e.g. husky chmod-ing hooks during a `run` command) do not survive a
+content-based API commit at mode 100644, so counting them would produce an empty
+commit and a spurious PR.
+
+**It is set once on the checkout, not per command.** `steps/configure-status.ts`
+writes it into the repository's local git config immediately after detection,
+before any status read. That is a third scope, and finding it is what unblocked
+adopting the kit's `status`: the alternatives previously considered were a
+per-command `-c` flag (which `Git.status` has no seam for) and a process-global
+`GIT_CONFIG_*` environment override (rejected on blast radius). Repository config
+is scoped to the checkout, needs no per-command seam, and leaves exactly one
+place to get right instead of two call sites that could drift.
+
+The cost, stated because it is real rather than notional: the setting applies to
+every git command run in that checkout for the rest of the job, including silk's
+DepsRegen. Benign here — a mode flip is not a dependency change and cannot
+survive the API commit regardless — and scoped to the workspace, not the runner.
 
 After committing, the working tree is synced with `git fetch origin <branch>` +
 `git reset --hard origin/<branch>` — `git checkout` would refuse to overwrite the

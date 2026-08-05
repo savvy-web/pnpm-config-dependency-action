@@ -92,7 +92,7 @@ Shared helpers currently in that directory:
   that an unsupported (yarn) workspace fails with `InvalidInputError` from *inside*
   the check run, which is concluded `failure` rather than bypassed. Package-manager
   detection is **real** here (upstream `WorkspaceRoot` / `PackageManagerDetector`
-  over a temp-dir fixture), as is `PackageManagerUpgradeLive` over an in-memory
+  over a temp-dir fixture), as is `PackageManagerUpgrade.layer` over an in-memory
   registry, so the dispatch and the unsatisfiable-range path are genuinely
   resolved rather than mocked into existence.
   - It also pins the `core.fileMode=false` write — that it happens, and that it
@@ -135,7 +135,7 @@ Shared helpers currently in that directory:
   `devEngines.runtime` rewriting (the never-add rule in *every* mode, exact
   write-back, `auto` no-op on static pins, per-runtime resolver-failure
   resilience). `config-deps` and `regular-deps` default their fixtures to
-  `ReleaseAgeNoop` and each pin one hold-back case through a fake `ReleaseAge`.
+  `ReleaseAge.layerNoop` and each pin one hold-back case through a fake `ReleaseAge`.
 - **Release-age gate** (`unit/services/release-age.test.ts`) — inline
   `pnpm-workspace.yaml` discovery, the subprocess hook replay (argv passing,
   `pnpmfile.mjs`/`.cjs` order, best-effort degradation with a warning), publish-time

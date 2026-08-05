@@ -22,14 +22,14 @@ import { Changesets as SilkChangesets } from "@savvy-web/silk-effects";
 import { Layer } from "effect";
 
 import { BranchManager } from "../services/branch.js";
-import { CatalogConfigDepsLive } from "../services/catalog-config-deps.js";
-import { ChangesetsLive } from "../services/changesets.js";
-import { ConfigDepsLive } from "../services/config-deps.js";
-import { PackageManagerUpgradeLive } from "../services/package-manager-upgrade.js";
-import { RegularDepsLive } from "../services/regular-deps.js";
+import { CatalogConfigDeps } from "../services/catalog-config-deps.js";
+import { Changesets } from "../services/changesets.js";
+import { ConfigDeps } from "../services/config-deps.js";
+import { PackageManagerUpgrade } from "../services/package-manager-upgrade.js";
+import { RegularDeps } from "../services/regular-deps.js";
 import { ReleaseAge } from "../services/release-age.js";
-import { ReportLive } from "../services/report.js";
-import { RuntimeUpgradeLive } from "../services/runtime-upgrade.js";
+import { Report } from "../services/report.js";
+import { RuntimeUpgrade } from "../services/runtime-upgrade.js";
 
 /* v8 ignore start - pure Layer wiring, tested indirectly via service integration tests */
 
@@ -136,14 +136,14 @@ export const makeAppLayer = (dryRun: boolean, options: { runtimeLive: boolean } 
 		workspaceRoot,
 		workspaceDiscovery,
 		packageManagerDetector,
-		ChangesetsLive.pipe(Layer.provide(depsRegen)),
+		Changesets.layer.pipe(Layer.provide(depsRegen)),
 		BranchManager.layer.pipe(Layer.provide(Layer.mergeAll(gitBranch, gitCommit, Git.layer))),
-		PackageManagerUpgradeLive.pipe(Layer.provide(npmRegistry)),
-		ConfigDepsLive.pipe(Layer.provide(Layer.merge(npmRegistry, releaseAge))),
-		CatalogConfigDepsLive.pipe(Layer.provide(Layer.merge(npmRegistry, lockfileReader))),
-		RegularDepsLive.pipe(Layer.provide(Layer.mergeAll(npmRegistry, workspaceDiscovery, releaseAge))),
-		ReportLive.pipe(Layer.provide(prLayer)),
-		RuntimeUpgradeLive.pipe(Layer.provide(makeRuntimeResolvers(options.runtimeLive))),
+		PackageManagerUpgrade.layer.pipe(Layer.provide(npmRegistry)),
+		ConfigDeps.layer.pipe(Layer.provide(Layer.merge(npmRegistry, releaseAge))),
+		CatalogConfigDeps.layer.pipe(Layer.provide(Layer.merge(npmRegistry, lockfileReader))),
+		RegularDeps.layer.pipe(Layer.provide(Layer.mergeAll(npmRegistry, workspaceDiscovery, releaseAge))),
+		Report.layer.pipe(Layer.provide(prLayer)),
+		RuntimeUpgrade.layer.pipe(Layer.provide(makeRuntimeResolvers(options.runtimeLive))),
 	);
 
 	return Layer.provideMerge(domainLayers, libraryLayers);

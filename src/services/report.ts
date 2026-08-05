@@ -48,25 +48,32 @@ export class Report extends Context.Service<
 		) => string;
 		readonly generateCommitMessage: (updates: ReadonlyArray<DependencyUpdateResult>, appSlug?: string) => string;
 	}
->()("Report") {}
+>()("Report") {
+	/**
+	 * Live layer.
+	 *
+	 * Declared IN the class body, which is load-bearing rather than stylistic: a
+	 * member attached by post-class assignment is tree-shaken out of the bundled
+	 * `dist`, and that fails only in production because vitest runs the source.
+	 */
+	static readonly layer = Layer.effect(
+		this,
+		Effect.gen(function* () {
+			const pullRequest = yield* PullRequestTag;
+			return {
+				createOrUpdatePR: (branch, base, updates, changesets, autoMerge, deltas) =>
+					createOrUpdatePRImpl(pullRequest, branch, base, updates, changesets, autoMerge, deltas),
+				generatePRBody: generatePRBodyImpl,
+				generateSummary: generateSummaryImpl,
+				generateCommitMessage: generateCommitMessageImpl,
+			};
+		}),
+	);
+}
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Live Layer
 // ══════════════════════════════════════════════════════════════════════════════
-
-export const ReportLive = Layer.effect(
-	Report,
-	Effect.gen(function* () {
-		const pullRequest = yield* PullRequestTag;
-		return {
-			createOrUpdatePR: (branch, base, updates, changesets, autoMerge, deltas) =>
-				createOrUpdatePRImpl(pullRequest, branch, base, updates, changesets, autoMerge, deltas),
-			generatePRBody: generatePRBodyImpl,
-			generateSummary: generateSummaryImpl,
-			generateCommitMessage: generateCommitMessageImpl,
-		};
-	}),
-);
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Implementation
