@@ -3,8 +3,8 @@ status: current
 module: silk-update-action
 category: architecture
 created: 2026-02-20
-updated: 2026-07-26
-last-synced: 2026-07-26
+updated: 2026-08-05
+last-synced: 2026-08-05
 completeness: 95
 related:
   - ./_index.md
@@ -181,24 +181,40 @@ The action runs on **Effect v4** (`effect` / `@effect/platform-node` both resolv
   `Yaml.parse` / `Yaml.stringify` return Effects (rather than throwing like the `yaml` npm
   package), so `workspace-yaml.ts` yields them and maps failures into `FileSystemError`.
 
-### Duplicate resolutions
+### Duplicate resolutions — RESOLVED
 
-Two copies each of `@effected/workspaces` (`0.9.0` and `0.8.0`) and `@effected/npm`
-(`0.5.0` and `0.4.0`) resolve. The lower copy of each comes **entirely** from the
-`@vitest-agent/plugin` devDependency tree and never reaches the shipped artifact; it clears
-when that plugin bumps. Effect resolves services by the tag's string id, so even a genuine
-duplicate would share one provided layer — the concern is bundle size, not correctness.
+This document previously recorded two copies each of `@effected/workspaces`
+(`0.9.0` / `0.8.0`) and `@effected/npm` (`0.5.0` / `0.4.0`), the lower copy of each coming
+entirely from the `@vitest-agent/plugin` devDependency tree, and predicted they would clear
+when that plugin bumped. **They have.** `pnpm-lock.yaml` now resolves exactly one copy of
+each — `@effected/workspaces@0.9.5` and `@effected/npm@0.8.2` — on
+`@vitest-agent/plugin@2.0.13`.
+
+Kept as a record rather than deleted, because the reasoning is the reusable part: Effect
+resolves services by the tag's **string id**, so even a genuine duplicate shares one provided
+layer. A duplicate here is a bundle-size concern, not a correctness one — which is why it was
+right to wait it out rather than force a resolution.
+
+*Verify with* `grep -oE "@effected/(workspaces|npm)@[0-9.]+" pnpm-lock.yaml | sort -u`.
 
 ## Build tooling
 
-- `@savvy-web/github-action-builder` (dev) — rspack-based bundler that derives the
+- `@savvy-web/github-action-builder` (dev, `^2.2.2`) — rspack-based bundler that derives the
   pre/main/post entries from `action.config.ts` and inlines every runtime dependency into
   `dist/{pre,main,post}.js`. As of v2.1 it **minifies unconditionally** and folds license
   banners inline, so the committed `dist` carries attribution again. Current output:
-  ~1.18 MB minified.
+  ~1.29 MB minified (`dist/main.js`; `pre` and `post` are ~271 KB each).
 - `@savvy-web/silk` (dev) — silk tooling (commit/changeset conventions).
 - `@effect/vitest` (dev) — pinned **exactly** to the same beta as `effect`
   (`4.0.0-beta.101`) and must move in lockstep with it. See @./08-testing.md.
+- `@effected/schemastore` (dev, pinned **exactly** at `0.2.1`) — builds, lints, gates and
+  writes the JSON Schema for the `result` output. `lib/scripts/generate-schema.ts` hands it a
+  `SchemaTarget` and `SchemaPipeline.run` does the rest: structural lint, the shipped ajv
+  strict-mode gate, and a write **only when the document's content differs** — so a formatter
+  reflowing the generated file does not provoke a rewrite, and the artifact needs no formatter
+  carve-out. The package deliberately never logs; the script supplies the wording. Consumed
+  only at build time and **not** bundled into `dist`. See @./03-type-definitions.md.
+- `tsx` (dev) — runs the schema generator (`pnpm generate-schema`).
 
 ### `action.config.ts` notes
 

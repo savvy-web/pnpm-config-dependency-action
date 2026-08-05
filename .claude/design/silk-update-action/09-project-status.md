@@ -186,6 +186,100 @@ rather than silently performing a package-manager-only run.
     escape here: `depKey` is used symmetrically on both sides of every
     comparison, so a wrong separator would still compare equal to itself.
 
+## Settled decisions — do not re-propose without new evidence
+
+These were investigated, rejected on measurement, and are the half of this
+record that a fresh audit will otherwise re-derive from scratch. Each names what
+would change the answer.
+
+### `@effected/package-json` — not adopted (upstream #286)
+
+Probed before migrating anything, which is why nothing was half-migrated:
+
+- `Package.decode` **requires both `name` and `version`**, so it rejects a
+  private monorepo root (`{ "private": true, "packageManager": …,
+  "devEngines": … }`) — precisely the manifest `RuntimeUpgrade` and
+  `PackageManagerUpgrade` edit. Adoption would turn "edits your manifest" into
+  "refuses your repo."
+- It also rejects a caret `packageManager` pin (`pnpm@^11.20.0`), a form
+  `parsePnpmVersion` supports and this action documents.
+- The write path **sorts keys canonically**, so adopting it would reformat
+  unrelated regions of a file the action then commits to someone else's repo.
+
+**What would change the answer:** a lenient decode for the workspace-root shape,
+and an order-preserving single-field edit. Both are asked for in #286.
+
+**Trap for the next auditor:** this repo's own `package.json` is already sorted
+by lint-staged, so the reordering is a no-op *here*. Checking only against this
+repo would have made it look safe.
+
+### `@effected/git` — not adopted (upstream #279)
+
+It covers **2 of the 9** local git operations `services/branch.ts` performs.
+Missing: `-c core.fileMode=false` on `status` (load-bearing — exec-bit-only
+flips do not survive the content-based API commit, so counting them makes an
+empty commit and a spurious PR), an explicit-refspec `fetch` (load-bearing on a
+single-branch `actions/checkout`, which otherwise never materializes
+`origin/<branch>`), `fetch --unshallow`, `checkout -B`, `reset --hard`,
+`branch -f`, and `rev-parse --is-shallow-repository`. `refExists` is covered but
+unused — branch existence goes through the **API** (`GitBranch.exists`), not git.
+
+Adopting for the remaining two would leave two subprocess mechanisms in one
+module while fixing nothing.
+
+**What would change the answer:** the mutating tier landing upstream. The
+`GIT_CONFIG_COUNT` / `GIT_CONFIG_KEY_n` / `GIT_CONFIG_VALUE_n` env route *does*
+reach the child (`GitCommand` spawns with `extendEnv: true`, verified against a
+real repo), but only process-globally — which would change every git command in
+the run including silk's DepsRegen. Rejected on blast radius, not capability.
+
+### `format.ts` and `services/report.ts` stay separate
+
+Two rendering modules, split by sink: `format.ts` renders the **run's** log
+output (pure, no services); `report.ts` renders the **PR's** body, summary and
+commit message (a `Context.Service` over `PullRequest`). The
+single-rendering-surface rule exists to stop rendering scattering through step
+bodies — which it does not. Merging them would drag a service dependency into a
+pure module or strand `Report`'s statics.
+
+### `lockfile-snapshot` fail-open — argued, not acted on
+
+There is a real argument that a lockfile snapshot is diagnostic (`git status` is
+the run's actual change signal) and that `LockfileError` should degrade to
+`null` rather than fail the run. It was **deliberately not applied**, because it
+surfaced mid-restructure and a behavior change folded into a behavior-preserving
+move is unreviewable. The argument is recorded in the step's module doc. It may
+well be correct; it needs to land as its own decision.
+
+## How to read the claims in these documents
+
+Several confident assertions in this record turned out to be false, and the
+pattern is worth naming because it recurs:
+
+- "The kit deliberately ships no `GithubMarkdown` successor" — asserted across
+  **five design docs plus the module doc it lived in** — `01`, `02`, `05`, `07`,
+  `09`, and `src/utils/github-markdown.ts`; never `CLAUDE.md`. It ships
+  `GitHubMarkdown`; the rename was three characters. *Re-derive with*
+  `git grep -in 'successor|consumer policy' 697bbab -- '*.md' 'src/**'`, then
+  keep only the hits naming `GithubMarkdown` or "report shaping" — the same
+  search also returns four hits for an unrelated and **true** claim, that the kit
+  has no `ActionInputError` successor. Conflating the two is how this count was
+  first miscorrected: a grep for "no successor" alone returns both, and a grep
+  for the exact phrasing returns neither `01` nor `02`, which word it
+  differently.
+- "`Range.parse` is tree-shaken out of the bundled dist" — true once, fixed
+  upstream, and left asserting a hazard that no longer existed.
+- The raw-`node:` enumeration claimed 14 modules, listed 12, and the true count
+  was 13 — the number, the list, and each other all disagreed.
+
+Each read as evidence and was an author's account of a property. **Where a
+document here asserts that something is load-bearing, it should say what would
+falsify the claim, or say plainly that it is unverified.** "We believe X, and
+here is what would show us wrong" survives being wrong; a confident claim does
+not. The concrete habit: *before trusting a green signal, ask what specific
+change would have turned it red — if the answer is "nothing", the signal is
+decoration.*
+
 **Next steps:**
 
 1. Integration testing with a real GitHub App in CI.

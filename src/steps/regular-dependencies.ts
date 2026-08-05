@@ -6,9 +6,11 @@
  * `latest`. That policy lives in `RegularDeps`; what lives here is the exclusion
  * decision below.
  *
- * **Failure posture: fail-the-job.** `RegularDeps` already degrades a
- * per-dependency registry failure to an empty version list internally, so
- * anything reaching this error channel is a genuine write failure.
+ * **Failure posture: cannot fail.** The error channel is `never`, because
+ * `RegularDeps` degrades a per-dependency registry failure to an empty version
+ * list internally rather than surfacing it. A run where every lookup failed is
+ * therefore indistinguishable here from one where nothing needed updating —
+ * both yield no updates.
  *
  * @module steps/regular-dependencies
  */

@@ -3,8 +3,8 @@ status: current
 module: silk-update-action
 category: architecture
 created: 2026-02-20
-updated: 2026-07-26
-last-synced: 2026-07-26
+updated: 2026-08-05
+last-synced: 2026-08-05
 completeness: 95
 related:
   - ./_index.md
@@ -81,13 +81,22 @@ the domain services are provided internally by `appLayer`.
 import { Action } from "@effected/github-actions";
 import { program } from "./program.js";
 
-/* v8 ignore next */
-Action.run(program);
+/* v8 ignore next 3 -- entry-point guard, only runs in GitHub Actions */
+if (process.env.GITHUB_ACTIONS) {
+ await Action.run(program);
+}
 ```
 
-The module-level call is annotated with `/* v8 ignore next */` so coverage is
-attributed to `program.ts`. Tests import `readInputs`, `program`, `runCommands`
-and `runInstall` directly from `./program.js` without ever evaluating `main.ts`.
+All three entry points carry the **same `process.env.GITHUB_ACTIONS` guard**, not
+just `pre` and `post`. Without it, merely importing the module runs the whole
+action as a side effect in any process that touches it — which a test file, a
+coverage pass or an editor's module graph will do. The guard is annotated
+`/* v8 ignore next 3 */` so coverage is attributed to `program.ts`.
+
+Tests import what they need from the module that now owns it: `program` and
+`innerProgram` from `./program.js`, `readInputs` from `./schema/inputs.js`,
+`runCommands` from `./steps/custom-commands.js` and `runInstall` from
+`./steps/install.js` — none of which evaluates `main.ts`.
 
 ## src/state.ts - Cross-Phase State
 
@@ -98,16 +107,13 @@ each value through its Schema. `state.ts` defines `StartTimeState` (a
 itself is **not** modelled here — `GitHubToken.provision` persists it under its
 own internal key.
 
-## src/program.ts - The Effect Program
+## src/schema/inputs.ts - The Input Contract
 
-**Responsibility:** orchestrate the complete dependency update workflow for the
-`main` phase, including the check run and all update steps. Token provisioning
-and revocation live in `pre.ts` / `post.ts`, not here.
-
-The module exports four things: `readInputs`, `program`, `innerProgram`, and the
-`runCommands` / `runInstall` helpers.
-
-### `readInputs` — the input layer, extracted deliberately
+`readInputs` no longer lives in `program.ts`. It sits in `src/schema/inputs.ts`
+alongside the `INPUT_NAMES` tuple, which mirrors `action.yml` **as data so the
+mirror can be checked rather than assumed** — `__test__/unit/schema/inputs.test.ts`
+reads the manifest and compares. A tuple rather than a loose array, so
+`InputName` is the exact union of declared names and a typo cannot typecheck.
 
 Input parsing is **split out of `program`** rather than inlined, because it is the
 only part of the program reachable in-process without the real GitHub/layer
@@ -146,10 +152,10 @@ with only spaces mangled — `dependencies` → `INPUT_DEPENDENCIES`,
 nothing under the runner and silently takes its `withDefault`. Every input then
 resolves to its default and every step reports "not configured" while the
 workflow plainly configured it — including `dry-run`, so a workflow asking to
-rehearse performed a live run. `program.inputs.test.ts` injects a runner-shaped
-environment through `ActionInput.layer`, so reverting to bare `Config` fails every
-assertion. (Upstream has since also made `Action.run` install an ActionInput-aware
-provider — defense in depth; the accessors remain the API.)
+rehearse performed a live run. `__test__/unit/schema/inputs.test.ts` injects a
+runner-shaped environment through `ActionInput.layer`, so reverting to bare
+`Config` fails every assertion. (Upstream has since also made `Action.run` install
+an ActionInput-aware provider — defense in depth; the accessors remain the API.)
 
 `ActionInput.list` supplies the multi-value grammar (newline lists with `-` or `*`
 bullets, `#` comment lines dropped before bullet-stripping, JSON arrays, commas)
@@ -168,12 +174,75 @@ Validation performed in `readInputs`:
   defaults to `"false"`, a workflow configuring nothing now fails here.
 - `peer-lock` / `peer-minor` must not overlap; peer entries matching no
   `dependencies` pattern warn.
-- An unrecognized `runtime-data` value warns and falls back to `offline`.
+- `auto-merge` must be `""`, `"merge"`, `"squash"` or `"rebase"`. Validated
+  rather than cast, so a typo fails here instead of reaching the GraphQL
+  mutation as an invalid enum. The parsed value is typed as that union, which is
+  what lets it be threaded to `setAutoMerge` without a cast downstream.
+- `runtime-data` must be `"offline"` or `"live"`. **This now fails rather than
+  warning and falling back** — an earlier version logged a warning and used
+  `offline`. Silently resolving runtime versions from the bundled snapshot when
+  the workflow asked for live data is the same class of quiet wrong answer as an
+  input that never arrived: the run reports success having answered a question
+  nobody asked.
+
+## src/schema/outputs.ts - The Output Contract
+
+The mirror-as-data pattern again: `OUTPUT_NAMES` is a tuple of every output
+`action.yml` declares, checked against the manifest by
+`__test__/unit/schema/outputs.test.ts`. `emitOutputs` writes **every** declared
+name at once, so a caller cannot publish a partial set by accident — the failure
+it exists to prevent is an output the manifest declares and the run never sets,
+which a consuming workflow reads as an empty string rather than as the value the
+action would have chosen.
+
+There are five outputs: the four original scalars (`pr-number`, `pr-url`,
+`updates-count`, `has-changes`) plus **`result`**, the whole run as one JSON
+document. See `RunResultDocument` in @./03-type-definitions.md for the schema.
+
+**The baseline is published before any work, not from a failure handler.** This
+is the load-bearing decision in the module:
+
+```typescript
+yield* emitOutputs(initialOutputs);   // first statement in `program`
+const { inputs, dryRun, timeout, runtimeLive } = yield* readInputs;
+```
+
+Emitting up front guarantees every declared output has a value on every exit
+path — including a failure inside `readInputs` itself, which is the earliest
+thing that can abort the run. The obvious alternative, re-emitting the baseline
+from `Effect.onError`, is **worse and was rejected**: a failure handler that
+re-emits also *overwrites* anything a step already published, so a run that
+opened a PR and then failed later would report `pr-number: ""` and
+`has-changes: false`. That is not a conservative default, it is a false
+statement about work that actually happened. Writing the baseline first and
+letting steps refine it gives the same total-coverage guarantee with no lying.
+
+`initialOutputs.result` is a full **empty-run document, not an empty string** —
+so a consumer can call `fromJSON(...)` unconditionally rather than guarding. A
+baseline of `""` would push the guard onto every reader, which is the same
+defect as an unset scalar wearing a different hat.
+
+## src/program.ts - Composition
+
+**Responsibility:** compose the `main` phase — read inputs, run the steps in
+order, fold their results into outputs, report. Token provisioning and
+revocation live in `pre.ts` / `post.ts`; each step's *body* lives in its own
+module under `src/steps/`.
+
+`program.ts` performs **no I/O of its own and builds no strings of its own**.
+That is the invariant the wave-4 restructure established, and it is falsifiable
+by inspection: a `Run.*` call, a `readFileSync`, or a template literal destined
+for a log line appearing in this module means the code belongs in `steps/` or in
+`format.ts`. The last holdout was the `git status` call, which is why
+`steps/detect-changes.ts` exists.
+
+The module exports two things: `program` and `innerProgram`.
 
 ### `program` — layer composition and timeout
 
 ```typescript
 export const program = Effect.gen(function* () {
+ yield* emitOutputs(initialOutputs);   // see the output contract above
  const { inputs, dryRun, timeout, runtimeLive } = yield* readInputs;
 
  const env = yield* ActionEnvironment;
@@ -198,9 +267,35 @@ export const program = Effect.gen(function* () {
 
 ### `innerProgram(inputs, dryRun, headSha, appLayer)`
 
-The orchestration body. It provides `appLayer` at two levels (outer, and again
-inside the `withCheckRun` callback, because that callback signature requires
-`R = never`).
+The orchestration body. It provides `appLayer` **once**.
+
+> **Corrected claim.** This document previously stated that `appLayer` was
+> provided "at two levels (outer, and again inside the `withCheckRun` callback,
+> because that callback signature requires `R = never`)". The *reason* was
+> false, and the redundant second provide existed because of it.
+>
+> What settles it is the declared type, not an argument about it —
+> `node_modules/@effected/github/index.d.ts:1049`:
+>
+> ```typescript
+> readonly withCheckRun: <A, E, R>(
+>   name: string,
+>   headSha: string,
+>   use: (id: number, conclude: ConcludeCheckRun) => Effect.Effect<A, E, R>,
+> ) => Effect.Effect<A, E | GitHubError, R | Repo>;
+> ```
+>
+> `use` is generic in `R` and the requirement propagates to the result, so the
+> callback inherits the surrounding context like any other effect. The kit's own
+> TSDoc on that member says as much: *"`use` keeps its own `R` and its own `A`,
+> unlike the version this replaces, whose callback was `R`-less and so forced
+> consumers to build self-contained layers just to use the bracket."*
+>
+> So the claim was **true of an older kit version and never revisited after the
+> upgrade** — the same shape as the `Range.parse` note below and the
+> `GithubMarkdown` claim in @./01-dependencies.md. A doc sentence carrying a
+> justification outlives the release that justified it; the type declaration
+> does not.
 
 Inside the check run it:
 
@@ -214,10 +309,14 @@ Inside the check run it:
    missing ref fails before the branch is reset.
 4. Threads `detected.root` — **not** `process.cwd()` — into every step that reads
    or writes files, and `detected.pm` into every dispatch point.
-5. Threads the resolved `targetBranch` into `Report.createOrUpdatePR(branch,
-   base, …)` as the PR base and into `Changesets.create(detected.root,
-   targetBranch)` as the diff baseline, running
-   `BranchManager.ensureBaseHistory(targetBranch)` first.
+5. Threads the resolved `targetBranch` into `commitAndPrStep` as the PR base and
+   into `Changesets.create(detected.root, targetBranch)` as the diff baseline,
+   running `BranchManager.ensureBaseHistory(targetBranch, detected.root)` first.
+   Both `ensureBaseHistory` and `commitChanges` take the workspace root
+   explicitly — see the arity note in @./05-module-library.md.
+6. Assembles the `RunResultDocument` from the same records that drive the scalar
+   outputs and the PR body, rather than from a parallel reporting shape, so the
+   two cannot disagree about what happened.
 
 Its logging contract is part of its design, and is what `program.inner.test.ts`
 asserts on: every skipped step states a reason, dispatch decisions name the path
@@ -230,9 +329,53 @@ and the evidence, and the one non-benign skip (an unsatisfiable
 `RegularDeps`, `Changesets`, `Report`), the standalone helpers
 (`detectPackageManager`, `captureLockfileState`, `compareLockfiles`, `syncPeers`,
 `formatWorkspaceYaml`), the kit services (`ActionOutputs`, `CheckRun`, `Repo`)
-and `WorkspaceDiscovery` plus `ChildProcessSpawner`.
+and `WorkspaceDiscovery` plus `ChildProcessSpawner` — all reached through the
+step modules rather than called directly.
 
-### `runCommands(commands)`
+## src/steps/ - One Module Per Orchestration Unit
+
+Each step module owns one unit of the workflow and declares three things for
+itself: its **result type**, its **requirement channel**, and a **tagged error
+only if it can actually fail**. Exactly **four carry `never`** in the error
+channel — `custom-commands`, `regular-dependencies`, `upgrade-package-manager`
+and `upgrade-runtimes` — which is a claim the compiler checks rather than a
+convention, and is verifiable by reading the four signatures.
+
+| step | error channel | note |
+| --- | --- | --- |
+| `detect-package-manager` | `InvalidInputError` | resolves root + manager once; everything downstream reads it |
+| `branch` | `BranchStepError` | validates both refs *before* `GitBranch.upsert` force-resets anything |
+| `lockfile-snapshot` | `LockfileError` | runs twice (`"before"` / `"after"`); a missing lockfile is a skip, not a failure |
+| `upgrade-package-manager` | `never` | a read/write failure folds into an `error`-kind outcome instead |
+| `upgrade-runtimes` | `never` | a resolver failure (including EOL lines) degrades to a warning |
+| `config-dependencies` | `FileSystemError` | owns the pnpm / bun / npm dispatch |
+| `regular-dependencies` | `never` | `RegularDeps` already degrades per-dependency registry failures internally |
+| `peer-sync` | `FileSystemError` | reports "not configured" distinctly from "synced nothing" |
+| `install` | `CommandFailedError` \| `CommandOutputError` | `runInstall` lives here |
+| `format-workspace` | `FileSystemError` | pnpm-only; logs the reason when it does not apply |
+| `custom-commands` | `never` | `runCommands` lives here; returns failures, does **not** conclude |
+| `detect-changes` | `CommandFailedError` \| `CommandOutputError` | the `git status` call; extracted so `program.ts` does no I/O |
+| `changesets` | `ChangesetError` (+ command errors) | delegates wholly to silk's `DepsRegen` |
+| `commit-and-pr` | `GitHubError` (+ command errors) | one module: the PR must describe a commit that exists |
+
+Two boundaries in that table are deliberate and worth stating, because both look
+like candidates for "simplification":
+
+- **`custom-commands` does not conclude the check run or set outputs.** It runs
+  every command, collects the failures and *returns* them. Concluding the run
+  and publishing outputs are composition concerns — `program.ts` owns them for
+  every terminal state, so a step reaching for `conclude` would be the one place
+  the run's verdict is decided outside the composition layer. The step reports
+  what happened; the program decides what it means.
+- **`commit-and-pr` is one module, not two.** The halves share a precondition
+  (not a dry run) and an ordering constraint (the PR must describe a commit that
+  exists). Splitting them would move that constraint into the composition layer,
+  where it is easy to reorder by accident. Their *failure postures* differ,
+  though: the commit propagates, while a PR failure degrades to a warning and a
+  `null` result, because the commit is already pushed and durable at that point
+  and failing the run would report a red job for work that landed.
+
+### `runCommands(commands)` — `steps/custom-commands.ts`
 
 Executes each custom command sequentially via
 `Run.collect(ChildProcess.make("sh", ["-c", command]))`. `Run.collect` treats a
@@ -241,7 +384,7 @@ and the surrounding `Effect.catch` covers only a genuine spawn failure. All
 commands are attempted; failures are collected and returned as
 `{ successful, failed }`.
 
-### `runInstall(pm, workspaceRoot?)`
+### `runInstall(pm, workspaceRoot?)` — `steps/install.ts`
 
 Regenerates the lockfile, dispatched on the package manager, with every command
 anchored at `workspaceRoot`:
@@ -258,6 +401,10 @@ the changed inputs, so it can commit an inconsistent lockfile (an upstream peer
 range moving leaves a required peer unfilled → `ERR_MODULE_NOT_FOUND` for the
 consumer). It uses `Run.text`, which fails typed on a non-zero exit, so an install
 failure aborts the run.
+
+The command lines are labelled for logging by `INSTALL_LABEL` in `format.ts`,
+not by strings built in the step — the same single-rendering-surface rule that
+keeps `program.ts` string-free.
 
 ### Required GitHub App Permissions
 

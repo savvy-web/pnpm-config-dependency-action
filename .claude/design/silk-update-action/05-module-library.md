@@ -3,8 +3,8 @@ status: current
 module: silk-update-action
 category: architecture
 created: 2026-02-20
-updated: 2026-07-26
-last-synced: 2026-07-26
+updated: 2026-08-05
+last-synced: 2026-08-05
 completeness: 95
 related:
   - ./_index.md
@@ -15,6 +15,14 @@ implementation-plans: []
 # Services and Utilities
 
 [Back to index](./_index.md)
+
+**Scope note.** This document covers the *reusable* layer: domain services
+(`src/services/`), layer composition (`src/layers/app.ts`), the rendering surface
+(`src/format.ts`) and the pure helpers (`src/utils/`). The **orchestration**
+layer — `src/steps/`, one module per workflow unit — is documented in
+@./04-module-entry-points.md alongside the composition that calls it. The split
+follows the code: a service is a capability, a step is a decision about when to
+use one.
 
 ## Domain Services (src/services/)
 
@@ -73,13 +81,20 @@ local git half.
 export class BranchManager extends Context.Service<BranchManager, {
  readonly manage: (branchName: string, defaultBranch?: string) =>
   Effect.Effect<BranchResult, GitHubError | GitRunError, Repo>;
- readonly commitChanges: (message: string, branchName: string) =>
+ readonly commitChanges: (message: string, branchName: string, workspaceRoot: string) =>
   Effect.Effect<void, GitHubError | GitRunError, Repo>;
  readonly validateBranches: (source: string, target: string) =>
   Effect.Effect<void, GitHubError | InvalidInputError, Repo>;
- readonly ensureBaseHistory: (base: string) => Effect.Effect<void, GitRunError>;
+ readonly ensureBaseHistory: (base: string, workspaceRoot: string) =>
+  Effect.Effect<void, GitRunError>;
 }>()("BranchManager") {}
 ```
+
+**Both git-touching methods take the workspace root explicitly.** `commitChanges`
+has for a while; `ensureBaseHistory` gained it in `6d101bc`. Neither defaults to
+`process.cwd()`, because the action can be invoked from a subdirectory of the
+workspace and git resolves everything — `--porcelain` paths, `merge-base`, the
+recovery fetches — relative to the directory it actually ran in.
 
 **`Repo` stays in `R`, deliberately.** The layer resolves the `ChildProcessSpawner`
 once (ambient infrastructure) but does **not** resolve `Repo` — keeping it in each
@@ -134,12 +149,22 @@ just-committed working-copy state.
   non-ASCII bytes is a known remaining gap that fails loudly (the read misses
   and warns) rather than committing a wrong path.
 
-**Base-history preflight.** `ensureBaseHistory(base)` probes
+**Base-history preflight.** `ensureBaseHistory(base, workspaceRoot)` probes
 `git merge-base <base> HEAD` (via `Run.succeeds`); if it resolves — the
 `fetch-depth: 0` case — it is a no-op. Otherwise it best-effort fetches the base
 ref, unshallows a shallow clone, materializes a local ref, and warns non-fatally
 if the merge-base is still missing. Required because DepsRegen diffs
 `merge-base(base) → worktree`.
+
+Every command in it runs at `workspaceRoot` via a `gitRunIn(cwd, …)` helper.
+Until `6d101bc` they ran at `process.cwd()`, which was **a silent wrong answer
+rather than an error**: invoked from a subdirectory, the merge-base probe and
+its recovery fetches resolved against the wrong directory, the preflight
+concluded there was nothing to do, and the changeset step then diffed against a
+base it could not see. Nothing failed — there were simply no changesets, which
+looks identical to "no versionable changes." That is the same defect class as
+the `commitChanges` cwd bug fixed earlier in the branch, and it had been
+recorded here as a deferred fix before it was applied.
 
 ### src/services/workspace-yaml.ts - WorkspaceYaml
 
@@ -229,6 +254,28 @@ lifetime):
   never sees hook-injected values, and the rspack bundle cannot host an in-process
   computed dynamic import (see @./01-dependencies.md). Best-effort: any failure
   degrades to no contribution with a warning.
+
+**The replay payload is framed behind a sentinel** (`REPLAY_SENTINEL`), and the
+parent scans the child's stdout **from the end** for it. This is not
+defensive-programming garnish — it fixes a shipped silent wrong answer:
+
+- A pnpmfile hook is arbitrary user code and may log freely; several real ones
+  do. The parent used to run `JSON.parse` over the child's **entire** stdout, so
+  a single `console.log` in a hook made the parse throw.
+- The fail-open catch then degraded the run to **no gate at all**, silently —
+  turning the exact protection this module exists to provide into a no-op, after
+  which the action could propose a version pnpm rejects at install with
+  `ERR_PNPM_NO_MATURE_MATCHING_VERSION`. Fail-open is right when the data is
+  genuinely unavailable; it is dangerous when it silently absorbs a *parsing*
+  bug, because the two are indistinguishable at the call site.
+- Scanning from the end rather than "just take the last line", because a hook
+  that logs valid JSON as its final output would otherwise be parsed as the
+  payload — not hypothetical for tooling that dumps its resolved config.
+- `extractReplayPayload(stdout)` is **exported for direct testing**: the whole
+  defect lived in that parse, so the test guarding it should not need to spawn a
+  child to reach it. It returns `null` for "no framed line", which the caller
+  reports distinctly from "framed but unparseable" — two different failures that
+  previously looked identical.
 
 **Publish times** come from `NpmRegistry.publishTimes(pkg)` — the kit absorbed
 this repo's former hand-rolled `npm view <pkg> time --json` shell-out —
@@ -596,6 +643,62 @@ auth + `FetchHttpClient` so the live graph is self-contained (`E = never`). Each
 live resolver falls back to the bundled snapshot on a fetch failure, logging a
 warning.
 
+## The Rendering Surface (src/format.ts)
+
+Every human-readable string the run produces that is not a step's own inline skip
+reason is built in `src/format.ts`. It is **pure and service-free** — every
+function takes data and returns a string (or an array of them), so every line is
+testable without a runtime.
+
+| export | purpose |
+| --- | --- |
+| `runContextLines(context)` | the opening Run-context block, header included |
+| `resultLines(result)` | the closing Result block, including the skipped-summary |
+| `groupCatalogDeltas(deltas)` | per-catalog tally of a merge's delta actions |
+| `formatCatalogCounts(counts)` | verbose tally, for the config-dependencies step log |
+| `formatCatalogCountsCompact(counts)` | compact `+/~/-` tally, for the Result block |
+| `INSTALL_LABEL` | the command line each package manager's install runs, for logging |
+| `describePmEvidence(detected)` | best-effort re-derivation of the detection signal |
+
+The rule the module exists to enforce is that **the same fact must not be worded
+two different ways in two different places.** `formatCatalogCounts` and
+`formatCatalogCountsCompact` are the same tally rendered for two audiences, and
+they sit side by side precisely so that stays visible.
+
+Both block builders **return lines rather than logging**, so the module stays
+pure and the caller emits them in order. The Run-context block includes its own
+`"Run context"` header for the same reason a commit is an explicit change set:
+the block is emitted as one unit and cannot drift apart.
+
+`describePmEvidence` is explicitly **not a source of truth** and says so in its
+own doc comment. `DetectedPm` does not carry the detector's reasoning — upstream
+logs it internally at debug level, on one branch only, and does not return it —
+so this is a cheap re-check of the same signals in the same priority order, for
+one log line. Any read failure degrades to `null`; it never invents an answer.
+
+### The boundary with `services/report.ts` — settled
+
+**`format.ts` renders the run's log output; `report.ts` renders the PR's.** Two
+named rendering modules, split by sink:
+
+| | `format.ts` | `services/report.ts` |
+| --- | --- | --- |
+| sink | the runner log / decision record | the PR body, job summary, commit message |
+| lifetime | written once, scrolls | upserted and re-rendered across runs |
+| shape | pure functions, no services | a `Context.Service` over `PullRequest` |
+
+The single-rendering-surface rule exists to stop rendering being scattered
+through step bodies — which it is not. Merging the two would drag a service
+dependency into a pure module, or strand `Report`'s statics. Two named modules
+with a clear split satisfies the rule rather than violating it. See the
+settled-decisions section of @./09-project-status.md.
+
+**On authority over exact wording:** `program.inner.test.ts` asserts on the
+literal log text and is authoritative over it; `format.test.ts` asserts the
+*shape* of the decision record. That division matters — a wording change should
+fail one suite, not both, and the one it fails should be the one that models the
+log as a contract.
+
 ## Pure Helpers (src/utils/)
 
 ### src/utils/branch.ts
@@ -684,8 +787,9 @@ deliberately not a second writer.
 `parseMultiValueInput` and its module are gone. `ActionInput.list` from
 `@effected/github-actions` owns that grammar now (see @./04-module-entry-points.md);
 the five call sites read `ActionInput.list(name).pipe(Config.withDefault([]))`. The
-grammar itself is still pinned locally by `INPUT_*`-keyed tests in
-`__test__/unit/program.inputs.test.ts`.
+grammar itself is still pinned locally by `INPUT_*`-keyed tests, now in
+`__test__/unit/schema/inputs.test.ts` (the suite moved with `readInputs` into
+`src/schema/inputs.ts`).
 
 ### src/utils/markdown.ts
 

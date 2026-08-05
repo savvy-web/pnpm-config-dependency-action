@@ -23,12 +23,30 @@ src/
 ├── pre.ts                 # Pre-phase entry — GitHubToken.provision + start time
 ├── main.ts                # Main-phase entry — Action.run(program)
 ├── post.ts                # Post-phase entry — duration report + GitHubToken.dispose
-├── program.ts             # readInputs + program + innerProgram + runCommands + runInstall
+├── program.ts             # PURE COMPOSITION: read inputs → run steps → fold outputs → report
+├── format.ts              # the run's rendering surface (run-context/result blocks, tallies)
 ├── state.ts               # StartTimeState (Schema.Class) + STATE_KEYS cross-phase state
 ├── errors/
-│   └── errors.ts          # Schema.TaggedErrorClass definitions
-├── schemas/
-│   └── domain.ts          # Effect Schema definitions (domain types)
+│   └── errors.ts          # Schema.TaggedErrorClass definitions (4 live classes; see 03)
+├── schema/
+│   ├── domain.ts          # Effect Schema definitions + RunResultDocument (`result` output)
+│   ├── inputs.ts          # INPUT_NAMES tuple + readInputs + InnerProgramInputs
+│   └── outputs.ts         # OUTPUT_NAMES tuple + initialOutputs + emitOutputs
+├── steps/                 # one module per orchestration unit; each declares its own
+│   ├── detect-package-manager.ts   #   result type, an explicit requirement channel, and
+│   ├── branch.ts                   #   a tagged error ONLY if it can actually fail
+│   ├── lockfile-snapshot.ts        #   (four carry `never`)
+│   ├── upgrade-package-manager.ts
+│   ├── upgrade-runtimes.ts
+│   ├── config-dependencies.ts      #   owns the pnpm/bun/npm dispatch
+│   ├── regular-dependencies.ts
+│   ├── peer-sync.ts
+│   ├── install.ts                  #   runInstall lives here
+│   ├── format-workspace.ts
+│   ├── custom-commands.ts          #   runCommands; returns failures, does NOT conclude
+│   ├── detect-changes.ts           #   git status; the only I/O that was left in program.ts
+│   ├── changesets.ts
+│   └── commit-and-pr.ts            #   one module: the PR must describe a commit that exists
 ├── layers/
 │   └── app.ts             # makeAppLayer(dryRun, { runtimeLive }) - layer composition
 ├── services/
@@ -58,11 +76,11 @@ src/
 
 __test__/
 ├── unit/                  # mirrors src/ — every unit suite lives here, not beside the source
-│   ├── program.inputs.test.ts   # INPUT_*-keyed tests for readInputs
-│   ├── program.inner.test.ts    # orchestration/log-stream tests for innerProgram
-│   ├── program.install.test.ts  # runInstall command dispatch
+│   ├── program.inner.test.ts    # THE log-stream contract suite (see @./08-testing.md)
+│   ├── format.test.ts           # shape of the decision record; wording owned by the above
+│   ├── generate-schema.test.ts  # JSON Schema drift guard
 │   ├── doubles.test.ts          # self-tests for the shared doubles
-│   ├── services/…  utils/…  schemas/…  errors/…
+│   ├── schema/…  steps/…  services/…  utils/…  errors/…
 ├── integration/           # real-IO suites (workspaces, lockfile compare, changesets, runtimes)
 └── utils/                 # RESERVED helper modules — excluded from collection (see 08-testing)
     ├── action-doubles.ts  # in-memory ActionState / GitHubApp / ActionOutputs doubles
@@ -75,7 +93,9 @@ __test__/
   provisions the GitHub App installation token; `main.ts` is a thin wrapper
   that calls `Action.run(program)`; `post.ts` reports total duration and revokes
   the token. The testable Effect program lives in `program.ts` so tests can
-  import it without triggering module-level execution. The build
+  import it without triggering module-level execution — and every entry point
+  carries the same `process.env.GITHUB_ACTIONS` guard, so importing one never
+  runs it. The build
   (`@savvy-web/github-action-builder`) takes the three entry points from
   `action.config.ts`.
 - **Effect v4 / `@effected` kit:** the action runs on Effect v4 and the
@@ -176,7 +196,11 @@ Node process. `pre.ts` provisions the installation token (`GitHubToken.provision
 with a fail-fast scope check) and records the start time to `ActionState`;
 `post.ts` reports total duration and revokes the token (`GitHubToken.dispose`,
 guarded so it never fails the workflow). The dependency-update workflow below
-runs entirely in the `main` phase, implemented in `src/program.ts`.
+runs entirely in the `main` phase. `src/program.ts` **composes** it — it reads
+inputs, runs the steps in order, folds their results into outputs and reports —
+while each step's body lives in its own module under `src/steps/`. `program.ts`
+performs no I/O and builds no strings of its own; a step doing either is the
+signal it belongs in `steps/` or `format.ts`.
 
 **Steps are named, not numbered.** Once the package-manager, config-dependency
 and install steps each dispatch on the detected package manager there is no

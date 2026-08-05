@@ -18,7 +18,7 @@ implementation-plans: []
 
 ## Overview
 
-Types are defined using Effect Schema (v4) in `src/schemas/domain.ts`. Error
+Types are defined using Effect Schema (v4) in `src/schema/domain.ts`. Error
 types use `Schema.TaggedErrorClass` in `src/errors/errors.ts`. Module-level
 types (e.g. `PackageManagerUpgradeOutcome`, `DetectedPm`) are defined in their
 respective service files.
@@ -30,9 +30,9 @@ Effect v4 Schema spellings used throughout: literal unions are
 `.check(...)` (e.g. `Schema.String.check(Schema.isMinLength(1))`) rather than
 `.pipe(Schema.…)`.
 
-## Domain Schemas (src/schemas/domain.ts)
+## Domain Schemas (src/schema/domain.ts)
 
-See `src/schemas/domain.ts` for the full set of `Schema.Struct` definitions
+See `src/schema/domain.ts` for the full set of `Schema.Struct` definitions
 (`BranchResult`, `DependencyChange`, `ChangedPackage`, `ChangesetFile`,
 `PullRequestResult`, `CatalogDelta`, `LockfileChange`). Each schema derives its
 TypeScript type via `typeof Schema.Type`.
@@ -88,6 +88,75 @@ export const CatalogDelta = Schema.Struct({
  action: Schema.Literals(["added", "updated", "removed", "kept"]),
 });
 ```
+
+## The structured `result` output (src/schema/domain.ts)
+
+`RunResultDocument` is the whole run as one machine-readable document, published
+as the `result` action output **alongside — never instead of** — the four scalar
+outputs, which are unchanged.
+
+```typescript
+export const RunResultDocument = Schema.Struct({
+ schemaVersion: Schema.Literal(1),
+ hasChanges: Schema.Boolean,
+ dryRun: Schema.Boolean,
+ packageManager: Schema.NullOr(Schema.Literals(["pnpm", "bun", "npm"])),
+ workspaceRoot: Schema.String,
+ branch: Schema.String,
+ targetBranch: Schema.String,
+ updates: Schema.Array(DependencyUpdateResult),
+ catalogDeltas: Schema.Array(CatalogDelta),
+ lockfileChanges: Schema.Array(LockfileChange),
+ changesets: Schema.Array(ChangesetFile),
+ pullRequest: Schema.NullOr(PullRequestResult),
+});
+```
+
+Three properties are load-bearing, each with what would falsify it:
+
+- **Composed from the schemas the run already produces**, not a parallel
+  reporting shape. Two shapes would drift, and the drift would be invisible
+  because both would still serialize. *Falsified if* a field here stops
+  referencing a domain schema and starts restating one.
+- **The baseline is an empty-run document, not an empty string** — so a consumer
+  runs `fromJSON(...)` unconditionally rather than guarding. Pinned by
+  `__test__/unit/schema/outputs.test.ts`, which asserts it parses **and decodes
+  against this schema**. *Falsified if* `initialOutputs.result` becomes `""`.
+- **`packageManager` is nullable, not a placeholder.** A run that ended before
+  detection has no package manager, and a value that decodes, serializes and is
+  false is worse than an absent one: a consumer branching on it cannot tell it is
+  branching on a lie. `pullRequest: null` already establishes absence-is-null here.
+
+`PullRequestResult.number` is `Schema.Int`, not `Schema.Number`. The ajv strict
+gate forced this and was right — `Schema.Number` renders as an `anyOf` modelling
+`NaN`/`Infinity` as strings, so the `> 0` refinement landed in a typeless
+`allOf` branch. We had been modelling a PR number as possibly `NaN`.
+
+### The generated JSON Schema
+
+`lib/scripts/generate-schema.ts` serializes `RunResultDocument` to
+`docs/schema/run-result.schema.json` via `@effected/schemastore` (a
+**devDependency pinned exactly at `0.2.1`**, not a caret range — it is build
+tooling, not shipped code), using its
+`SchemaPipeline.run` (structural lint + ajv strict gate + content-compare write).
+It lives in `lib/scripts/` rather than `scripts/` because that path is
+cache-invalidating for turbo. Run with `pnpm generate-schema`.
+
+`__test__/unit/generate-schema.test.ts` imports the generator's **own exported
+`targets`** and runs `SchemaPipeline.check` — the identical walk without writing.
+Importing the same constant is the point: a test that rebuilt its own target list
+would pass while the generator wrote something else. It asserts three things, and
+two exist because `wouldWrite: false` alone is not sufficient evidence:
+
+| assertion | what it catches |
+| --- | --- |
+| `targets.length > 0` | `check([])` trivially reports no drift |
+| `wouldWrite === false` | the actual staleness |
+| `blocked === false` | a schema so broken it can *never* generate also reports no pending write |
+
+The pipeline classifies a write as `contract` (consumer-visible break) or
+`annotations` (documentation only) — verified end to end by driving the
+generator, since vitest truncates the message before it renders.
 
 ## Package-Manager Types (src/services/package-manager.ts)
 

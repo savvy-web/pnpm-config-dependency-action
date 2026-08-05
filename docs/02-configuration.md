@@ -315,6 +315,8 @@ auto-merge: squash # Enable auto-merge with squash strategy
 
 ## Outputs
 
+Every declared output is set on **every** exit path, including a run that fails before it does any work. A run that aborts while reading its inputs still publishes `has-changes: "false"`, `updates-count: "0"`, empty PR outputs and an empty-run `result` document. Earlier versions left the outputs unset on an early exit, so a condition such as `if: steps.deps.outputs.has-changes == 'false'` compared against the empty string and did not match; workflows carrying a workaround for that can drop it.
+
 ### `pr-number`
 
 The pull request number, if a PR was created or updated. Empty if no PR was
@@ -331,6 +333,79 @@ The number of dependencies that were updated (string).
 ### `has-changes`
 
 Whether any dependency changes were detected (`"true"` or `"false"`).
+
+### `result`
+
+The complete run as a single JSON document. Its shape is published as a JSON Schema at [`docs/schema/run-result.schema.json`](./schema/run-result.schema.json), generated from the action's own types, which is the authoritative field list.
+
+The property to design around: `result` is **always valid JSON**. A run that did nothing, or that failed before it detected anything, publishes an empty-run document rather than an empty string, so a consuming step can call `fromJSON()` unconditionally instead of guarding for the empty case. Every array is present and empty rather than omitted, so indexing into one is safe without a length check.
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `schemaVersion` | `1` | Document format version, incremented only on a breaking change to this shape |
+| `hasChanges` | boolean | Whether the run produced any committable change |
+| `dryRun` | boolean | Whether the run was a rehearsal that skipped commit, push and PR |
+| `packageManager` | `"pnpm"` \| `"bun"` \| `"npm"` \| `null` | The package manager detected for this run; `null` when the run ended before detection |
+| `workspaceRoot` | string | Absolute path of the workspace root every step read and wrote at |
+| `branch` | string | The update branch this run wrote to |
+| `targetBranch` | string | The branch the pull request targets |
+| `updates` | array | Every dependency, runtime and package-manager change, one entry per (path, dependency, section) |
+| `catalogDeltas` | array | Per-catalog merge outcomes; non-empty only under bun's compat-catalog mode |
+| `lockfileChanges` | array | Resolved-version movements between the before and after lockfile snapshots |
+| `changesets` | array | Changesets written by the changeset step |
+| `pullRequest` | object \| `null` | The pull request opened or updated; `null` on a dry run or a PR step that degraded to a warning |
+
+`packageManager` and `pullRequest` are nullable rather than carrying a placeholder: a value that parses and is false is worse than an absent one, because a consumer branching on it cannot tell that it is branching on a lie.
+
+Only a run that reaches the end with changes populates the document. Every earlier exit — no changes detected, a failed `run` command, an aborted input read — leaves `result` at the empty-run baseline, which is exactly this:
+
+```json
+{
+  "schemaVersion": 1,
+  "hasChanges": false,
+  "dryRun": false,
+  "packageManager": null,
+  "workspaceRoot": "",
+  "branch": "",
+  "targetBranch": "",
+  "updates": [],
+  "catalogDeltas": [],
+  "lockfileChanges": [],
+  "changesets": [],
+  "pullRequest": null
+}
+```
+
+So check `hasChanges` (or the `has-changes` output) before trusting the context fields — a no-changes run reports `packageManager: null` even though it did detect one.
+
+### Using the `result` document
+
+`result` is a string, so a workflow expression has to parse it with `fromJSON()` before reading a field:
+
+```yaml
+- uses: savvy-web/silk-update-action@v4
+  id: deps
+  with:
+    app-client-id: ${{ vars.APP_CLIENT_ID }}
+    app-private-key: ${{ secrets.APP_PRIVATE_KEY }}
+    dependencies: |
+      effect
+
+- name: List what moved
+  env:
+    RESULT: ${{ steps.deps.outputs.result }}
+  run: echo "$RESULT" | jq -r '.updates[] | "\(.dependency) \(.from) -> \(.to)"'
+  # effect ^4.0.0 -> ^4.1.0
+
+- name: Notify only when a PR exists
+  if: fromJSON(steps.deps.outputs.result).pullRequest != null
+  run: echo "Opened ${{ fromJSON(steps.deps.outputs.result).pullRequest.url }}"
+  # Opened https://github.com/owner/repo/pull/123
+```
+
+Because the document is always parseable, the `if:` condition above needs no guard for the empty case — on a run with no PR it evaluates `null != null` and the step is skipped.
+
+Passing the document through an environment variable, as the `jq` step does, keeps a value out of the shell command line. Reading a field directly in `${{ }}` is fine for a number, a URL or a boolean.
 
 ### Using outputs
 

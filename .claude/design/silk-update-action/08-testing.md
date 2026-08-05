@@ -71,7 +71,7 @@ Shared helpers currently in that directory:
 
 ## Notable suites
 
-- **Input parsing** (`unit/program.inputs.test.ts`) — 12 tests over the exported
+- **Input parsing** (`unit/schema/inputs.test.ts`) — 12 tests over the exported
   `readInputs`, keyed on a **runner-shaped** environment (`INPUT_*`, mangled with
   only spaces replaced, so `upgrade-runtime-node` → `INPUT_UPGRADE-RUNTIME-NODE`)
   injected through `ActionInput.layer`, never `process.env`. These exist because
@@ -95,7 +95,7 @@ Shared helpers currently in that directory:
   over a temp-dir fixture), as is `PackageManagerUpgradeLive` over an in-memory
   registry, so the dispatch and the unsatisfiable-range path are genuinely
   resolved rather than mocked into existence.
-- **Install dispatch** (`unit/program.install.test.ts`) — `runInstall` per package
+- **Install dispatch** (`unit/steps/install.test.ts`) — `runInstall` per package
   manager over a `ScriptedSpawner`, asserting the command lines and their order,
   and that the npm path unlinks `package-lock.json` through `node:fs`.
 - **Entry points** (`unit/main.test.ts`, `unit/main.effect.test.ts`,
@@ -107,7 +107,7 @@ Shared helpers currently in that directory:
   persistence, duration reporting and unconditional revocation.
 - **Doubles self-tests** (`unit/doubles.test.ts`) — see the reserved-directory note
   above.
-- **Schemas and errors** (`unit/schemas/domain.test.ts`, `unit/errors/errors.test.ts`).
+- **Schemas and errors** (`unit/schema/domain.test.ts`, `unit/errors/errors.test.ts`).
 - **Dependency services** (`unit/services/config-deps.test.ts`,
   `regular-deps.test.ts`, `catalog-config-deps.test.ts`, `module-catalogs.test.ts`,
   `peer-sync.test.ts`, `package-manager.test.ts`,

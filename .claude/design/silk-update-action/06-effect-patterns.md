@@ -3,8 +3,8 @@ status: current
 module: silk-update-action
 category: architecture
 created: 2026-02-20
-updated: 2026-07-26
-last-synced: 2026-07-26
+updated: 2026-08-05
+last-synced: 2026-08-05
 completeness: 95
 related:
   - ./_index.md
@@ -139,9 +139,22 @@ failure), selected by `runtimeLive`. `resolve({ range })` → `.latest`.
 - `Report` / `ReportLive` — `PullRequest`
 
 Stateless concerns (`detectPackageManager`, `syncPeers`, `fetchModuleCatalogs`,
-the `WorkspaceYaml` and `Lockfile` standalone helpers) export functions used
-directly by `program.ts`. `syncPeers` and `compareLockfiles` require
+the `WorkspaceYaml` and `Lockfile` standalone helpers) export functions consumed
+by the step modules in `src/steps/`, which is what `program.ts` composes — it no
+longer calls them directly. `syncPeers` and `compareLockfiles` require
 `WorkspaceDiscovery` in their environment.
+
+### Step modules as an error-channel discipline
+
+`src/steps/` is where this codebase's typed-error posture is most visible: each
+step declares its own error channel, and **four declare `never`**
+(`custom-commands`, `regular-dependencies`, `upgrade-package-manager`,
+`upgrade-runtimes`). That is not a comment claiming resilience — it is a
+signature the compiler enforces, and it means the degradation happens *inside*
+the step rather than being left to a caller who might forget. Each module's doc
+comment names its **failure posture** (fail-the-job or degrade-to-warning) in
+those words, so the intent and the type can be checked against each other. See
+the table in @./04-module-entry-points.md.
 
 ### Layer composition patterns worth copying
 
@@ -152,9 +165,18 @@ directly by `program.ts`. `syncPeers` and `compareLockfiles` require
   spawner in the layer and wraps each member with `withSpawner`, while
   deliberately *not* resolving `Repo`.
 - **`Layer.orDie` at the edge.** `GitHubToken.clientLayer()` and
-  `Repo.layerFromConfig()` are `orDie`-d so a missing token or repo is a defect,
-  keeping the resulting layer at `E = never` for the `withCheckRun` callback,
-  which requires `R = never`.
+  `Repo.layerFromConfig()` are `orDie`-d so a missing token or repo is a defect
+  rather than an error every caller must handle, keeping the resulting layer at
+  `E = never`.
+- **Provide the app layer once.** `innerProgram` provides `appLayer` a single
+  time, around the whole body. It used to provide it a second time *inside* the
+  `withCheckRun` callback, justified by "that callback requires `R = never`" —
+  which was false. `withCheckRun` is generic in `R`
+  (`use: (id, conclude) => Effect<A, E, R>` returning
+  `Effect<A, E | GitHubError, R | Repo>`, `@effected/github/index.d.ts:1049`), so
+  the callback inherits the surrounding context like any other effect. The claim
+  was true of an older kit whose callback *was* `R`-less; the kit's own TSDoc
+  notes the change. Full write-up in @./04-module-entry-points.md.
 
 ```typescript
 // main.ts — no { layer }; program needs only what Action.run injects:
@@ -262,11 +284,16 @@ failed), `neutral` (no changes) and `success`.
 
 ```typescript
 // program.ts
-import { ActionEnvironment, ActionInput } from "@effected/github-actions";
-import { Config, Duration, Effect, References } from "effect";
+import { ActionEnvironment } from "@effected/github-actions";
+import { Duration, Effect, References } from "effect";
 import { makeAppLayer } from "./layers/app.js";
+import { readInputs } from "./schema/inputs.js";
+import { emitOutputs, initialOutputs } from "./schema/outputs.js";
 
 export const program = Effect.gen(function* () {
+ // Publish the all-disabled baseline BEFORE any work, so every declared output
+ // has a value on every exit path — including a failure in `readInputs` itself.
+ yield* emitOutputs(initialOutputs);
  const { inputs, dryRun, timeout, runtimeLive } = yield* readInputs;
 
  const env = yield* ActionEnvironment;
@@ -282,13 +309,17 @@ export const program = Effect.gen(function* () {
   }));
 });
 
-// main.ts
-Action.run(program);
+// main.ts — guarded, so importing the module never runs the action
+if (process.env.GITHUB_ACTIONS) {
+ await Action.run(program);
+}
 ```
 
-**Testing:** tests import `readInputs`, `program`, `innerProgram`, `runCommands`
-and `runInstall` directly from `program.ts` — `main.ts` (with its module-level
-`Action.run`) is never evaluated. Kit services are injected via `Layer.succeed`
+**Testing:** tests import each export from the module that owns it — `program` /
+`innerProgram` from `program.ts`, `readInputs` from `schema/inputs.ts`,
+`runCommands` from `steps/custom-commands.ts`, `runInstall` from
+`steps/install.ts` — so `main.ts` (with its module-level, guarded `Action.run`)
+is never evaluated. Kit services are injected via `Layer.succeed`
 fakes, each service's `layerTest`, or the local doubles in
 `__test__/utils/action-doubles.ts`; commands are scripted with
 `@effected/commands`' `ScriptedSpawner`. Config inputs are injected through

@@ -3,8 +3,8 @@ status: current
 module: silk-update-action
 category: integration
 created: 2026-02-20
-updated: 2026-07-26
-last-synced: 2026-07-26
+updated: 2026-08-05
+last-synced: 2026-08-05
 completeness: 95
 related:
   - ./_index.md
@@ -94,12 +94,20 @@ supports cutting from one branch and merging into another (e.g. cut from `dev`, 
 into `main`).
 
 **Base-history preflight:** when changesets are enabled,
-`BranchManager.ensureBaseHistory(target)` runs before the changeset step, because
-silk's `DepsRegen` diffs `merge-base(target) → worktree` and needs both the base
-ref and a common ancestor locally. A `fetch-depth: 0` checkout satisfies this and
-the preflight is then a no-op; on a shallower checkout it best-effort fetches,
-unshallows and materializes a local ref, warning non-fatally if the merge-base
-still cannot be resolved.
+`BranchManager.ensureBaseHistory(target, workspaceRoot)` runs before the
+changeset step, because silk's `DepsRegen` diffs `merge-base(target) → worktree`
+and needs both the base ref and a common ancestor locally. A `fetch-depth: 0`
+checkout satisfies this and the preflight is then a no-op; on a shallower
+checkout it best-effort fetches, unshallows and materializes a local ref,
+warning non-fatally if the merge-base still cannot be resolved.
+
+The workspace root is passed explicitly and every git command in the preflight
+runs there. It previously ran at `process.cwd()`, which produced a **silent**
+wrong answer when the action was invoked from a subdirectory: the probe resolved
+against the wrong directory, the preflight decided it had nothing to do, and the
+changeset step then diffed against a base it could not see — yielding no
+changesets, which is indistinguishable from "no versionable changes". See
+@./05-module-library.md.
 
 **Why reset rather than rebase:** simpler logic, no conflict resolution, always a
 clean state — appropriate because the branch only ever contains automated
@@ -145,7 +153,10 @@ evolution of the change.
 (the GraphQL `enablePullRequestAutoMerge` mutation — no REST endpoint exists)
 rather than a field on create:
 
-- **Values:** `""` (disabled, default), `"merge"`, `"squash"`, `"rebase"`.
+- **Values:** `""` (disabled, default), `"merge"`, `"squash"`, `"rebase"`. The
+  value is **validated in `readInputs` and typed as that union**, not cast at the
+  call site, so a typo fails during input parsing rather than arriving here as an
+  invalid GraphQL enum.
 - **Requirements:** the repository must allow auto-merge, the target branch needs
   branch protection with required status checks, and the App needs
   `pull-requests: write`.
@@ -153,8 +164,13 @@ rather than a field on create:
   have auto-merge enabled, and that must not fail a run whose PR was created
   successfully.
 
-A `createOrUpdatePR` failure is caught in `innerProgram`, logged as a warning, and
-reported as a `FAILED` step line — the run still concludes and writes its summary.
+A PR failure is caught in the `commit-and-pr` step, logged as a warning, and
+reported as a `FAILED (see warning above)` step line — the run still concludes
+and writes its summary. That asymmetry within one step is deliberate: the
+**commit** propagates, because a PR describing a commit that does not exist
+would be a lie, whereas by the time the PR call runs the commit is already
+pushed and durable, so failing the run would report a red job for work that
+actually landed. The next run upserts the PR.
 
 ## Verified Commits via GitHub API
 
@@ -172,10 +188,12 @@ work automatically with GitHub App tokens, and match how GitHub's own bots behav
 `git -c core.fileMode=false status --porcelain`. Executable-bit-only flips (e.g.
 husky chmod-ing hooks during a `run` command) do not survive a content-based API
 commit at mode 100644, so counting them would produce an empty commit and a
-spurious PR. `program.ts`'s change detection queries status the same way, and the
-two must stay consistent. The status output is read verbatim (via `Run.collect`,
-not the trimming `Run.text`) because `--porcelain`'s two-character status field is
-column-aligned.
+spurious PR. The run's change-detection step (`steps/detect-changes.ts`) queries
+status the same way, and **the two must stay consistent** — that module's own doc
+comment says so, because a divergence would make the run's verdict and the
+commit's contents disagree. The status output is read verbatim (via
+`Run.collect`, not the trimming `Run.text`) because `--porcelain`'s
+two-character status field is column-aligned.
 
 After committing, the working tree is synced with `git fetch origin <branch>` +
 `git reset --hard origin/<branch>` — `git checkout` would refuse to overwrite the
