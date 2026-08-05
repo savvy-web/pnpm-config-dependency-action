@@ -78,7 +78,7 @@ export class BranchManager extends Context.Service<
 		 * satisfies both. This is the safety net for shallower checkouts: it probes
 		 * first and only fetches/deepens when the merge-base is missing.
 		 */
-		readonly ensureBaseHistory: (base: string) => Effect.Effect<void, GitRunError>;
+		readonly ensureBaseHistory: (base: string, workspaceRoot: string) => Effect.Effect<void, GitRunError>;
 	}
 >()("BranchManager") {}
 
@@ -106,7 +106,7 @@ export const BranchManagerLive = Layer.effect(
 			commitChanges: (message, branchName, workspaceRoot) =>
 				withSpawner(commitChangesImpl(commit, message, branchName, workspaceRoot)),
 			validateBranches: (source, target) => validateBranchesImpl(branch, source, target),
-			ensureBaseHistory: (base) => withSpawner(ensureBaseHistoryImpl(base)),
+			ensureBaseHistory: (base, workspaceRoot) => withSpawner(ensureBaseHistoryImpl(base, workspaceRoot)),
 		};
 	}),
 );
@@ -120,6 +120,13 @@ const gitRun = (
 	...args: ReadonlyArray<string>
 ): Effect.Effect<string, GitRunError, ChildProcessSpawner.ChildProcessSpawner> =>
 	Run.text(ChildProcess.make("git", [...args]));
+
+/** {@link gitRun}, anchored at an explicit working directory. */
+const gitRunIn = (
+	cwd: string,
+	...args: ReadonlyArray<string>
+): Effect.Effect<string, GitRunError, ChildProcessSpawner.ChildProcessSpawner> =>
+	Run.text(ChildProcess.make("git", [...args]).pipe(ChildProcess.setCwd(cwd)));
 
 /**
  * Run a git command in `cwd` and return stdout VERBATIM, failing on a non-zero
@@ -406,12 +413,15 @@ const commitChangesImpl = (
 	});
 
 /** True when `git merge-base <base> HEAD` resolves (ref exists AND a common ancestor is present). */
-const hasMergeBase = (base: string): Effect.Effect<boolean, never, ChildProcessSpawner.ChildProcessSpawner> =>
-	Run.succeeds(ChildProcess.make("git", ["merge-base", base, "HEAD"]));
+const hasMergeBase = (
+	cwd: string,
+	base: string,
+): Effect.Effect<boolean, never, ChildProcessSpawner.ChildProcessSpawner> =>
+	Run.succeeds(ChildProcess.make("git", ["merge-base", base, "HEAD"]).pipe(ChildProcess.setCwd(cwd)));
 
 /** True when the repository is a shallow clone (history truncated). */
-const isShallowRepo = (): Effect.Effect<boolean, never, ChildProcessSpawner.ChildProcessSpawner> =>
-	gitRun("rev-parse", "--is-shallow-repository").pipe(
+const isShallowRepo = (cwd: string): Effect.Effect<boolean, never, ChildProcessSpawner.ChildProcessSpawner> =>
+	gitRunIn(cwd, "rev-parse", "--is-shallow-repository").pipe(
 		Effect.map((out) => out.trim() === "true"),
 		Effect.catch(() => Effect.succeed(false)),
 	);
@@ -430,9 +440,10 @@ const isShallowRepo = (): Effect.Effect<boolean, never, ChildProcessSpawner.Chil
  */
 const ensureBaseHistoryImpl = (
 	base: string,
+	workspaceRoot: string,
 ): Effect.Effect<void, GitRunError, ChildProcessSpawner.ChildProcessSpawner> =>
 	Effect.gen(function* () {
-		if (yield* hasMergeBase(base)) {
+		if (yield* hasMergeBase(workspaceRoot, base)) {
 			yield* Effect.logDebug(`Base history for "${base}" already present; no fetch needed`);
 			return;
 		}
@@ -441,13 +452,15 @@ const ensureBaseHistoryImpl = (
 
 		// Ensure the remote-tracking ref exists, deepen a shallow clone, then
 		// materialize a local ref so `git merge-base <base> HEAD` resolves by name.
-		yield* gitRun("fetch", "origin", `+refs/heads/${base}:refs/remotes/origin/${base}`).pipe(Effect.ignore);
-		if (yield* isShallowRepo()) {
-			yield* gitRun("fetch", "--unshallow", "origin").pipe(Effect.ignore);
+		yield* gitRunIn(workspaceRoot, "fetch", "origin", `+refs/heads/${base}:refs/remotes/origin/${base}`).pipe(
+			Effect.ignore,
+		);
+		if (yield* isShallowRepo(workspaceRoot)) {
+			yield* gitRunIn(workspaceRoot, "fetch", "--unshallow", "origin").pipe(Effect.ignore);
 		}
-		yield* gitRun("branch", "-f", base, `refs/remotes/origin/${base}`).pipe(Effect.ignore);
+		yield* gitRunIn(workspaceRoot, "branch", "-f", base, `refs/remotes/origin/${base}`).pipe(Effect.ignore);
 
-		if (!(yield* hasMergeBase(base))) {
+		if (!(yield* hasMergeBase(workspaceRoot, base))) {
 			yield* Effect.logWarning(
 				`Could not establish a merge-base between "${base}" and HEAD. The changeset step diffs against ` +
 					`this branch — check out with fetch-depth: 0 (and ensure "${base}" is fetched).`,

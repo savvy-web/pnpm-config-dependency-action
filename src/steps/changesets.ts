@@ -58,7 +58,7 @@ export const changesetsStep = (
 		// DepsRegen diffs against merge-base(target-branch); make sure that history
 		// is available locally before it runs (no-op on a fetch-depth: 0 checkout).
 		const branchManager = yield* BranchManager;
-		yield* branchManager.ensureBaseHistory(targetBranch);
+		yield* branchManager.ensureBaseHistory(targetBranch, workspaceRoot);
 
 		const changesetsService = yield* Changesets;
 		const files = yield* changesetsService.create(workspaceRoot, targetBranch);

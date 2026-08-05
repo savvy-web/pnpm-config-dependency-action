@@ -123,6 +123,49 @@ describe("release-age", () => {
 			expect(gate).toEqual({ ageMinutes: 1440, exclude: ["@effected/*", "prettier"] });
 		});
 
+		it("survives a hook that writes to stdout — the silent gate-loss regression", async () => {
+			// THE bug: the parent used to `JSON.parse` the child's ENTIRE stdout, so a
+			// single `console.log` in a pnpmfile hook made the parse throw. The path
+			// fails open by design, so the run then proceeded with NO release-age gate
+			// at all, silently — and could propose a version pnpm rejects at install
+			// with ERR_PNPM_NO_MATURE_MATCHING_VERSION. That is exactly the failure the
+			// gate exists to prevent, produced by the gate's own error handling.
+			//
+			// Hooks are arbitrary user code and real ones do log, so this is the
+			// ordinary case rather than an exotic one.
+			writeWorkspaceYaml(
+				["packages:", "  - .", "configDependencies:", '  chatty-plugin: "1.0.0+sha512-abc"', ""].join("\n"),
+			);
+			writeConfigDepPnpmfile(
+				"chatty-plugin",
+				"pnpmfile.cjs",
+				[
+					"module.exports = {",
+					"  hooks: {",
+					"    updateConfig(config) {",
+					'      console.log("chatty-plugin: applying policy");',
+					// Logged on exit, so it lands AFTER the payload line. This is what
+					// makes the sentinel load-bearing rather than decorative: a
+					// "take the last non-empty line" fix parses THIS and silently
+					// returns the wrong gate. Realistic — cleanup logging is common.
+					'      process.on("exit", () => console.log(JSON.stringify({ minimumReleaseAge: 1 })));',
+					"      config.minimumReleaseAge = 1440;",
+					'      config.minimumReleaseAgeExclude = ["@effected/*"];',
+					"      return config;",
+					"    },",
+					"  },",
+					"};",
+					"",
+				].join("\n"),
+			);
+
+			const gate = await runWith(replayHookReleaseAge(root), NodeServices.layer);
+
+			// The hook's real contribution survives the noise, and the decoy JSON is
+			// NOT mistaken for the payload.
+			expect(gate).toEqual({ ageMinutes: 1440, exclude: ["@effected/*"] });
+		});
+
 		it("replays an ESM-only pnpmfile.mjs", async () => {
 			writeWorkspaceYaml(
 				["packages:", "  - .", "configDependencies:", '  esm-plugin: "1.0.0+sha512-abc"', ""].join("\n"),

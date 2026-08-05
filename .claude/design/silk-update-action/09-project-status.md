@@ -185,11 +185,6 @@ rather than silently performing a package-manager-only run.
     **byte-identical**. Note that the test suite could *not* have caught a broken
     escape here: `depKey` is used symmetrically on both sides of every
     comparison, so a wrong separator would still compare equal to itself.
-- **Deferred fix, not yet applied:** `BranchManager.ensureBaseHistory` still runs
-  its git commands at `process.cwd()` while every other step uses `detected.root`
-  — the same defect class as the `commitChanges` bug fixed in the entry-guard
-  wave. Held back deliberately so it does not ride along inside the `steps/`
-  restructure, which must stay behavior-preserving.
 
 **Next steps:**
 

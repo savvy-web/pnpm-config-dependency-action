@@ -90,6 +90,47 @@ export const readInlineReleaseAge = (
  * because discovery here is best-effort — a lost gate degrades to today's
  * behavior instead of failing the run.
  */
+/**
+ * Marks the replay child's payload line, distinguishing it from anything a
+ * config-dependency hook wrote to stdout.
+ *
+ * @remarks
+ * A pnpmfile hook is arbitrary user code and may log freely — several real ones
+ * do. Before this framing existed the parent ran `JSON.parse` over the child's
+ * **entire** stdout, so a single `console.log` in a hook made the parse throw,
+ * and the fail-open catch degraded the run to **no gate at all**, silently. That
+ * is the precise failure the gate exists to prevent: the action would then
+ * propose a version pnpm rejects at install with
+ * `ERR_PNPM_NO_MATURE_MATCHING_VERSION`.
+ *
+ * A sentinel rather than "just take the last line", because a hook that logs
+ * valid JSON as its final output would otherwise be parsed as the payload —
+ * which is not hypothetical for tooling that dumps its resolved config.
+ */
+const REPLAY_SENTINEL = "__silk_release_age_payload__:";
+
+/**
+ * Pull the framed payload out of the replay child's stdout.
+ *
+ * Scans from the end so the payload wins even if a hook logged something that
+ * happens to contain the sentinel earlier. Returns `null` when no framed line is
+ * present, which the caller reports distinctly from "framed but unparseable" —
+ * the two mean different things and previously looked identical.
+ *
+ * Exported for direct testing: the whole defect lived in this parse, so the test
+ * that guards it should not need to spawn a child to reach it.
+ */
+export const extractReplayPayload = (stdout: string): string | null => {
+	const lines = stdout.split("\n");
+	for (let i = lines.length - 1; i >= 0; i -= 1) {
+		const line = lines[i];
+		if (line.startsWith(REPLAY_SENTINEL)) {
+			return line.slice(REPLAY_SENTINEL.length);
+		}
+	}
+	return null;
+};
+
 const REPLAY_SCRIPT = `
 const [root, ...names] = process.argv.slice(1);
 const { pathToFileURL } = await import("node:url");
@@ -122,10 +163,10 @@ for (const name of names) {
 		if (next && typeof next === "object") config = next;
 	} catch {}
 }
-process.stdout.write(JSON.stringify({
+process.stdout.write("\\n" + ${JSON.stringify(REPLAY_SENTINEL)} + JSON.stringify({
 	minimumReleaseAge: config.minimumReleaseAge,
 	minimumReleaseAgeExclude: config.minimumReleaseAgeExclude,
-}));
+}) + "\\n");
 `;
 
 /**
@@ -158,8 +199,16 @@ export const replayHookReleaseAge = (
 			return null;
 		}
 
+		const payload = extractReplayPayload(result.stdout);
+		if (payload === null) {
+			yield* Effect.logWarning(
+				"Config-dependency hook replay emitted no recognizable payload; release-age gate from hooks unavailable",
+			);
+			return null;
+		}
+
 		const parsed = yield* Effect.try({
-			try: () => JSON.parse(result.stdout) as { minimumReleaseAge?: unknown; minimumReleaseAgeExclude?: unknown },
+			try: () => JSON.parse(payload) as { minimumReleaseAge?: unknown; minimumReleaseAgeExclude?: unknown },
 			catch: () => null,
 		}).pipe(Effect.catch(() => Effect.succeed(null)));
 		if (parsed === null) {

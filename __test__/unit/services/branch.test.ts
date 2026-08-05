@@ -544,7 +544,7 @@ describe("BranchManager.ensureBaseHistory", () => {
 		const { result } = runWithBranchManager(
 			Effect.gen(function* () {
 				const manager = yield* BranchManager;
-				return yield* manager.ensureBaseHistory("main");
+				return yield* manager.ensureBaseHistory("main", "/ws");
 			}),
 			undefined,
 			responses,
@@ -565,12 +565,50 @@ describe("BranchManager.ensureBaseHistory", () => {
 		const { result } = runWithBranchManager(
 			Effect.gen(function* () {
 				const manager = yield* BranchManager;
-				return yield* manager.ensureBaseHistory("main");
+				return yield* manager.ensureBaseHistory("main", "/ws");
 			}),
 			undefined,
 			responses,
 		);
 		expect(Result.isSuccess(await result)).toBe(true);
+	});
+
+	it("runs every git command at the workspace root, not the process cwd", async () => {
+		// Regression, same defect class as the commitChanges cwd bug: every other
+		// step reads and writes at `detected.root`, but this one ran git wherever the
+		// process happened to be. The action can legitimately be invoked from a
+		// subdirectory, and then the merge-base probe and the recovery fetches all
+		// resolve against the wrong repository state.
+		//
+		// This asserts on the spawner's RECORDED cwd, not on command names — the
+		// suites above script by command line, which is cwd-blind and would pass
+		// against the buggy version. That blindness is why this bug survived a
+		// review and a full test suite.
+		const responses = new Map<string, ScriptResult>([
+			["git merge-base main HEAD", { exit: 1, stdout: "", stderr: "no merge base" }],
+			["git fetch origin +refs/heads/main:refs/remotes/origin/main", { exit: 0, stdout: "", stderr: "" }],
+			["git rev-parse --is-shallow-repository", { exit: 0, stdout: "true\n", stderr: "" }],
+			["git fetch --unshallow origin", { exit: 0, stdout: "", stderr: "" }],
+			["git branch -f main refs/remotes/origin/main", { exit: 0, stdout: "", stderr: "" }],
+		]);
+
+		const { spawner, result } = runWithBranchManager(
+			Effect.gen(function* () {
+				const manager = yield* BranchManager;
+				return yield* manager.ensureBaseHistory("main", "/some/workspace/root");
+			}),
+			undefined,
+			responses,
+		);
+
+		expect(Result.isSuccess(await result)).toBe(true);
+		// Every recovery command AND both merge-base probes must be anchored.
+		expect(spawner.spawns.length).toBeGreaterThan(0);
+		for (const spawn of spawner.spawns) {
+			expect(spawn.cwd, `${[spawn.command, ...spawn.args].join(" ")} ran at ${String(spawn.cwd)}`).toBe(
+				"/some/workspace/root",
+			);
+		}
 	});
 });
 
