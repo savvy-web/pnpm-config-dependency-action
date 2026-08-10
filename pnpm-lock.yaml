@@ -93,8 +93,8 @@ importers:
         version: 4.0.0-beta.101
     devDependencies:
       '@effect/vitest':
-        specifier: 4.0.0-beta.101
-        version: 4.0.0-beta.101(effect@4.0.0-beta.101)(vitest@4.1.10)
+        specifier: 4.0.0-beta.105
+        version: 4.0.0-beta.105(effect@4.0.0-beta.101)(vitest@4.1.10)
       '@effected/schemastore':
         specifier: 0.2.1
         version: 0.2.1(effect@4.0.0-beta.101)
@@ -423,11 +423,11 @@ packages:
     peerDependencies:
       effect: ^4.0.0-beta.101
 
-  '@effect/vitest@4.0.0-beta.101':
-    resolution: {integrity: sha512-F5Ur8pZYti0xkZFyb4hPZt8RrKQ1XBoC28ZkKxc7N1iPbhE9fWOvlWA1NC2XlN2wWG08yb5g5jR53LdOxjlhpQ==}
+  '@effect/vitest@4.0.0-beta.105':
+    resolution: {integrity: sha512-2t1J/H/+9hAKDC1S3iFyUVZJhdMpKvuggnOGNXPTmxZcVdxG/VkhjQjo7wzOHWs6SZcX8Cr/EsB+uiVAn9G0Ng==}
     peerDependencies:
-      effect: ^4.0.0-beta.101
-      vitest: ^3.0.0 || ^4.0.0
+      effect: ^4.0.0-beta.105
+      vitest: '>=4.1.0 <5.0.0'
 
   '@effected/commands@0.2.1':
     resolution: {integrity: sha512-ecssb0o2HtF27pdYBJPxGY5eES9erg7xcHc5NTDxFRGNjitqeEUSEdI+ZkI2uRwGftR6bDC8TotQ/HH3kuFNLQ==}
@@ -3837,7 +3837,7 @@ snapshots:
     dependencies:
       effect: 4.0.0-beta.101
 
-  '@effect/vitest@4.0.0-beta.101(effect@4.0.0-beta.101)(vitest@4.1.10)':
+  '@effect/vitest@4.0.0-beta.105(effect@4.0.0-beta.101)(vitest@4.1.10)':
     dependencies:
       effect: 4.0.0-beta.101
       vitest: 4.1.10(@types/node@26.1.2)(@vitest/coverage-istanbul@4.1.10)(@vitest/coverage-v8@4.1.10)(vite@8.2.0(@types/node@26.1.2)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.5)(yaml@2.9.0))
