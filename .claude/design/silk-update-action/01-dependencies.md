@@ -78,7 +78,7 @@ The action runs on **Effect v4** (`effect` / `@effect/platform-node` both resolv
   - GraphQL is a member of the client, not a separate `GitHubGraphQL` service.
 - `@effected/github-actions` + `@effected/github` together replace the whole
   `github-action-effects` layer stack; nothing in `src/` imports the old package.
-- `@effected/commands` (`^0.3.0`) — subprocess execution as **free functions** over core
+- `@effected/commands` (`^0.4.0`) — subprocess execution as **free functions** over core
   `ChildProcessSpawner`, not a service: `Run.collect` (exit code as a *result*, so a
   non-zero exit is a value rather than an error), `Run.text` / `Run.lines` / `Run.json`
   (typed failure on a non-zero exit) and `Run.succeeds` (boolean probe). Also ships
@@ -91,7 +91,7 @@ The action runs on **Effect v4** (`effect` / `@effect/platform-node` both resolv
     no code here parses column-aligned text any more. The trimming is still true of
     `Run.text` and still worth knowing before reading a fixed-width format with it;
     it is no longer a property this action depends on.
-- **`@effected/git` (`^0.5.2`) — adopted for `status` only.** `Git.status(cwd)` runs
+- **`@effected/git` (`^0.7.0`) — adopted for `status` only.** `Git.status(cwd)` runs
   `git status --porcelain -z` and returns typed `StatusEntry` values (`x`, `y`, `path`,
   `origPath`), and `Git.configSet(cwd, key, value)` writes the checkout's local config.
   Both status readers use it — `services/branch.ts` for the commit file list and
@@ -125,7 +125,7 @@ The action runs on **Effect v4** (`effect` / `@effect/platform-node` both resolv
     caller supplies the clock and missing timestamps drop the version) and
     `PartialReleaseAgeGate` (the permissive per-source contribution type, re-exported by
     `src/services/release-age.ts`).
-- `@effected/workspaces` (`^0.10.0`) — Effect-native workspace layer, consumed by `RegularDeps`,
+- `@effected/workspaces` (`^0.11.1`) — Effect-native workspace layer, consumed by `RegularDeps`,
   `PeerSync`, `Lockfile`, `CatalogConfigDeps` and `detectPackageManager`. **Root-bound at
   layer build:** the layers are static factories on the service classes
   (`WorkspaceRoot.layer`, `WorkspaceDiscovery.layer(opts?)`, `PackageManagerDetector.layer`,
@@ -194,14 +194,14 @@ The action runs on **Effect v4** (`effect` / `@effect/platform-node` both resolv
   `ClassifiedSpecifier` — read `.specifier.raw`), `ResolvedPackage`, and the PM-specific
   extension union tagged via `.extension._tag`. `Lockfile.format` records which package
   manager wrote the file.
-- **`WorkspaceCatalogs` (in `@effected/workspaces@0.10.0`) now owns release-age
+- **`WorkspaceCatalogs` (introduced in `@effected/workspaces@0.10.0`) now owns release-age
   discovery.** `releaseAgeGate()` combines the inline `pnpm-workspace.yaml` keys
   with the replayed config-dependency hooks; `src/services/release-age.ts` keeps
   only the fail-open wrapper and the filtering. The layer **must** be
   `layerWithConfigDependenciesSubprocess` — the in-process variant's computed
   dynamic `import()` is what rspack miscompiles into a context module, and that
-  is the sole reason this adoption waited on a release. `workspaces@0.10.0`
-  itself declares `@effected/commands: ^0.3.0`, so `Run.jsonLine` (the framing
+  is the sole reason this adoption waited on a release. `workspaces@0.11.1`
+  itself declares `@effected/commands: ^0.4.0`, so `Run.jsonLine` (the framing
   its replay child uses) arrives with it and needs no manual alignment.
   - **`Run.jsonLine` was evaluated and is SUBSUMED, not skipped.** It was the
     intended replacement for this repo's local `REPLAY_SENTINEL` framing — but
@@ -221,56 +221,54 @@ The action runs on **Effect v4** (`effect` / `@effect/platform-node` both resolv
   `Yaml.parse` / `Yaml.stringify` return Effects (rather than throwing like the `yaml` npm
   package), so `workspace-yaml.ts` yields them and maps failures into `FileSystemError`.
 
-### Duplicate resolutions — one is BACK, and its provenance changed
+### Duplicate resolutions — RESOLVED by the beta.107 wave
 
-**Current state, verified rather than assumed:** `@effected/npm` resolves a single
-copy (`0.8.3`). `@effected/workspaces` resolves **two** — `0.10.0` and `0.9.5`.
+**Current state, verified rather than assumed:** `@effected/workspaces` (`0.11.1`),
+`@effected/npm` (`0.9.0`) and `@effected/commands` (`0.4.0`) each resolve **exactly one
+copy**, and `effect` resolves one copy at `4.0.0-beta.107` tree-wide.
 
 ```text
 $ pnpm why @effected/workspaces
-…
-Found 2 versions of @effected/workspaces
+@effected/workspaces@0.11.1
+Found 1 version of @effected/workspaces
 ```
 
-**The provenance is not what it was, and this is the part that matters.** The old
-duplicate came *entirely* from the `@vitest-agent/plugin` devDependency tree, which is why
-this document could say it "never reaches the shipped artifact." That is **no longer true**:
-`0.9.5` now also arrives through **`@savvy-web/silk-effects@5.3.0`**, which is a *runtime*
-dependency of this action, and every runtime dependency is inlined into `dist/main.js`. So
-two copies of the workspaces kit are bundled, not one.
+**What this closed.** The duplicate this section used to document was real and *was* being
+bundled: `@savvy-web/silk-effects@5.3.0` declared `^0.9.5` while this action had moved to
+`^0.10.0`, and caret pins the minor on `0.x`, so the two ranges could not dedupe and two
+copies of the workspaces kit were inlined into `dist/main.js`. `silk-effects@5.5.2` moved
+onto the same wave, so the ranges now agree and the second copy is gone.
 
-The trigger is the caret trap documented above: this action moved to `^0.10.0` while
-silk-effects still declares `^0.9.5`, and caret pins the minor on `0.x`, so the two ranges
-cannot dedupe.
+The old entry's limit-statement is worth preserving as reasoning, because it is what made
+this worth tracking rather than shrugging at: Effect resolves services by the tag's **string
+id**, so a layer built from either copy satisfies a requirement from the other — safe *while
+the shapes agree*, but not safe by construction, since a version-gated member (as
+`WorkspaceCatalogs` was at `0.10.0`) exists on one copy and not the other, and a divergence
+in a shared tag's shape would typecheck against one copy and fail at runtime against the
+other.
 
-**On the "bundle size, not correctness" reasoning** — still *probably* right, but it is now
-load-bearing rather than academic, so state its limit. Effect resolves services by the tag's
-**string id**, so a layer built from either copy satisfies a requirement from the other.
-That is safe while the shapes agree. It is not safe by construction: `WorkspaceCatalogs` is
-new in `0.10.0`, so the `0.9.5` copy cannot provide it, and any future divergence in a
-*shared* tag's shape would typecheck against one copy and fail at runtime against the other.
-
-**What would settle it:** silk-effects widening or bumping its `@effected/workspaces` range
-so both resolve to `0.10.0`. Until then this is a real ~duplicate in the shipped bundle.
-
-*Verify with* `pnpm why @effected/workspaces` — **not** with the lockfile grep this
-document used to recommend. The grep reports *which* versions exist; only `pnpm why`
-reports *who pulls each one*, and provenance is the whole question here. The previous
-version of this section was updated to new version numbers while keeping the sentence
-"resolves exactly one copy of each," which was false at the moment it was written — because
-the numbers were refreshed and the claim they supported was not re-checked.
+*Verify with* `pnpm why <pkg>` — **not** with a lockfile grep. The grep reports *which*
+versions exist; only `pnpm why` reports *who pulls each one*, and provenance is the whole
+question. An earlier version of this section was updated to new version numbers while
+keeping the sentence "resolves exactly one copy of each," which was false at the moment it
+was written — the numbers were refreshed and the claim they supported was not re-checked.
+That trap applies to this rewrite too: the single-copy claim above is only as good as the
+last `pnpm why` run against the current lockfile.
 
 ## Build tooling
 
-- `@savvy-web/github-action-builder` (dev, `^2.2.2`) — rspack-based bundler that derives the
+- `@savvy-web/github-action-builder` (dev, `^2.2.3`) — rspack-based bundler that derives the
   pre/main/post entries from `action.config.ts` and inlines every runtime dependency into
   `dist/{pre,main,post}.js`. As of v2.1 it **minifies unconditionally** and folds license
   banners inline, so the committed `dist` carries attribution again. Current output:
-  ~1.29 MB minified (`dist/main.js`; `pre` and `post` are ~271 KB each).
+  ~1.3 MB minified (`dist/main.js`; `pre` and `post` are ~279 KB each).
 - `@savvy-web/silk` (dev) — silk tooling (commit/changeset conventions).
-- `@effect/vitest` (dev) — pinned **exactly** to the same beta as `effect`
-  (`4.0.0-beta.101`) and must move in lockstep with it. See @./08-testing.md.
-- `@effected/schemastore` (dev, pinned **exactly** at `0.2.1`) — builds, lints, gates and
+- `@effect/vitest` (dev) — reads **`catalog:effect`**, the same catalog entry as `effect`
+  itself, which pins both to `4.0.0-beta.107`. The required lockstep is therefore
+  structural rather than remembered: it used to be an exact literal that had to be
+  hand-bumped alongside every catalog advance, and a missed bump left the test framework a
+  beta behind the runtime it was testing. See @./08-testing.md.
+- `@effected/schemastore` (dev, `^0.3.0`) — builds, lints, gates and
   writes the JSON Schema for the `result` output. `lib/scripts/generate-schema.ts` hands it a
   `SchemaTarget` and `SchemaPipeline.run` does the rest: structural lint, the shipped ajv
   strict-mode gate, and a write **only when the document's content differs** — so a formatter

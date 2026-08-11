@@ -19,7 +19,7 @@ implementation-plans: []
 ## Overview
 
 Types are defined using Effect Schema (v4) in `src/schema/domain.ts`. Error
-types use `Schema.TaggedErrorClass` in `src/errors/errors.ts`. Module-level
+types use `Schema.TaggedError` in `src/errors/errors.ts`. Module-level
 types (e.g. `PackageManagerUpgradeOutcome`, `DetectedPm`) are defined in their
 respective service files.
 
@@ -54,7 +54,12 @@ export const DependencyType = Schema.Literals([
  "peerDependency",
  "optionalDependency",
  "runtime",
-]);
+]).annotate({
+ // Load-bearing: reused by two structs, so the JSON Schema lowering hoists it
+ // into $defs. Without this it is named positionally (`Union_`).
+ identifier: "DependencyType",
+ title: "Dependency Type",
+});
 
 /** One per (path, dep, section) update; carries the precise `type`. */
 export const DependencyUpdateResult = Schema.Struct({
@@ -135,12 +140,30 @@ gate forced this and was right — `Schema.Number` renders as an `anyOf` modelli
 ### The generated JSON Schema
 
 `lib/scripts/generate-schema.ts` serializes `RunResultDocument` to
-`docs/schema/run-result.schema.json` via `@effected/schemastore` (a
-**devDependency pinned exactly at `0.2.1`**, not a caret range — it is build
-tooling, not shipped code), using its
+`docs/schema/run-result.schema.json` via `@effected/schemastore` (a devDependency
+at `^0.3.0`), using its
 `SchemaPipeline.run` (structural lint + ajv strict gate + content-compare write).
 It lives in `lib/scripts/` rather than `scripts/` because that path is
 cache-invalidating for turbo. Run with `pnpm generate-schema`.
+
+**Every shared schema must carry an explicit `identifier` annotation.** From
+`effect@4.0.0-beta.107` the lowering **hoists a sub-schema used in more than one
+place into `$defs`** and `$ref`s it, where it previously inlined the same enum at
+each use site. With no identifier to use, it invents a positional one:
+`DependencyType` — referenced by both `DependencyUpdateResult.type` and
+`LockfileChange.type` — first lowered to `$defs/Union_`.
+
+That is validation-equivalent for a consumer, which is exactly why it is worth a
+note: nothing fails, and a generated name lands in a document published at a
+public `$id`. It is also *positional*, so introducing a second anonymous union
+would renumber it to `Union_1` and silently rename a key consumers may `$ref`.
+`DependencyType` now annotates `identifier` + `title` like every other shared
+schema in `domain.ts`, so it lowers to `$defs/DependencyType`.
+
+**A `$defs` key matching `Union_`/`Struct_` and friends is a missing annotation
+at the definition site**, not an artifact to commit. The drift test will report
+the change as `contract` either way — it classifies that a consumer-visible
+region moved, not whether the new name is a good one.
 
 `__test__/unit/generate-schema.test.ts` imports the generator's **own exported
 `targets`** and runs `SchemaPipeline.check` — the identical walk without writing.
@@ -291,7 +314,7 @@ export interface RuntimeEntry {
 
 ## Effect Error Types (src/errors/errors.ts)
 
-Errors use `Schema.TaggedErrorClass` for typed error handling with rich
+Errors use `Schema.TaggedError` for typed error handling with rich
 metadata. The local `ActionError` union covers:
 
 - `InvalidInputError` — `{ field, value, reason }`. **This is the action's input

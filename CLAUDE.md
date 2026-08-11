@@ -16,7 +16,7 @@ in its own module under `src/steps/`, input reading in `src/schema/inputs.ts`
 (`readInputs`), log rendering in `src/format.ts`. Cross-phase state in
 `src/state.ts`.
 
-It runs on **Effect v4** (`effect@4.0.0-beta.101` via `catalog:effect`, injected
+It runs on **Effect v4** (`effect@4.0.0-beta.107` via `catalog:effect`, injected
 by the `@effected/pnpm-plugin-effect` config dependency) and the **`@effected/*`
 kit**; the former all-in-one `@savvy-web/github-action-effects` is **deleted**,
 its surface split across the kit packages. Domain logic is wrapped as Effect
@@ -119,6 +119,15 @@ pnpm vitest run --testNamePattern="parsePnpmVersion"          # by name
   `effect/unstable/process`; `Effect.catch`, `Effect.result` (returns a `Result`),
   `Effect.timeoutOrElse`; log levels are string literals set via
   `References.MinimumLogLevel`.
+  - **`Schema.TaggedError`, not `Schema.TaggedErrorClass`.** The `*Class` spelling
+    existed only on the earlier v4 betas and was renamed back to the v3 name in
+    `beta.107`; the curried shape is identical, so the fix is the name alone.
+    Worth knowing how this presents: the four class declarations in
+    `src/errors/errors.ts` are the *only* real breakage, but their base type
+    collapses, so every `new SomeError({...})` in the codebase reports
+    "Expected 0 arguments, but got 1" and every field getter reports a missing
+    property — 50 errors across 14 files, all of which clear when the four names
+    are fixed. Do not go site-by-site; find the declaration.
 - **Token**: provisioned in `pre.ts` (credentials via `ActionInput`, fail-fast
   `required` scope check for `contents`/`pull_requests`/`checks: write`), persisted
   to `ActionState`, read back by `GitHubToken.clientLayer()` in `makeAppLayer`,
@@ -159,17 +168,23 @@ accepted trade-off. Commits must be GPG-signed with the verified key for
 `C. Spencer Beggs <spencer@savvyweb.systems>`.
 
 **Currently active:** nothing is **linked** — every first-party dep is on its
-published registry version (see `package.json`; `@effect/vitest` pinned exactly in
-lockstep with `effect`). There **is** one `overrides` entry, unrelated to
-dogfooding: `@effect/platform-node-shared` is held at `4.0.0-beta.101`, because
-`@effect/platform-node@4.0.0-beta.101` depends on it at `^4.0.0-beta.101` and a
-caret on a prerelease admits `beta.102`, whose peer range (`effect
-^4.0.0-beta.102`) the `catalog:effect` pin does not satisfy. It is bundled into
-`dist`, so the skew is not academic. Drop the override once
-`@effected/pnpm-plugin-effect` ships a catalog on `beta.102`. Duplicate
-resolutions of `@effected/workspaces` (0.8.0) and `@effected/npm` (0.4.0) come
-entirely from the `@vitest-agent/plugin` devDependency tree, never reach the
-shipped artifact, and clear when it bumps.
+published registry version (see `package.json`). `@effect/vitest` reads
+`catalog:effect`, so the lockstep with `effect` is now **structural**: the
+`effect` catalog pins both to the same beta, and a catalog advance moves them
+together with no hand-edit. It used to be an exact literal pin that had to be
+bumped manually, which is the failure mode this removed.
+
+There are **no `overrides` entries**. The former `@effect/platform-node-shared`
+pin (held at `4.0.0-beta.101` because a caret on a prerelease admitted a
+`beta.102` whose peer range the catalog pin did not satisfy) went away with the
+`beta.107` advance — the whole graph now resolves a single
+`platform-node-shared@4.0.0-beta.107` against a single `effect@4.0.0-beta.107`.
+
+The **duplicate resolutions are also gone**: `@effected/workspaces` and
+`@effected/npm` each resolve exactly one copy, so the second workspaces copy that
+`@savvy-web/silk-effects` used to drag into `dist` is no longer bundled. Verify
+with `pnpm why <pkg>` — the lockfile grep reports which versions exist, never who
+pulls them.
 
 ## Development & Release Cycle
 
@@ -223,9 +238,10 @@ Composite builds with project references, strict mode, ES2022/ES2023.
 ### Testing
 
 - **Framework**: Vitest with v8 coverage, forks pool (Effect compatibility).
-  Current suite: **573 tests**. `@effect/vitest` is pinned exactly to `effect`'s
-  beta and must move in lockstep; a few suites use `it.effect`, real-IO suites
-  deliberately do not.
+  Current suite: **580 tests**. `@effect/vitest` reads `catalog:effect`, the same
+  catalog entry as `effect`, so the required lockstep is maintained by the catalog
+  rather than by remembering to bump a literal; a few suites use `it.effect`,
+  real-IO suites deliberately do not.
 - **Schema drift**: `__test__/unit/generate-schema.test.ts` fails when
   `docs/schema/run-result.schema.json` no longer matches `RunResultDocument`; fix
   by running `pnpm generate-schema`, not by editing the JSON.
@@ -262,10 +278,20 @@ Composite builds with project references, strict mode, ES2022/ES2023.
   emitted **on every exit path** as an empty-run document — never an empty
   string, so a consumer parses unconditionally. Its JSON Schema is **generated**
   into `docs/schema/run-result.schema.json` by `lib/scripts/generate-schema.ts`
-  (via `@effected/schemastore`, pinned exactly at `0.2.1`, run under `tsx` — now
-  a declared devDependency, previously transitive-only); change it by editing the
-  domain types and running `pnpm generate-schema`. The four scalar outputs are
+  (via `@effected/schemastore` at `^0.3.0`, run under `tsx` — a declared
+  devDependency, previously transitive-only); change it by editing the domain
+  types and running `pnpm generate-schema`. The four scalar outputs are
   unchanged.
+  - **Every shared schema needs an explicit `identifier` annotation**, because
+    the beta.107 lowering hoists a reused sub-schema into `$defs` instead of
+    inlining it at each use site, and invents a positional name when there is no
+    identifier to use. `DependencyType` lowered to `$defs/Union_` on the first
+    regeneration after the advance — a generated, position-dependent name in a
+    document published at a public `$id`, where a second anonymous union would
+    have shifted it to `Union_1`. It now carries
+    `identifier: "DependencyType"`. If a regeneration produces a `$defs` key
+    matching `Union_`/`Struct_`/similar, that is a missing annotation at the
+    definition site, not something to accept into the committed artifact.
 - **Tests are not co-located**: every unit suite lives in `__test__/unit/**`
   mirroring `src/`. `__test__/utils/**` is **reserved by AgentPlugin for helpers and
   excluded from collection** — a `.test.ts` there silently never runs; keep helpers

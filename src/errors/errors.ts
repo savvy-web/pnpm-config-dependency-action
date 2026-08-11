@@ -17,7 +17,7 @@ import { FileSystemOperation, LockfileOperation, NonEmptyString } from "../schem
 /**
  * Input validation error.
  */
-export class InvalidInputError extends Schema.TaggedErrorClass<InvalidInputError>()("InvalidInputError", {
+export class InvalidInputError extends Schema.TaggedError<InvalidInputError>()("InvalidInputError", {
 	field: NonEmptyString.annotate({
 		description: "The input field that failed validation",
 	}),
@@ -36,7 +36,7 @@ export class InvalidInputError extends Schema.TaggedErrorClass<InvalidInputError
 /**
  * Changeset creation error.
  */
-export class ChangesetError extends Schema.TaggedErrorClass<ChangesetError>()("ChangesetError", {
+export class ChangesetError extends Schema.TaggedError<ChangesetError>()("ChangesetError", {
 	reason: NonEmptyString.annotate({
 		description: "Why changeset creation failed",
 	}),
@@ -53,7 +53,7 @@ export class ChangesetError extends Schema.TaggedErrorClass<ChangesetError>()("C
 /**
  * File system operation error.
  */
-export class FileSystemError extends Schema.TaggedErrorClass<FileSystemError>()("FileSystemError", {
+export class FileSystemError extends Schema.TaggedError<FileSystemError>()("FileSystemError", {
 	operation: FileSystemOperation.annotate({
 		description: "The file operation that failed",
 	}),
@@ -72,7 +72,7 @@ export class FileSystemError extends Schema.TaggedErrorClass<FileSystemError>()(
 /**
  * Lockfile parsing/comparison error.
  */
-export class LockfileError extends Schema.TaggedErrorClass<LockfileError>()("LockfileError", {
+export class LockfileError extends Schema.TaggedError<LockfileError>()("LockfileError", {
 	operation: LockfileOperation.annotate({
 		description: "The lockfile operation that failed",
 	}),

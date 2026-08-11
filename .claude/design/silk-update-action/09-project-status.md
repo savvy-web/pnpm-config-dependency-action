@@ -112,9 +112,13 @@ rather than silently performing a package-manager-only run.
   which came in transitively through the deleted `github-action-effects` and no
   longer appears in the lockfile at all. Harmless, but the comment there still
   describes the old provenance.
-- Two duplicate resolutions (`@effected/workspaces` 0.8.0, `@effected/npm` 0.4.0)
-  come entirely from the `@vitest-agent/plugin` devDependency tree and clear when
-  that plugin bumps; neither reaches the shipped artifact.
+- **Duplicate resolutions: closed.** `@effected/workspaces`, `@effected/npm` and
+  `@effected/commands` each resolve exactly one copy, and `effect` resolves one
+  copy at `4.0.0-beta.107` tree-wide. The duplicate that mattered — a second
+  `@effected/workspaces` reaching `dist/main.js` through `@savvy-web/silk-effects`
+  — closed when silk-effects moved onto the same wave. Re-verify with
+  `pnpm why <pkg>`, never a lockfile grep: the grep reports which versions exist,
+  only `pnpm why` reports who pulls each one.
 - **`@effected/package-json` is deliberately NOT adopted** (upstream
   spencerbeggs/effected#286), and the reason is
   measured rather than stylistic. `Package.decode` requires both `name` and
@@ -179,6 +183,49 @@ rather than silently performing a package-manager-only run.
     **byte-identical**. Note that the test suite could *not* have caught a broken
     escape here: `depKey` is used symmetrically on both sides of every
     comparison, so a wrong separator would still compare equal to itself.
+
+## The `effect@4.0.0-beta.107` advance
+
+Moved with the `@effected` kit's coordinated wave (upstream
+spencerbeggs/effected#322): `catalog:effect` to `beta.107` via
+`@effected/pnpm-plugin-effect@0.4.0`, every `@effected/*` package to its
+`.107`-native release, `@savvy-web/silk-effects` to `5.5.2`.
+
+**The source change was four identifiers.** `Schema.TaggedErrorClass` →
+`Schema.TaggedError` — a rename back to the v3 name, identical curried shape —
+in the four class declarations in `src/errors/errors.ts`. Nothing else in `src/`
+needed an edit.
+
+Worth recording **how that presented**, because the shape is misleading and will
+recur on the next advance: typecheck reported **50 errors across 14 files**, and
+only two of them named `TaggedErrorClass`. The other 48 were the base type
+collapsing — every `new SomeError({...})` reading "Expected 0 arguments, but got
+1" and every field getter reading as a missing property, in modules that never
+mention the renamed API. Fixing the four declarations cleared all 50. An advance
+whose error list is dominated by call sites is still, usually, a declaration-site
+problem: **find the declaration before touching a single call site.**
+
+Three things came out of the advance rather than the port:
+
+- **`@effect/vitest` moved to `catalog:effect`.** The exact-literal pin it
+  replaced had to be hand-bumped in lockstep with every catalog advance; the
+  catalog pins both to the same beta, so the lockstep is now structural. This is
+  the durable fix for a gotcha that was previously enforced by a doc sentence.
+- **The `@effect/platform-node-shared` override was deleted**, along with the
+  duplicate-resolution loose end above. Both were artifacts of the `beta.101`
+  pin and evaporated with the wave; no local repair was needed.
+- **`DependencyType` gained an `identifier` annotation** after the beta.107
+  lowering hoisted it into `$defs` under the positional name `Union_`. Detail in
+  @./03-type-definitions.md.
+
+**What did NOT happen, recorded because the migration brief anticipated it:** no
+`.pnpmfile.cjs` retarget hook, no `pnpm patch` compat shims, no `SchemaAST.Sentinel`
+d.ts patch. The kit republished `.107`-native, so adopting the new releases was
+sufficient and the whole local-repair apparatus was unnecessary. A grep of the
+installed graph for `TaggedErrorClass` returns three `@effected` packages — **all
+three hits are README prose, not shipped code.** If a future advance needs that
+apparatus, build the artifact list from the graph, and confirm each hit is a real
+call site before shimming it.
 
 ## Settled decisions — do not re-propose without new evidence
 
