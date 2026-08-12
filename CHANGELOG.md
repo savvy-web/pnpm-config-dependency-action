@@ -1,5 +1,13 @@
 # silk-update-action
 
+## 4.5.1
+
+### Dependencies
+
+* | Dependency              | Type       | Action  | From   | To     |                                                                                                       |
+  | ----------------------- | ---------- | ------- | ------ | ------ | ----------------------------------------------------------------------------------------------------- |
+  | @savvy-web/silk-effects | dependency | updated | ^5.5.2 | ^5.6.0 | Thanks [@savvy-web-bot\[bot\]](\[@savvy-web-bot\[bot]]\(https://github.com/savvy-web-bot%5Bbot%5D\))! |
+
 ## 4.5.0
 
 ### Documentation
