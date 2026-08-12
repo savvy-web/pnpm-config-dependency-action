@@ -17,7 +17,7 @@ implementation-plans: []
 [Back to index](./_index.md)
 
 **Framework:** Vitest with v8 coverage, forks pool for Effect-TS compatibility.
-Current suite: **575 tests, all passing**.
+Current suite: **580 tests, all passing**.
 
 ## Layout
 
@@ -53,8 +53,10 @@ Shared helpers currently in that directory:
 
 ## Test framework posture
 
-- `@effect/vitest` is pinned **exactly** to the same beta as `effect`
-  (`4.0.0-beta.101`) and must move in lockstep with it.
+- `@effect/vitest` reads **`catalog:effect`** — the same catalog entry as `effect`
+  itself, currently `4.0.0-beta.107`. The lockstep it must keep is now enforced by
+  the catalog rather than by an exact literal someone has to remember to bump
+  alongside every advance.
 - Three suites are converted to `it.effect` — `services/report.test.ts`,
   `services/workspace-yaml.test.ts`, `utils/semver.test.ts`. The rest, including
   every real-IO suite, deliberately stay on plain `vitest`: `it.effect` buys

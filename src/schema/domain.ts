@@ -35,7 +35,10 @@ export const DependencyType = Schema.Literals([
 	"peerDependency",
 	"optionalDependency",
 	"runtime",
-]);
+]).annotate({
+	identifier: "DependencyType",
+	title: "Dependency Type",
+});
 
 /**
  * File system operation type.

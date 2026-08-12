@@ -27,7 +27,7 @@ src/
 ├── format.ts              # the run's rendering surface (run-context/result blocks, tallies)
 ├── state.ts               # StartTimeState (Schema.Class) + STATE_KEYS cross-phase state
 ├── errors/
-│   └── errors.ts          # Schema.TaggedErrorClass definitions (4 live classes; see 03)
+│   └── errors.ts          # Schema.TaggedError definitions (4 live classes; see 03)
 ├── schema/
 │   ├── domain.ts          # Effect Schema definitions + RunResultDocument (`result` output)
 │   ├── inputs.ts          # INPUT_NAMES tuple + readInputs + InnerProgramInputs

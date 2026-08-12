@@ -255,13 +255,13 @@ swallowed entirely.
 `catchAllDefect`, `Effect.result` returns a `Result` where `Effect.either` returned
 an `Either`, and `Effect.timeoutOrElse` replaced `Effect.timeoutFail`.)
 
-## Typed Errors with Schema.TaggedErrorClass
+## Typed Errors with Schema.TaggedError
 
 ```typescript
 import { Schema } from "effect";
 
 /** Invalid action input or unusable workspace. */
-export class InvalidInputError extends Schema.TaggedErrorClass<InvalidInputError>()("InvalidInputError", {
+export class InvalidInputError extends Schema.TaggedError<InvalidInputError>()("InvalidInputError", {
  field: NonEmptyString,
  value: Schema.optional(Schema.Unknown),
  reason: NonEmptyString,
