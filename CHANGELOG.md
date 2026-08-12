@@ -1,5 +1,20 @@
 # silk-update-action
 
+## 4.5.2
+
+### Dependencies
+
+* | Dependency              | Type       | Action  | From    | To      |                                                                              |
+  | ----------------------- | ---------- | ------- | ------- | ------- | ---------------------------------------------------------------------------- |
+  | @effected/lockfiles     | dependency | updated | ^0.4.0  | ^0.4.1  |                                                                              |
+  | @effected/workspaces    | dependency | updated | ^0.11.1 | ^0.11.2 |                                                                              |
+  | @effected/yaml          | dependency | updated | ^0.7.0  | ^0.8.0  |                                                                              |
+  | @savvy-web/silk-effects | dependency | updated | ^5.6.0  | ^5.7.0  | [#257][#257] Thanks [@savvy-web-bot](https://github.com/apps/savvy-web-bot)! |
+
+### Patch Changes
+
+[#257]: https://github.com/savvy-web/silk-update-action/pull/257
+
 ## 4.5.1
 
 ### Dependencies
