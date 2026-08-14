@@ -238,7 +238,7 @@ Composite builds with project references, strict mode, ES2022/ES2023.
 ### Testing
 
 - **Framework**: Vitest with v8 coverage, forks pool (Effect compatibility).
-  Current suite: **580 tests**. `@effect/vitest` reads `catalog:effect`, the same
+  Current suite: **581 tests**. `@effect/vitest` reads `catalog:effect`, the same
   catalog entry as `effect`, so the required lockstep is maintained by the catalog
   rather than by remembering to bump a literal; a few suites use `it.effect`,
   real-IO suites deliberately do not.
@@ -293,9 +293,16 @@ Composite builds with project references, strict mode, ES2022/ES2023.
     matching `Union_`/`Struct_`/similar, that is a missing annotation at the
     definition site, not something to accept into the committed artifact.
 - **Tests are not co-located**: every unit suite lives in `__test__/unit/**`
-  mirroring `src/`. `__test__/utils/**` is **reserved by AgentPlugin for helpers and
-  excluded from collection** — a `.test.ts` there silently never runs; keep helpers
-  as plain `.ts`, pinned from `__test__/unit/doubles.test.ts`.
+  mirroring `src/`. `utils`, `fixtures` and `snapshots` are **reserved by
+  AgentPlugin for helpers and mocks and excluded from collection — at ANY depth
+  under `__test__`, not just the top level** (the rule is
+  `segments.slice(1,-1).some(s => TEST_HELPER_DIRS.includes(s))`). A `.test.ts`
+  crossing one silently never runs, and the aggregate coverage gate stays green.
+  Keep helpers as plain `.ts` in `__test__/utils/`, pinned from
+  `__test__/unit/doubles.test.ts`. **Tests for `src/utils/` therefore live in
+  `__test__/unit/utilities/`, not `__test__/unit/utils/`** — they sat in the
+  latter and silently stopped running, dropping the suite from 580 to 478.
+  `__test__/unit/test-collection.test.ts` fails if it recurs.
 - `@actions/*` is never imported; the head SHA comes from `ActionEnvironment`
   (`env.github.sha`), the log level from `env.isDebug`
 - Action input is `app-client-id` (not `app-id`); `post.ts` always revokes
