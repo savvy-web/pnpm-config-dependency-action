@@ -1,6 +1,8 @@
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { NodeServices } from "@effect/platform-node";
+import { PackageJsonFile } from "@effected/package-json";
 import { BunResolver, DenoResolver, NoMatchingVersionError, NodeResolver } from "@effected/runtimes";
 import { Effect, Layer, Logger, References } from "effect";
 import { describe, expect, it } from "vitest";
@@ -41,7 +43,12 @@ const runWithLogs = (
 		Layer.succeed(DenoResolver, makeResolver(latest.deno !== undefined ? latest.deno : "2.1.0") as never),
 		Layer.succeed(BunResolver, makeResolver(latest.bun !== undefined ? latest.bun : "1.2.0") as never),
 	);
-	const layer = RuntimeUpgrade.layer.pipe(Layer.provide(resolvers));
+	// Real PackageJsonFile over the real platform: these suites write actual
+	// temp manifests, and the property under test is that the write preserves the
+	// file, which a stub could not exercise.
+	const layer = RuntimeUpgrade.layer.pipe(
+		Layer.provide(Layer.merge(resolvers, PackageJsonFile.layer.pipe(Layer.provide(NodeServices.layer)))),
+	);
 	return Effect.runPromise(
 		Effect.gen(function* () {
 			const service = yield* RuntimeUpgrade;

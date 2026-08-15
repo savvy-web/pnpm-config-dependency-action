@@ -28,15 +28,16 @@
  * @module services/runtime-upgrade
  */
 
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
+import type { PackageJsonFileShape } from "@effected/package-json";
+import { PackageJsonFile } from "@effected/package-json";
 import type { ResolvedVersions } from "@effected/runtimes";
 import { BunResolver, DenoResolver, NodeResolver } from "@effected/runtimes";
 import { Context, Effect, Layer } from "effect";
 
 import { FileSystemError } from "../errors/errors.js";
-import { detectIndent } from "../utils/pnpm.js";
 import type { RuntimeName } from "../utils/runtime.js";
-import { findRuntimeEntry, isStaticVersion } from "../utils/runtime.js";
+import { isStaticVersion, locateRuntimeEntry } from "../utils/runtime.js";
 
 /**
  * Structural view of a `@effected/runtimes` resolver. All three resolvers share
@@ -92,8 +93,11 @@ export class RuntimeUpgrade extends Context.Service<
 			const node = yield* NodeResolver;
 			const deno = yield* DenoResolver;
 			const bun = yield* BunResolver;
+			// Resolved once in the layer, so `upgrade`'s requirement channel stays
+			// `never` and callers do not have to thread it.
+			const packageJson = yield* PackageJsonFile;
 			return {
-				upgrade: (config, workspaceRoot) => upgradeImpl({ node, deno, bun }, config, workspaceRoot),
+				upgrade: (config, workspaceRoot) => upgradeImpl({ node, deno, bun }, config, workspaceRoot, packageJson),
 			};
 		}),
 	);
@@ -127,19 +131,26 @@ const resolveLatest = (
 		),
 	);
 
+/** A resolved upgrade plus the JSONC path its new version must be written to. */
+interface PlannedRuntimeEdit {
+	readonly result: RuntimeUpgradeResult;
+	readonly versionPath: ReadonlyArray<string | number>;
+}
+
 const upgradeOne = (
 	resolver: RuntimeResolver,
 	runtime: RuntimeName,
 	mode: string,
 	pkgJson: Record<string, unknown>,
-): Effect.Effect<RuntimeUpgradeResult | null, never> =>
+): Effect.Effect<PlannedRuntimeEdit | null, never> =>
 	Effect.gen(function* () {
 		if (mode === "false") return null;
 
 		// Upgrade only, never add: with no existing entry there is nothing to
 		// upgrade — in auto mode and explicit-range mode alike.
-		const entry = findRuntimeEntry(pkgJson.devEngines, runtime);
-		if (!entry?.version) {
+		const located = locateRuntimeEntry(pkgJson.devEngines, runtime);
+		const entry = located?.entry;
+		if (!located || !entry?.version) {
 			yield* Effect.logWarning(
 				`upgrade-runtime-${runtime}: no devEngines.runtime entry exists for ${runtime}, so there is nothing to ` +
 					`upgrade (upgrade-runtime-${runtime} upgrades a runtime this repo already declares, it never adds one); skipping`,
@@ -170,14 +181,18 @@ const upgradeOne = (
 			return null;
 		}
 
-		entry.version = resolved;
-		return { runtime, from, to: resolved };
+		// Nothing is mutated here. The parsed manifest is read to DECIDE; the write
+		// is a surgical edit applied at `versionPath` by `PackageJsonFile.modify`,
+		// so key order, indentation and line endings survive untouched in a file
+		// this action commits to someone else's repository.
+		return { result: { runtime, from, to: resolved }, versionPath: located.versionPath };
 	});
 
 const upgradeImpl = (
 	resolvers: Resolvers,
 	config: RuntimeUpgradeConfig,
 	workspaceRoot: string,
+	packageJson: PackageJsonFileShape,
 ): Effect.Effect<readonly RuntimeUpgradeResult[], FileSystemError> =>
 	Effect.gen(function* () {
 		const packageJsonPath = `${workspaceRoot}/package.json`;
@@ -190,26 +205,31 @@ const upgradeImpl = (
 			try: () => JSON.parse(raw) as Record<string, unknown>,
 			catch: (e) => fsReadError(packageJsonPath, `Invalid JSON: ${e}`),
 		});
-		const indent = detectIndent(raw);
-
 		const plan: ReadonlyArray<[RuntimeName, Resolvers[keyof Resolvers], string]> = [
 			["node", resolvers.node, config.node],
 			["deno", resolvers.deno, config.deno],
 			["bun", resolvers.bun, config.bun],
 		];
 
-		const results: RuntimeUpgradeResult[] = [];
+		const planned: PlannedRuntimeEdit[] = [];
 		for (const [runtime, resolver, mode] of plan) {
-			const result = yield* upgradeOne(resolver, runtime, mode, pkgJson);
-			if (result) results.push(result);
+			const edit = yield* upgradeOne(resolver, runtime, mode, pkgJson);
+			if (edit) planned.push(edit);
 		}
 
-		if (results.length > 0) {
-			yield* Effect.try({
-				try: () => writeFileSync(packageJsonPath, `${JSON.stringify(pkgJson, null, indent)}\n`, "utf-8"),
-				catch: (e) => fsWriteError(packageJsonPath, e),
-			});
+		if (planned.length > 0) {
+			// One `modify` call for every runtime that moved: read once, apply each
+			// edit in order, write once, and skip the write entirely when the result
+			// is byte-identical. Replaces a JSON.stringify of the whole parsed tree,
+			// which rewrote the file wholesale and could only preserve formatting by
+			// accident of `detectIndent` guessing right.
+			yield* packageJson
+				.modify(
+					packageJsonPath,
+					planned.map((p) => ({ path: [...p.versionPath], value: p.result.to })),
+				)
+				.pipe(Effect.mapError((e) => fsWriteError(packageJsonPath, e)));
 		}
 
-		return results;
+		return planned.map((p) => p.result);
 	});
