@@ -10,6 +10,7 @@ import { Git } from "@effected/git";
 import { CheckRun, GitBranch, GitCommit, PullRequest, Repo } from "@effected/github";
 import { DryRun, GitHubToken } from "@effected/github-actions";
 import { NpmRegistry } from "@effected/npm";
+import { PackageJsonFile } from "@effected/package-json";
 import { BunResolver, DenoResolver, NodeResolver, GitHubClient as RuntimesGitHubClient } from "@effected/runtimes";
 import {
 	LockfileReader,
@@ -80,6 +81,10 @@ export const makeAppLayer = (dryRun: boolean, options: { runtimeLive: boolean } 
 	// copy of the Node platform and the fetch client in its bundle, and forced a
 	// direct `@effect/platform-node` dependency the program has no business naming.
 	const npmRegistry = NpmRegistry.layer;
+	// Surgical, decode-free package.json edits for RuntimeUpgrade. Like the
+	// workspace layers above, its FileSystem/Path requirements stay in this
+	// layer's requirement channel rather than being built here.
+	const packageJsonFile = PackageJsonFile.layer;
 	const gitBranch = GitBranch.layer.pipe(Layer.provide(githubClient));
 	const gitCommit = GitCommit.layer.pipe(Layer.provide(githubClient));
 	const prLayer = PullRequest.layer.pipe(Layer.provide(githubClient));
@@ -143,7 +148,7 @@ export const makeAppLayer = (dryRun: boolean, options: { runtimeLive: boolean } 
 		CatalogConfigDeps.layer.pipe(Layer.provide(Layer.merge(npmRegistry, lockfileReader))),
 		RegularDeps.layer.pipe(Layer.provide(Layer.mergeAll(npmRegistry, workspaceDiscovery, releaseAge))),
 		Report.layer.pipe(Layer.provide(prLayer)),
-		RuntimeUpgrade.layer.pipe(Layer.provide(makeRuntimeResolvers(options.runtimeLive))),
+		RuntimeUpgrade.layer.pipe(Layer.provide(Layer.merge(makeRuntimeResolvers(options.runtimeLive), packageJsonFile))),
 	);
 
 	return Layer.provideMerge(domainLayers, libraryLayers);

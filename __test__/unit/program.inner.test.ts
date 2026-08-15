@@ -36,6 +36,7 @@ import type { StatusEntry } from "@effected/git";
 import { Git } from "@effected/git";
 import { CheckRun } from "@effected/github";
 import { ActionOutputs } from "@effected/github-actions";
+import { PackageJsonFile } from "@effected/package-json";
 import type { WorkspacePackage } from "@effected/workspaces";
 import { PackageManagerDetector, WorkspaceDiscovery, WorkspaceRoot } from "@effected/workspaces";
 import { Cause, Effect, Exit, Layer, Logger, Option, References } from "effect";
@@ -264,9 +265,13 @@ const makeHarness = (options: HarnessOptions = {}) => {
 	// The package-manager upgrade is REAL unless a test explicitly fakes the
 	// outcome: the acceptance-signal guard must resolve the range against an
 	// actual release list, not against a mock that was told the answer.
+	// Real PackageJsonFile over the real platform: the upgrade services write
+	// through it, and these suites run against actual temp-dir fixtures.
+	const packageJsonFile = PackageJsonFile.layer.pipe(Layer.provide(NodeServices.layer));
+
 	const packageManagerUpgrade = options.packageManagerUpgrade
 		? Layer.succeed(PackageManagerUpgrade, { upgrade: options.packageManagerUpgrade })
-		: PackageManagerUpgrade.layer.pipe(Layer.provide(npmRegistry));
+		: PackageManagerUpgrade.layer.pipe(Layer.provide(Layer.merge(npmRegistry, packageJsonFile)));
 
 	const layer = Layer.mergeAll(
 		ActionOutputs.layerTest({

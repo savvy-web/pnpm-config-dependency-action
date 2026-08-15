@@ -75,6 +75,9 @@ importers:
       '@effected/npm':
         specifier: ^0.9.0
         version: 0.9.0(@effected/semver@0.4.0(effect@4.0.0-beta.107))(effect@4.0.0-beta.107)
+      '@effected/package-json':
+        specifier: ^0.9.0
+        version: 0.9.0(effect@4.0.0-beta.107)
       '@effected/runtimes':
         specifier: ^0.3.0
         version: 0.3.0(effect@4.0.0-beta.107)
