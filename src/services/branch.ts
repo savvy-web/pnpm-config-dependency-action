@@ -3,18 +3,28 @@
  *
  * Handles creating, resetting, and switching branches for dependency updates.
  * Uses `GitBranch` / `GitCommit` from `@effected/github` for the API half and
- * `@effected/commands`' `Run` for the local git half.
+ * `@effected/git` for **every** local git operation.
  *
- * **`@effected/git` is deliberately not used here.** It covers 2 of the 9 local
- * git operations this module performs. It cannot express `-c core.fileMode=false`
- * on `status` (spencerbeggs/effected#279 — load-bearing: exec-bit-only flips do
- * not survive the content-based API commit at mode 100644, so counting them makes
- * an empty commit and a spurious PR), nor an explicit-refspec `fetch`
- * (`+refs/heads/X:refs/remotes/origin/X`, load-bearing on a single-branch
- * `actions/checkout`), nor `fetch --unshallow`, `checkout -B`, `reset --hard`,
- * `branch -f`, or `rev-parse --is-shallow-repository`. Adopting it for the
- * remaining two would leave two subprocess mechanisms in one module while fixing
- * nothing, so git stays entirely on `Run` until the mutating tier lands upstream.
+ * **`@effected/git` is now fully adopted here, and `Run` is gone from this
+ * module.** It previously covered 2 of the 9 local operations, so the module ran
+ * two subprocess mechanisms side by side; `@effected/git@0.8.0` closed the gap
+ * (spencerbeggs/effected#279) and all nine now go through the service:
+ * explicit-refspec `fetch` (`+refs/heads/X:refs/remotes/origin/X`, load-bearing
+ * on a single-branch `actions/checkout`, where a bare ref never materializes
+ * `origin/<branch>`), `fetchUnshallow`, `branchCreate` (covering both
+ * `checkout -B` and `branch -f`), `reset`, `isShallow`, `mergeBaseOption` and
+ * `status`.
+ *
+ * Two consequences worth stating, because both were live defects:
+ *
+ * - **Every operation now takes an explicit `cwd`.** The old `gitRun` helper set
+ *   none at all and inherited the process directory, which contradicted this
+ *   repo's stated no-`process.cwd()` invariant and was invisible to a grep for
+ *   `process.cwd()` because there was no default to find (#266). `manage` gained
+ *   a `workspaceRoot` parameter as a result.
+ * - **`-c core.fileMode=false` was never the blocker** the original decline
+ *   recorded. Repository-local config is a third scope beyond per-command and
+ *   process-global, and `steps/configure-status.ts` writes it once per run.
  *
  * `Repo` stays in each method's `R` rather than being captured when the layer
  * is built — that is what keeps `Repo.provide(ref)` meaningful for a caller
@@ -24,20 +34,14 @@
  */
 
 import { readFileSync } from "node:fs";
-import type { CommandFailedError, CommandOutputError } from "@effected/commands";
-import { Run } from "@effected/commands";
 import type { GitCommandError, GitShape, NotARepositoryError, UnknownRefError } from "@effected/git";
 import { Git } from "@effected/git";
 import type { FileChange, GitBranchShape, GitCommitShape, GitHubError, Repo } from "@effected/github";
 import { FileContent, FileDeletion, GitBranch, GitCommit } from "@effected/github";
-import { Context, Effect, Layer } from "effect";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { Context, Effect, Layer, Option } from "effect";
 
 import { InvalidInputError } from "../errors/errors.js";
 import type { BranchResult } from "../schema/domain.js";
-
-/** Every failure a local `Run`-based git invocation in this module can produce. */
-type GitRunError = CommandFailedError | CommandOutputError;
 
 /** Every failure `@effected/git`'s typed members can produce. */
 type GitServiceError = GitCommandError | NotARepositoryError | UnknownRefError;
@@ -49,10 +53,18 @@ type GitServiceError = GitCommandError | NotARepositoryError | UnknownRefError;
 export class BranchManager extends Context.Service<
 	BranchManager,
 	{
+		/**
+		 * Create or force-reset the update branch, then check it out locally.
+		 *
+		 * `workspaceRoot` is required: every git command here runs there. It used
+		 * to run at the process directory, because the helper set no cwd at all
+		 * (#266).
+		 */
 		readonly manage: (
 			branchName: string,
+			workspaceRoot: string,
 			defaultBranch?: string,
-		) => Effect.Effect<BranchResult, GitHubError | GitRunError, Repo>;
+		) => Effect.Effect<BranchResult, GitHubError | GitServiceError, Repo>;
 		/**
 		 * Commit every working-tree change via the GitHub API.
 		 *
@@ -69,7 +81,7 @@ export class BranchManager extends Context.Service<
 			message: string,
 			branchName: string,
 			workspaceRoot: string,
-		) => Effect.Effect<void, GitHubError | GitRunError | GitServiceError, Repo>;
+		) => Effect.Effect<void, GitHubError | GitServiceError, Repo>;
 		readonly validateBranches: (
 			source: string,
 			target: string,
@@ -83,7 +95,7 @@ export class BranchManager extends Context.Service<
 		 * satisfies both. This is the safety net for shallower checkouts: it probes
 		 * first and only fetches/deepens when the merge-base is missing.
 		 */
-		readonly ensureBaseHistory: (base: string, workspaceRoot: string) => Effect.Effect<void, GitRunError>;
+		readonly ensureBaseHistory: (base: string, workspaceRoot: string) => Effect.Effect<void, GitServiceError>;
 	}
 >()("BranchManager") {
 	/**
@@ -100,45 +112,22 @@ export class BranchManager extends Context.Service<
 		Effect.gen(function* () {
 			const branch = yield* GitBranch;
 			const commit = yield* GitCommit;
+			// `Git` resolves every local git operation, so there is no spawner to
+			// thread and no `withSpawner` wrapper any more. `Repo` deliberately is
+			// NOT resolved here — see the module note.
 			const git = yield* Git;
-			// The spawner is ambient infrastructure, so resolving it once here is
-			// safe. `Repo` deliberately is NOT resolved here — see the module note.
-			const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-			const withSpawner = <A, E, R>(effect: Effect.Effect<A, E, R | ChildProcessSpawner.ChildProcessSpawner>) =>
-				effect.pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner)) as Effect.Effect<
-					A,
-					E,
-					Exclude<R, ChildProcessSpawner.ChildProcessSpawner>
-				>;
 
 			return {
-				manage: (branchName, defaultBranch = "main") =>
-					withSpawner(manageBranchImpl(branch, branchName, defaultBranch)),
+				manage: (branchName, workspaceRoot, defaultBranch = "main") =>
+					manageBranchImpl(git, branch, branchName, defaultBranch, workspaceRoot),
 				commitChanges: (message, branchName, workspaceRoot) =>
-					withSpawner(commitChangesImpl(git, commit, message, branchName, workspaceRoot)),
+					commitChangesImpl(git, commit, message, branchName, workspaceRoot),
 				validateBranches: (source, target) => validateBranchesImpl(branch, source, target),
-				ensureBaseHistory: (base, workspaceRoot) => withSpawner(ensureBaseHistoryImpl(base, workspaceRoot)),
+				ensureBaseHistory: (base, workspaceRoot) => ensureBaseHistoryImpl(git, base, workspaceRoot),
 			};
 		}),
 	);
 }
-
-// ══════════════════════════════════════════════════════════════════════════════
-// Local git helpers
-// ══════════════════════════════════════════════════════════════════════════════
-
-/** Run a git command, failing on a non-zero exit (the old `exec` contract). */
-const gitRun = (
-	...args: ReadonlyArray<string>
-): Effect.Effect<string, GitRunError, ChildProcessSpawner.ChildProcessSpawner> =>
-	Run.text(ChildProcess.make("git", [...args]));
-
-/** {@link gitRun}, anchored at an explicit working directory. */
-const gitRunIn = (
-	cwd: string,
-	...args: ReadonlyArray<string>
-): Effect.Effect<string, GitRunError, ChildProcessSpawner.ChildProcessSpawner> =>
-	Run.text(ChildProcess.make("git", [...args]).pipe(ChildProcess.setCwd(cwd)));
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Implementation
@@ -151,10 +140,12 @@ const gitRunIn = (
  * - If branch exists: delete and recreate from default branch (fresh start)
  */
 const manageBranchImpl = (
+	git: GitShape,
 	branch: GitBranchShape,
 	branchName: string,
 	defaultBranch: string,
-): Effect.Effect<BranchResult, GitHubError | GitRunError, Repo | ChildProcessSpawner.ChildProcessSpawner> =>
+	workspaceRoot: string,
+): Effect.Effect<BranchResult, GitHubError | GitServiceError, Repo> =>
 	Effect.gen(function* () {
 		yield* Effect.logInfo(`Managing branch: ${branchName}`);
 
@@ -173,8 +164,18 @@ const manageBranchImpl = (
 		// single-branch checkout (actions/checkout's default) covers only the
 		// checked-out branch — so origin/<branchName> is never materialized and the
 		// checkout below fails. Live runs masked this by using fetch-depth: 0.
-		yield* gitRun("fetch", "origin", `+refs/heads/${branchName}:refs/remotes/origin/${branchName}`);
-		yield* gitRun("checkout", "-B", branchName, `origin/${branchName}`);
+		yield* git.fetch(workspaceRoot, {
+			ref: `+refs/heads/${branchName}:refs/remotes/origin/${branchName}`,
+			remote: "origin",
+		});
+		// `checkout -B` is `branchCreate` with force + checkout in the kit — same
+		// argv, and it belongs there rather than on `checkout`, whose refusal to
+		// accept option-like refs is worth keeping strict.
+		yield* git.branchCreate(workspaceRoot, branchName, {
+			checkout: true,
+			force: true,
+			startPoint: `origin/${branchName}`,
+		});
 
 		if (outcome === "created") {
 			yield* Effect.logInfo(`Created and checked out branch ${branchName} from ${defaultBranch}`);
@@ -242,7 +243,7 @@ const commitChangesImpl = (
 	message: string,
 	branchName: string,
 	workspaceRoot: string,
-): Effect.Effect<void, GitHubError | GitRunError | GitServiceError, Repo | ChildProcessSpawner.ChildProcessSpawner> =>
+): Effect.Effect<void, GitHubError | GitServiceError, Repo> =>
 	Effect.gen(function* () {
 		// Read the change list through `@effected/git`, which runs
 		// `git status --porcelain -z` and models the two porcelain columns
@@ -309,23 +310,39 @@ const commitChangesImpl = (
 		// Sync local working tree with the remote commit.
 		// Use reset --hard because checkout refuses to overwrite dirty/untracked
 		// files that were just committed via the GitHub API.
-		yield* gitRun("fetch", "origin", branchName);
-		yield* gitRun("reset", "--hard", `origin/${branchName}`);
+		// Anchored at `workspaceRoot`. These two ran at the process directory until
+		// the git adoption, even though the status read above already used the root.
+		yield* git.fetch(workspaceRoot, { ref: branchName, remote: "origin" });
+		yield* git.reset(workspaceRoot, { mode: "hard", ref: `origin/${branchName}` });
 	});
 
-/** True when `git merge-base <base> HEAD` resolves (ref exists AND a common ancestor is present). */
-const hasMergeBase = (
-	cwd: string,
-	base: string,
-): Effect.Effect<boolean, never, ChildProcessSpawner.ChildProcessSpawner> =>
-	Run.succeeds(ChildProcess.make("git", ["merge-base", base, "HEAD"]).pipe(ChildProcess.setCwd(cwd)));
-
-/** True when the repository is a shallow clone (history truncated). */
-const isShallowRepo = (cwd: string): Effect.Effect<boolean, never, ChildProcessSpawner.ChildProcessSpawner> =>
-	gitRunIn(cwd, "rev-parse", "--is-shallow-repository").pipe(
-		Effect.map((out) => out.trim() === "true"),
+/**
+ * True when `git merge-base <base> HEAD` resolves — i.e. the ref exists locally
+ * AND a common ancestor is present.
+ *
+ * `mergeBaseOption` splits those two across channels: no common ancestor is
+ * `Option.none`, but an unknown ref is an `UnknownRefError` on the ERROR channel.
+ * This preflight must treat both as "not ready", and the unknown-ref case is the
+ * COMMON one — it is the whole reason the preflight exists on a single-branch or
+ * shallow checkout.
+ *
+ * The catch-all is what does that, and it is load-bearing rather than defensive:
+ * this returns `Effect<boolean>`, so `E` must be `never`, and the compiler
+ * rejects the version without it. An earlier draft also caught `UnknownRefError`
+ * by tag ahead of it, which read as the thing handling the common case but was
+ * dead code — removing it changed no test and no type, while removing the
+ * catch-all fails the typecheck. Kept as one catch that provably carries the
+ * behavior.
+ */
+const hasMergeBase = (git: GitShape, cwd: string, base: string): Effect.Effect<boolean> =>
+	git.mergeBaseOption(cwd, base, "HEAD").pipe(
+		Effect.map(Option.isSome),
 		Effect.catch(() => Effect.succeed(false)),
 	);
+
+/** True when the repository is a shallow clone (history truncated). */
+const isShallowRepo = (git: GitShape, cwd: string): Effect.Effect<boolean> =>
+	git.isShallow(cwd).pipe(Effect.catch(() => Effect.succeed(false)));
 
 /**
  * Ensure `base` has enough local history for `git merge-base <base> HEAD`.
@@ -340,11 +357,12 @@ const isShallowRepo = (cwd: string): Effect.Effect<boolean, never, ChildProcessS
  *
  */
 const ensureBaseHistoryImpl = (
+	git: GitShape,
 	base: string,
 	workspaceRoot: string,
-): Effect.Effect<void, GitRunError, ChildProcessSpawner.ChildProcessSpawner> =>
+): Effect.Effect<void, GitServiceError> =>
 	Effect.gen(function* () {
-		if (yield* hasMergeBase(workspaceRoot, base)) {
+		if (yield* hasMergeBase(git, workspaceRoot, base)) {
 			yield* Effect.logDebug(`Base history for "${base}" already present; no fetch needed`);
 			return;
 		}
@@ -353,15 +371,18 @@ const ensureBaseHistoryImpl = (
 
 		// Ensure the remote-tracking ref exists, deepen a shallow clone, then
 		// materialize a local ref so `git merge-base <base> HEAD` resolves by name.
-		yield* gitRunIn(workspaceRoot, "fetch", "origin", `+refs/heads/${base}:refs/remotes/origin/${base}`).pipe(
-			Effect.ignore,
-		);
-		if (yield* isShallowRepo(workspaceRoot)) {
-			yield* gitRunIn(workspaceRoot, "fetch", "--unshallow", "origin").pipe(Effect.ignore);
+		yield* git
+			.fetch(workspaceRoot, { ref: `+refs/heads/${base}:refs/remotes/origin/${base}`, remote: "origin" })
+			.pipe(Effect.ignore);
+		if (yield* isShallowRepo(git, workspaceRoot)) {
+			yield* git.fetchUnshallow(workspaceRoot, { remote: "origin" }).pipe(Effect.ignore);
 		}
-		yield* gitRunIn(workspaceRoot, "branch", "-f", base, `refs/remotes/origin/${base}`).pipe(Effect.ignore);
+		// `branch -f <base> <startPoint>` is branchCreate with force and no checkout.
+		yield* git
+			.branchCreate(workspaceRoot, base, { force: true, startPoint: `refs/remotes/origin/${base}` })
+			.pipe(Effect.ignore);
 
-		if (!(yield* hasMergeBase(workspaceRoot, base))) {
+		if (!(yield* hasMergeBase(git, workspaceRoot, base))) {
 			yield* Effect.logWarning(
 				`Could not establish a merge-base between "${base}" and HEAD. The changeset step diffs against ` +
 					`this branch — check out with fetch-depth: 0 (and ensure "${base}" is fetched).`,

@@ -33,49 +33,19 @@
  * @module format
  */
 
-import { existsSync, readFileSync } from "node:fs";
+import type { PackageManagerEvidence } from "@effected/workspaces";
 import type { CatalogDelta, DependencyUpdateResult } from "./schema/domain.js";
 import type { DetectedPm, SupportedPm } from "./services/package-manager.js";
 
-// ══════════════════════════════════════════════════════════════════════════════
-// Package-manager evidence
-// ══════════════════════════════════════════════════════════════════════════════
-
-/**
- * Best-effort re-derivation of which signal `PackageManagerDetector` most likely
- * used to settle on `detected.pm`, for the Run-context log line only.
- *
- * `DetectedPm` does not carry this itself — the upstream detector logs its
- * decision internally (at debug level, and only on the devEngines branch) but
- * does not return it. This function is therefore **not a source of truth**: it is
- * a cheap re-check of the same signals in the same priority order
- * (`devEngines.packageManager`, then `pnpm-workspace.yaml` / `bun.lock` / a
- * `package.json` workspaces field). Any read failure degrades to `null` — it
- * never invents an answer.
- */
-export const describePmEvidence = (detected: DetectedPm): string | null => {
-	try {
-		const raw = readFileSync(`${detected.root}/package.json`, "utf-8");
-		const pkg = JSON.parse(raw) as { devEngines?: { packageManager?: unknown }; workspaces?: unknown };
-		const rawEntry = pkg.devEngines?.packageManager;
-		const entry = Array.isArray(rawEntry) ? rawEntry[0] : rawEntry;
-		if (entry && typeof entry === "object" && (entry as { name?: unknown }).name === detected.pm) {
-			return "devEngines.packageManager.name";
-		}
-		if (detected.pm === "npm" && "workspaces" in pkg && pkg.workspaces != null) {
-			return "package.json workspaces field";
-		}
-	} catch {
-		// Best-effort only — fall through to the lockfile/config-file checks.
-	}
-	if (detected.pm === "pnpm" && existsSync(`${detected.root}/pnpm-workspace.yaml`)) {
-		return "pnpm-workspace.yaml";
-	}
-	if (detected.pm === "bun" && (existsSync(`${detected.root}/bun.lock`) || existsSync(`${detected.root}/bun.lockb`))) {
-		return "bun.lock";
-	}
-	return null;
-};
+// `describePmEvidence` lived here and is deleted. It re-read the manifest and
+// re-implemented `PackageManagerDetector`'s priority order to guess which signal
+// had decided the package manager, and said in its own docstring that it was not
+// a source of truth — it could not reproduce the detector's conjunction rules, so
+// a repo with a stray lockfile got a confident wrong evidence string while the
+// detector itself had decided correctly. `DetectedPackageManager` carries the
+// deciding marker itself from `@effected/workspaces@0.13.0`, so the step now
+// forwards `detected.evidence` and there is nothing left to re-derive. Deleting
+// it also removed this module's only raw `node:fs` import.
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Install labelling
@@ -141,7 +111,13 @@ export const formatCatalogCountsCompact = (counts: CatalogActionCounts): string 
 /** Everything the opening Run-context block reports. */
 export interface RunContext {
 	readonly detected: DetectedPm;
-	readonly evidence: string | null;
+	/**
+	 * The marker the detector says decided the package manager. Non-nullable:
+	 * it is forwarded from `DetectedPm`, which always carries one. It was
+	 * `string | null` while this was locally re-derived and could fail to
+	 * establish an answer.
+	 */
+	readonly evidence: PackageManagerEvidence;
 	readonly packageCount: number | null;
 	readonly lockfileName: string;
 	readonly branch: string;
@@ -164,9 +140,7 @@ export interface RunContext {
  */
 export const runContextLines = (context: RunContext): ReadonlyArray<string> => [
 	"Run context",
-	`  package manager  ${context.detected.pm}${context.detected.version ? ` ${context.detected.version}` : ""}${
-		context.evidence ? `   (${context.evidence})` : ""
-	}`,
+	`  package manager  ${context.detected.pm}${context.detected.version ? ` ${context.detected.version}` : ""}${`   (${context.evidence})`}`,
 	`  workspace root   ${context.detected.root}${
 		context.packageCount !== null ? ` (${context.packageCount} package${context.packageCount === 1 ? "" : "s"})` : ""
 	}`,

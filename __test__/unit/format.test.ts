@@ -19,11 +19,11 @@ import type { CatalogDelta, DependencyUpdateResult } from "../../src/schema/doma
  * would eventually be the one nobody updated.
  */
 
-const detected = { pm: "pnpm", version: "11.20.0", root: "/ws" } as const;
+const detected = { pm: "pnpm", version: "11.20.0", root: "/ws", evidence: "pnpm-workspace.yaml" } as const;
 
 const baseContext = {
 	detected,
-	evidence: "pnpm-workspace.yaml",
+	evidence: "pnpm-workspace.yaml" as const,
 	packageCount: 3,
 	lockfileName: "pnpm-lock.yaml",
 	branch: "pnpm/config-deps",
@@ -50,11 +50,14 @@ describe("runContextLines", () => {
 		]);
 	});
 
-	it("includes the evidence only when the detector left one", () => {
+	it("reports the detector's own evidence marker", () => {
+		// `evidence` is non-nullable now: it is forwarded from the detector, which
+		// always carries one. The previous "absence reads as absence" case is gone
+		// because it is no longer representable — while this was locally
+		// re-derived, the helper could fail to establish an answer and returned
+		// null. Asserting the null branch now would pin a state the type forbids.
 		expect(runContextLines(baseContext)[1]).toContain("(pnpm-workspace.yaml)");
-		// Evidence is best-effort and explicitly not a source of truth, so its
-		// absence must read as absence rather than as an empty parenthesis.
-		expect(runContextLines({ ...baseContext, evidence: null })[1]).not.toContain("(");
+		expect(runContextLines({ ...baseContext, evidence: "bun.lock" })[1]).toContain("(bun.lock)");
 	});
 
 	it("includes the package count only when discovery succeeded", () => {

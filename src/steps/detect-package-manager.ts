@@ -15,11 +15,10 @@
  * @module steps/detect-package-manager
  */
 
-import type { PackageManagerDetector, WorkspaceRoot } from "@effected/workspaces";
+import type { PackageManagerDetector, PackageManagerEvidence, WorkspaceRoot } from "@effected/workspaces";
 import { WorkspaceDiscovery } from "@effected/workspaces";
 import { Effect } from "effect";
 import type { InvalidInputError } from "../errors/errors.js";
-import { describePmEvidence } from "../format.js";
 import type { DetectedPm } from "../services/package-manager.js";
 import { detectPackageManager } from "../services/package-manager.js";
 
@@ -27,13 +26,16 @@ import { detectPackageManager } from "../services/package-manager.js";
  * What the detect step resolved, plus the two enrichments the run-context block
  * needs.
  *
- * `evidence` is best-effort and explicitly **not** a source of truth — see
- * `describePmEvidence`. `packageCount` is `null` when discovery failed, which is
- * never fatal: it only enriches a log line.
+ * `evidence` is the detector's **own** answer for which marker decided the
+ * package manager, forwarded from `DetectedPm`. It used to be a local
+ * re-derivation that guessed from the same files and could disagree with the
+ * detector it was describing; it is now a source of truth, and is non-nullable
+ * because the detector always has one. `packageCount` is `null` when discovery
+ * failed, which is never fatal: it only enriches a log line.
  */
 export interface DetectPackageManagerResult {
 	readonly detected: DetectedPm;
-	readonly evidence: string | null;
+	readonly evidence: PackageManagerEvidence;
 	readonly packageCount: number | null;
 }
 
@@ -51,7 +53,6 @@ export const detectPackageManagerStep = (): Effect.Effect<
 > =>
 	Effect.gen(function* () {
 		const detected = yield* detectPackageManager();
-		const evidence = describePmEvidence(detected);
 
 		// Cheap, already-provided lookup used only to enrich the Run context line
 		// with a package count — never fails the run.
@@ -61,5 +62,5 @@ export const detectPackageManagerStep = (): Effect.Effect<
 			Effect.catch(() => Effect.succeed(null)),
 		);
 
-		return { detected, evidence, packageCount };
+		return { detected, evidence: detected.evidence, packageCount };
 	});

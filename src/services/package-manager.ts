@@ -4,6 +4,7 @@
  * @module services/package-manager
  */
 
+import type { PackageManagerEvidence } from "@effected/workspaces";
 import { PackageManagerDetector, WorkspaceRoot } from "@effected/workspaces";
 import { Effect, Option } from "effect";
 
@@ -22,6 +23,16 @@ export interface DetectedPm {
 	readonly pm: SupportedPm;
 	readonly version: string | undefined;
 	readonly root: string;
+	/**
+	 * The marker that decided `pm`, straight from the detector.
+	 *
+	 * This is the detector's own answer, not a re-derivation. It replaces a local
+	 * `describePmEvidence` helper that re-read the manifest and re-implemented the
+	 * priority order to guess — and got it wrong whenever the real rule was a
+	 * conjunction (a stray lockfile plus a manifest field), reporting a confident
+	 * wrong signal while the detector itself decided correctly.
+	 */
+	readonly evidence: PackageManagerEvidence;
 }
 
 /**
@@ -66,7 +77,7 @@ export const detectPackageManager = (
 			);
 		}
 
-		return { pm: detected.name, version: Option.getOrUndefined(detected.version), root };
+		return { pm: detected.name, version: Option.getOrUndefined(detected.version), root, evidence: detected.evidence };
 	}).pipe(
 		Effect.mapError((error) =>
 			error instanceof InvalidInputError

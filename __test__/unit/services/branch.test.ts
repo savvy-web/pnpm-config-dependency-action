@@ -3,10 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ScriptResult } from "@effected/commands";
 import type { StatusEntry } from "@effected/git";
-import { Git } from "@effected/git";
+import { Git, UnknownRefError } from "@effected/git";
 import type { FileChange, Repo } from "@effected/github";
 import { GitBranch, GitCommit, GitHubError, RepoRef, Repo as RepoTag } from "@effected/github";
-import { Effect, Layer, References, Result } from "effect";
+import { Effect, Layer, Option, References, Result } from "effect";
 import { describe, expect, it } from "vitest";
 import { BranchManager } from "../../../src/services/branch.js";
 import { fromMap } from "../../utils/spawner.js";
@@ -63,22 +63,71 @@ const commitDouble = (state: CommitState) =>
 			}),
 	});
 
+/** One recorded call against the `Git` service double. */
+interface GitCall {
+	readonly member: string;
+	readonly cwd: string;
+	readonly args: Record<string, unknown>;
+}
+
 /**
  * Run an effect that uses BranchManager with test layers.
+ *
+ * Every local git operation goes through `Git` now (the module has no `Run`
+ * path left), so the double records each call — member, cwd and arguments. The
+ * `cwd` is recorded deliberately: `manage` and the post-commit sync used to run
+ * at the process directory with no cwd at all (#266), and recording it is what
+ * makes that regression expressible as a failing assertion.
+ *
+ * `mergeBaseOption` defaults to "a merge-base exists"; a test that needs the
+ * recovery path overrides it.
  */
 const runWithBranchManager = <A, E>(
 	effect: Effect.Effect<A, E, BranchManager | Repo>,
 	branches?: Map<string, string>,
 	responses?: ReadonlyMap<string, ScriptResult>,
 	statusEntries?: ReadonlyArray<StatusEntry>,
+	gitOverrides: Partial<Parameters<typeof Git.layerTest>[0]> = {},
 ) => {
 	const state: BranchState = { branches: new Map(branches ?? []) };
 	const commitState: CommitState = { commits: [] };
 	const spawner = fromMap(responses);
+	const gitCalls: GitCall[] = [];
+	const record = (member: string, cwd: string, args: Record<string, unknown> = {}) => {
+		gitCalls.push({ member, cwd, args });
+	};
 
-	// Only `status` is stubbed. Every other `Git` member dies naming itself, which
-	// is what proves `BranchManager` reaches for nothing else on this service.
-	const gitLayer = Git.layerTest({ status: () => Effect.succeed(statusEntries ?? []) });
+	const gitLayer = Git.layerTest({
+		status: (cwd: string) => {
+			record("status", cwd);
+			return Effect.succeed(statusEntries ?? []);
+		},
+		fetch: (cwd: string, options: { readonly ref: string; readonly remote?: string }) => {
+			record("fetch", cwd, { ...options });
+			return Effect.void;
+		},
+		fetchUnshallow: (cwd: string, options?: { readonly remote?: string }) => {
+			record("fetchUnshallow", cwd, { ...options });
+			return Effect.void;
+		},
+		branchCreate: (cwd: string, name: string, options?: Record<string, unknown>) => {
+			record("branchCreate", cwd, { name, ...options });
+			return Effect.void;
+		},
+		reset: (cwd: string, options?: Record<string, unknown>) => {
+			record("reset", cwd, { ...options });
+			return Effect.void;
+		},
+		isShallow: (cwd: string) => {
+			record("isShallow", cwd);
+			return Effect.succeed(false);
+		},
+		mergeBaseOption: (cwd: string, a: string, b: string) => {
+			record("mergeBaseOption", cwd, { a, b });
+			return Effect.succeed(Option.some("merge-base-sha"));
+		},
+		...gitOverrides,
+	});
 
 	const serviceLayer = BranchManager.layer.pipe(
 		Layer.provide(Layer.mergeAll(branchDouble(state), commitDouble(commitState), spawner.layer, gitLayer)),
@@ -88,6 +137,7 @@ const runWithBranchManager = <A, E>(
 		state,
 		commitState,
 		spawner,
+		gitCalls,
 		result: Effect.runPromise(
 			Effect.result(effect).pipe(
 				Effect.provide(Layer.merge(serviceLayer, repoLayer)),
@@ -103,7 +153,7 @@ describe("BranchManager.manage", () => {
 		const { state, result } = runWithBranchManager(
 			Effect.gen(function* () {
 				const manager = yield* BranchManager;
-				return yield* manager.manage("pnpm/config", "main");
+				return yield* manager.manage("pnpm/config", "/ws", "main");
 			}),
 			branches,
 		);
@@ -129,7 +179,7 @@ describe("BranchManager.manage", () => {
 		const { state, result } = runWithBranchManager(
 			Effect.gen(function* () {
 				const manager = yield* BranchManager;
-				return yield* manager.manage("pnpm/config", "main");
+				return yield* manager.manage("pnpm/config", "/ws", "main");
 			}),
 			branches,
 		);
@@ -172,7 +222,7 @@ describe("BranchManager.manage", () => {
 			Effect.result(
 				Effect.gen(function* () {
 					const manager = yield* BranchManager;
-					return yield* manager.manage("pnpm/config", "main");
+					return yield* manager.manage("pnpm/config", "/ws", "main");
 				}),
 			).pipe(
 				Effect.provide(Layer.merge(serviceLayer, repoLayer)),
@@ -191,7 +241,7 @@ describe("BranchManager.manage", () => {
 		const { result } = runWithBranchManager(
 			Effect.gen(function* () {
 				const manager = yield* BranchManager;
-				return yield* manager.manage("pnpm/config");
+				return yield* manager.manage("pnpm/config", "/ws");
 			}),
 			branches,
 		);
@@ -498,41 +548,70 @@ describe("BranchManager.validateBranches", () => {
 
 describe("BranchManager.ensureBaseHistory", () => {
 	it("is a no-op when the merge-base already resolves (no fetch)", async () => {
-		// merge-base succeeds → the base history is present, so no fetch commands
-		// need be mapped; an unmapped fetch would surface if the code fetched anyway.
-		const responses = new Map<string, ScriptResult>([
-			["git merge-base main HEAD", { exit: 0, stdout: "abc123\n", stderr: "" }],
-		]);
-		const { result } = runWithBranchManager(
+		// The harness default is "a merge-base exists", so the recovery path must
+		// not run. Asserting only success would prove nothing — every recovery call
+		// is `Effect.ignore`d, so it succeeds either way. The assertion has to be
+		// that no fetch/branchCreate was issued at all.
+		const { gitCalls, result } = runWithBranchManager(
+			Effect.gen(function* () {
+				const manager = yield* BranchManager;
+				return yield* manager.ensureBaseHistory("main", "/ws");
+			}),
+		);
+		expect(Result.isSuccess(await result)).toBe(true);
+		expect(gitCalls.map((c) => c.member)).toEqual(["mergeBaseOption"]);
+	});
+
+	it("treats an unknown base ref as 'not ready' rather than failing", async () => {
+		// `mergeBaseOption` puts a missing ref on the ERROR channel and only a
+		// missing common ancestor in `Option.none`. The preflight exists precisely
+		// for the missing-ref case (single-branch or shallow checkout), so it must
+		// recover rather than abort. Pins the behaviour, not the mechanism: the
+		// catch-all in `hasMergeBase` is what carries it, and the compiler already
+		// forces that catch to exist because the helper is typed `E = never`.
+		const { gitCalls, result } = runWithBranchManager(
 			Effect.gen(function* () {
 				const manager = yield* BranchManager;
 				return yield* manager.ensureBaseHistory("main", "/ws");
 			}),
 			undefined,
-			responses,
+			undefined,
+			undefined,
+			{
+				mergeBaseOption: () => Effect.fail(new UnknownRefError({ ref: "main", cwd: "/ws" })),
+			},
 		);
 		expect(Result.isSuccess(await result)).toBe(true);
+		// It recovered rather than aborting: the fetch path ran.
+		expect(gitCalls.map((c) => c.member)).toContain("fetch");
 	});
 
 	it("fetches and deepens, then succeeds (warns) when the base is unavailable", async () => {
-		// merge-base never resolves → the fallback fetch/unshallow/branch path runs
-		// and the effect still succeeds (best-effort, non-fatal — it warns).
-		const responses = new Map<string, ScriptResult>([
-			["git merge-base main HEAD", { exit: 1, stdout: "", stderr: "no merge base" }],
-			["git fetch origin +refs/heads/main:refs/remotes/origin/main", { exit: 0, stdout: "", stderr: "" }],
-			["git rev-parse --is-shallow-repository", { exit: 0, stdout: "true\n", stderr: "" }],
-			["git fetch --unshallow origin", { exit: 0, stdout: "", stderr: "" }],
-			["git branch -f main refs/remotes/origin/main", { exit: 0, stdout: "", stderr: "" }],
-		]);
-		const { result } = runWithBranchManager(
+		// No merge-base → the fallback fetch/unshallow/branchCreate path runs and
+		// the effect still succeeds (best-effort, non-fatal — it warns).
+		const { gitCalls, result } = runWithBranchManager(
 			Effect.gen(function* () {
 				const manager = yield* BranchManager;
 				return yield* manager.ensureBaseHistory("main", "/ws");
 			}),
 			undefined,
-			responses,
+			undefined,
+			undefined,
+			{
+				mergeBaseOption: () => Effect.succeedNone,
+				isShallow: () => Effect.succeed(true),
+			},
 		);
 		expect(Result.isSuccess(await result)).toBe(true);
+
+		// The recovery is an ordered sequence, and each step depends on the last:
+		// the refspec fetch materializes origin/<base>, unshallow deepens it, and
+		// branchCreate makes the bare name resolve.
+		const fetched = gitCalls.find((c) => c.member === "fetch");
+		expect(fetched?.args.ref).toBe("+refs/heads/main:refs/remotes/origin/main");
+		expect(gitCalls.map((c) => c.member)).toContain("fetchUnshallow");
+		const created = gitCalls.find((c) => c.member === "branchCreate");
+		expect(created?.args).toMatchObject({ name: "main", force: true, startPoint: "refs/remotes/origin/main" });
 	});
 
 	it("runs every git command at the workspace root, not the process cwd", async () => {
@@ -542,34 +621,26 @@ describe("BranchManager.ensureBaseHistory", () => {
 		// subdirectory, and then the merge-base probe and the recovery fetches all
 		// resolve against the wrong repository state.
 		//
-		// This asserts on the spawner's RECORDED cwd, not on command names — the
-		// suites above script by command line, which is cwd-blind and would pass
-		// against the buggy version. That blindness is why this bug survived a
-		// review and a full test suite.
-		const responses = new Map<string, ScriptResult>([
-			["git merge-base main HEAD", { exit: 1, stdout: "", stderr: "no merge base" }],
-			["git fetch origin +refs/heads/main:refs/remotes/origin/main", { exit: 0, stdout: "", stderr: "" }],
-			["git rev-parse --is-shallow-repository", { exit: 0, stdout: "true\n", stderr: "" }],
-			["git fetch --unshallow origin", { exit: 0, stdout: "", stderr: "" }],
-			["git branch -f main refs/remotes/origin/main", { exit: 0, stdout: "", stderr: "" }],
-		]);
-
-		const { spawner, result } = runWithBranchManager(
+		// This asserts on the RECORDED cwd of every git call, not on which calls
+		// were made — an assertion on command shape is cwd-blind and passes against
+		// the buggy version. That blindness is why the bug survived a review and a
+		// full suite.
+		const { gitCalls, result } = runWithBranchManager(
 			Effect.gen(function* () {
 				const manager = yield* BranchManager;
 				return yield* manager.ensureBaseHistory("main", "/some/workspace/root");
 			}),
 			undefined,
-			responses,
+			undefined,
+			undefined,
+			{ mergeBaseOption: () => Effect.succeedNone, isShallow: () => Effect.succeed(true) },
 		);
 
 		expect(Result.isSuccess(await result)).toBe(true);
-		// Every recovery command AND both merge-base probes must be anchored.
-		expect(spawner.spawns.length).toBeGreaterThan(0);
-		for (const spawn of spawner.spawns) {
-			expect(spawn.cwd, `${[spawn.command, ...spawn.args].join(" ")} ran at ${String(spawn.cwd)}`).toBe(
-				"/some/workspace/root",
-			);
+		// Guards the guard: zero recorded calls would pass the loop vacuously.
+		expect(gitCalls.length).toBeGreaterThan(0);
+		for (const call of gitCalls) {
+			expect(call.cwd, `${call.member} ran at ${call.cwd}`).toBe("/some/workspace/root");
 		}
 	});
 });
@@ -581,23 +652,38 @@ describe("BranchManager.manage — git plumbing", () => {
 		// checked-out branch — so origin/<branch> never materializes and the
 		// checkout below it fails. Live runs masked this with fetch-depth: 0.
 		//
-		// The spawner answers unscripted commands with a zero exit, so asserting
-		// only that `manage` SUCCEEDS proves nothing here; the assertion has to be
-		// on the argv actually spawned.
+		// Asserting only that `manage` SUCCEEDS proves nothing here — the double
+		// answers every call happily. The assertion has to be on the ref actually
+		// requested.
 		const branches = new Map([["main", "main-sha"]]);
-		const { spawner, result } = runWithBranchManager(
+		const { gitCalls, result } = runWithBranchManager(
 			Effect.gen(function* () {
 				const manager = yield* BranchManager;
-				return yield* manager.manage("pnpm/config", "main");
+				return yield* manager.manage("pnpm/config", "/ws", "main");
 			}),
 			branches,
 		);
 
 		expect(Result.isSuccess(await result)).toBe(true);
 
-		const lines = spawner.spawns.map((call) => [call.command, ...call.args].join(" "));
-		expect(lines).toContain("git fetch origin +refs/heads/pnpm/config:refs/remotes/origin/pnpm/config");
-		expect(lines).not.toContain("git fetch origin");
-		expect(lines).toContain("git checkout -B pnpm/config origin/pnpm/config");
+		const fetched = gitCalls.find((c) => c.member === "fetch");
+		expect(fetched?.args.ref).toBe("+refs/heads/pnpm/config:refs/remotes/origin/pnpm/config");
+		expect(fetched?.args.remote).toBe("origin");
+		// A bare ref here is the actual bug: it would read as valid and resolve
+		// nothing on a single-branch clone.
+		expect(fetched?.args.ref).not.toBe("pnpm/config");
+
+		// `checkout -B` is branchCreate with force + checkout, same argv.
+		const created = gitCalls.find((c) => c.member === "branchCreate");
+		expect(created?.args).toMatchObject({
+			name: "pnpm/config",
+			checkout: true,
+			force: true,
+			startPoint: "origin/pnpm/config",
+		});
+
+		// And it must be anchored at the passed root, not the process cwd (#266).
+		expect(fetched?.cwd).toBe("/ws");
+		expect(created?.cwd).toBe("/ws");
 	});
 });

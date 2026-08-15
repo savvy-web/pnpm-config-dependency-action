@@ -13,7 +13,7 @@
  * @module steps/branch
  */
 
-import type { CommandFailedError, CommandOutputError } from "@effected/commands";
+import type { GitCommandError, NotARepositoryError, UnknownRefError } from "@effected/git";
 import type { GitHubError, Repo } from "@effected/github";
 import { Effect } from "effect";
 import type { InvalidInputError } from "../errors/errors.js";
@@ -27,7 +27,11 @@ import { BranchManager } from "../services/branch.js";
  * and checkout after the API upsert); the other two from the API half and the
  * ref preflight.
  */
-export type BranchStepError = GitHubError | InvalidInputError | CommandFailedError | CommandOutputError;
+/**
+ * `BranchManager`'s local git operations now fail with `@effected/git`'s typed
+ * errors rather than raw command errors — the module moved off `Run` entirely.
+ */
+export type BranchStepError = GitHubError | InvalidInputError | GitCommandError | NotARepositoryError | UnknownRefError;
 
 /**
  * Validate both refs and bring the update branch to the source SHA.
@@ -39,13 +43,14 @@ export const branchStep = (
 	branchName: string,
 	sourceBranch: string,
 	targetBranch: string,
+	workspaceRoot: string,
 ): Effect.Effect<BranchResult, BranchStepError, BranchManager | Repo> =>
 	Effect.gen(function* () {
 		const branchManager = yield* BranchManager;
 
 		// Validate refs before any destructive branch operation, then manage branch.
 		yield* branchManager.validateBranches(sourceBranch, targetBranch);
-		const branchResult = yield* branchManager.manage(branchName, sourceBranch);
+		const branchResult = yield* branchManager.manage(branchName, workspaceRoot, sourceBranch);
 
 		yield* Effect.logInfo(
 			`Step: branch — ${branchResult.branch} ${

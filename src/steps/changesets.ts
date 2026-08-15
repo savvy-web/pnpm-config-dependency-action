@@ -12,7 +12,7 @@
  * @module steps/changesets
  */
 
-import type { CommandFailedError, CommandOutputError } from "@effected/commands";
+import type { GitCommandError, NotARepositoryError, UnknownRefError } from "@effected/git";
 import { Effect } from "effect";
 import type { ChangesetError } from "../errors/errors.js";
 import type { ChangesetFile } from "../schema/domain.js";
@@ -37,7 +37,7 @@ export const changesetsStep = (
 	workspaceRoot: string,
 ): Effect.Effect<
 	ChangesetsStepResult,
-	ChangesetError | CommandFailedError | CommandOutputError,
+	ChangesetError | GitCommandError | NotARepositoryError | UnknownRefError,
 	Changesets | BranchManager
 > =>
 	Effect.gen(function* () {
