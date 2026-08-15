@@ -23,18 +23,17 @@ export default defineConfig({
 		// production even though the file exists.
 		// `@changesets/apply-release-plan` loads the configured changelog
 		// module this way (via silk-effects 3's changesets v3 engine).
+		//
 		// `@effected/workspaces`'s ConfigDependencyHooks loader has the same
-		// computed `import(candidateUrl)` pattern and IS reachable in this bundle
-		// (via WorkspaceCatalogs), so rspack emits a "Critical dependency" warning
-		// and compiles it into a context module. It is deliberately NOT listed
-		// here: registering it makes the builder's webpack-ignore loader throw on
-		// that file (`hasTraversalSegment`) and fails the whole build. The warning
-		// is inert unless the config-dependency-hooks path is actually invoked at
-		// runtime — this action reads workspace/lockfile structure
-		// (WorkspaceDiscovery / LockfileReader / PackageManagerDetector), it does
-		// not load pnpmfile config-dependency hooks. TODO: confirm at runtime, or
-		// fix upstream (@effected/workspaces webpackIgnore its own loader, or the
-		// builder's ignore loader tolerate it).
+		// computed `import(candidateUrl)` pattern and is reachable here via
+		// WorkspaceCatalogs. It does NOT need listing: as of
+		// `@effected/workspaces@0.13.0` it carries its own inline
+		// `/* webpackIgnore: true */` (upstream spencerbeggs/effected#242), so
+		// rspack leaves the import native and emits no warning. Listing it here
+		// would still fail the build — the builder's ignore loader throws on that
+		// file — so if a "Critical dependency" warning naming
+		// `ConfigDependencyHooks.js` ever returns, the fix is upstream, not an
+		// entry in this list.
 		//
 		// A third, different case: `src/services/module-catalogs.ts` (Task 5)
 		// dynamically imports a config dependency's extracted tarball entry —
