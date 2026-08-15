@@ -17,7 +17,7 @@ implementation-plans: []
 [Back to index](./_index.md)
 
 **Framework:** Vitest with v8 coverage, forks pool for Effect-TS compatibility.
-Current suite: **580 tests, all passing**.
+Current suite: **581 tests, all passing**.
 
 ## Layout
 
@@ -27,16 +27,35 @@ mirroring `src/`; there are no `.test.ts` siblings in `src/`.
 ```text
 __test__/
 ├── unit/           # mirrors src/ — discovered suites
+│   └── utilities/  # tests for src/utils/ — NOT named `utils/` (see below)
 ├── integration/    # real-IO suites (*.int.test.ts) + integration/utils/
 └── utils/          # RESERVED: helper modules, EXCLUDED from collection
 ```
 
-**`__test__/utils/**` is reserved by the vitest-agent `AgentPlugin` for helper
-modules and is excluded from suite discovery.** That has a sharp edge worth
-stating plainly: a `describe` left inside a helper there is silently **never
-collected** — the suite shrinks while every local count still looks plausible.
-So the helpers' own behavior is pinned by `__test__/unit/doubles.test.ts`, a
+**`utils`, `fixtures` and `snapshots` are reserved directory names, at *any*
+depth under `__test__`, not just at the top level.** The rule in
+`@vitest-agent/sdk` (`utils/test-location.js`) is
+`segments.slice(1, -1).some((s) => TEST_HELPER_DIRS.includes(s))` — so a test
+file is classified `excluded` if **any** intermediate path segment is one of
+those three names. `utils/` is for helpers and mocks; tests must not live there.
+
+That has a sharp edge worth stating plainly: an excluded file is silently
+**never collected** — the suite shrinks while every local count still looks
+plausible, and because the coverage gate is *aggregate* nothing turns red. The
+helpers' own behavior is therefore pinned by `__test__/unit/doubles.test.ts`, a
 discovered suite, rather than by tests living beside them.
+
+**This has already bitten once.** The five suites covering `src/utils/`
+(`resolveTargetBranch`, the catalog helpers, `buildUpdateSubject`, the
+`devEngines.runtime` helpers and the semver range helpers) sat in
+`__test__/unit/utils/`, matched the nested-segment rule, and stopped being
+collected — the run silently dropped from 580 tests to **478** and stayed
+green. They now live in `__test__/unit/utilities/`, and all five pass.
+
+`__test__/unit/test-collection.test.ts` guards the recurrence: it walks
+`__test__`, asserts no `*.test.ts` crosses a reserved segment, and asserts the
+walker found something (so it cannot pass vacuously). Verified by planting a
+file under `__test__/unit/utils/` — the guard fails and names it.
 
 Shared helpers currently in that directory:
 
@@ -215,9 +234,25 @@ shared helpers are plain `.ts` in the reserved `__test__/utils/` directory, neve
 `.test.ts`; and a test-count delta is only meaningful once duplicate executions
 are accounted for.
 
+**A third counting trap, and the one that actually shipped: a suite that is
+never collected at all.** The five `src/utils/` suites sat in a reserved
+directory name and stopped running; the total fell from 580 to 478 and every
+signal stayed green. Note what distinguishes this from the two traps above —
+both of those are about a count being *inflated* or a module being *thin*,
+which a careful reader might catch. This one **removes** tests, and the only
+visible symptom is a number nobody was diffing.
+
+So: **a test-count delta is evidence and should be explained, in both
+directions.** A drop is not noise. `pnpm exec vitest list --filesOnly` piped
+against `find __test__ -name '*.test.ts'` answers "is every suite collected" in
+one line, and `__test__/unit/test-collection.test.ts` now answers it on every
+run.
+
 **How to actually verify a module is exercised:** fault injection. Throw inside the
 code path and confirm a test fails. If the suite still passes, that code has no
-test execution, whatever the coverage number says.
+test execution, whatever the coverage number says. That is how the restored
+suites were checked before being trusted — inverting `resolveTargetBranch`'s
+sentinel fails two of its four cases, so they discriminate rather than decorate.
 
 ## Integration Testing
 
