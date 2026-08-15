@@ -25,8 +25,8 @@
 		},
 		"effected": {
 			"url": "https://github.com/spencerbeggs/effected.git",
-			"ref": "@effected/workspaces@0.11.1",
-			"purpose": "Read-only source for the @effected package kit — the authority on its real export surface and intended usage. Pinned to the monorepo release wave whose tags carry the versions this repo installs; at this pin every vendored package matches node_modules exactly (github-actions 0.6.0, workspaces 0.11.1, commands 0.4.0, github 0.3.0, npm 0.9.0). Re-pin whenever a dependency bump moves any of them, in the same commit as the bump.",
+			"ref": "@effected/workspaces@0.12.0",
+			"purpose": "Read-only source for the @effected package kit — the authority on its real export surface and intended usage. Pinned to the monorepo release wave whose tags carry the versions this repo installs, so every vendored package under packages/ matches node_modules exactly at this pin. Re-pin whenever a dependency bump moves any @effected/* version, in the same commit as the bump; verify by comparing packages/<name>/package.json at the pinned commit against node_modules, never by reading the tag name. This purpose deliberately does NOT enumerate the versions — an inline list is a second source of truth that goes stale silently while the ref is updated, which is exactly what happened at the 0.11.1 pin.",
 			"sparse": [
 				"packages",
 				"design",
@@ -34,7 +34,7 @@
 				"README.md"
 			],
 			"orientation": {
-				"layout": "pnpm monorepo, one directory per published package under packages/<name>/ with src/, test files co-located, and its own CLAUDE.md. design/ holds the kit's internal design docs. The website/, lib/, plugin/ and lockfile trees are excluded from the sparse checkout.",
+				"layout": "pnpm monorepo, one directory per published package under packages/<name>/ with src/, test files co-located, and its own CLAUDE.md. design/ holds the kit's internal design docs. The website/, lib/, plugin/ and lockfile trees are excluded from the sparse checkout. This repo carries six submodules of its OWN (.repos/cmark-gfm, commonmark-js, commonmark-spec, effect, mdast, mdast-util-from-markdown) — leave every one uninitialized. `sparse` cannot evict a nested submodule's worktree, because it belongs to a different repository, so a recursive init materializes .repos/effected/.repos/effect as a SECOND Effect clone that drifts off the top-level .repos/effect pin; an agent reading Effect source through this tree then gets a version nobody pinned, and effected stays permanently dirty. Repair with `savvy repos restore effected`, which deinitializes them. Verify with `git -C .repos/effected submodule status` — every line must start with `-`.",
 				"keyPaths": {
 					"packages": "packages",
 					"actions-runtime": "packages/github-actions/src",
@@ -44,14 +44,7 @@
 				},
 				"startHere": "packages/<name>/src/index.ts for a package's real export surface, and its CLAUDE.md for the intended usage. Pinned to the release tag named by `ref`, so the checkout matches the published version this repo installs — re-pin whenever that version moves. A tag is a monorepo-wide release commit, so github-actions@X and app@Y from the same wave resolve to one commit. node_modules still wins on any disagreement."
 			},
-			"notes": [
-				{
-					"id": "n-cf30",
-					"date": "2026-08-13",
-					"ref": "@effected/workspaces@0.11.1",
-					"note": "This repo carries six of its own submodules (.repos/cmark-gfm, commonmark-js, commonmark-spec, effect, mdast, mdast-util-from-markdown). Leave them uninitialized — `sparse` cannot evict a nested submodule's worktree, since it belongs to a different repository. A recursive init materializes .repos/effected/.repos/effect as a SECOND Effect clone that drifts off the top-level .repos/effect pin (seen at 4e0be58 while the pin was 3c495ae), so an agent reading Effect source through this tree gets a version nobody pinned, and effected stays permanently dirty (`m .repos/effected`). Repair with `savvy repos restore effected`, which deinitializes them. Note: `repos_inspect mode:\"drift\"` reported clean throughout this failure — the reliable signal was effected's own `dirty: true` in mode:\"status\"."
-				}
-			]
+			"notes": []
 		}
 	}
 }
