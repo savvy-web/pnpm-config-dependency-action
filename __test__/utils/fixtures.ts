@@ -190,7 +190,8 @@ export interface FakePullRequest {
 	draft: boolean;
 	merged: boolean;
 	autoMerge: "merge" | "squash" | "rebase" | undefined;
-	body: string;
+	/** Absent models GitHub's `body: null` — see the note in `toInfo`. */
+	body: string | undefined;
 }
 
 /**
@@ -226,7 +227,14 @@ const toInfo = (pr: FakePullRequest): PullRequestInfo =>
 		draft: pr.draft,
 		merged: pr.merged,
 		mergedAt: Option.none(),
-		body: pr.body,
+		// `body` is an OPTIONAL KEY on PullRequestInfo, so an empty description is
+		// the key being ABSENT — not present-and-undefined, which fails schema
+		// validation, and not "" either. GitHub sends `body: null` and the kit's
+		// projection drops the key. ReleaseInfo and CommentRecord coalesce null to
+		// "" on a REQUIRED body; PullRequestInfo is the odd one out, and a fixture
+		// that smoothed over the difference would let a consumer pin "" and look
+		// correct doing it.
+		...(pr.body === undefined ? {} : { body: pr.body }),
 	});
 
 /**
@@ -238,6 +246,20 @@ const toInfo = (pr: FakePullRequest): PullRequestInfo =>
  */
 export const pullRequestTestLayer = (state: PullRequestTestState): Layer.Layer<PullRequest> =>
 	PullRequest.layerTest({
+		// Filters on the same keys the real route does. `head` is accepted bare
+		// here, matching the kit's documented behaviour of qualifying an
+		// unqualified ref with the current repo's owner.
+		list: (options) =>
+			Effect.sync(() =>
+				state.prs
+					.filter((pr) => (options?.head === undefined ? true : pr.head === options.head))
+					.filter((pr) => (options?.base === undefined ? true : pr.base === options.base))
+					.filter((pr) => {
+						const want = options?.state ?? "open";
+						return want === "all" ? true : pr.state === want;
+					})
+					.map(toInfo),
+			),
 		upsert: (input) =>
 			Effect.sync(() => {
 				const existing = state.prs.find((pr) => pr.head === input.head && pr.state === "open");

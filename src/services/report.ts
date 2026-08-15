@@ -13,6 +13,7 @@
 import type { GitHubError, GitHubGraphQLError, PullRequestShape, Repo } from "@effected/github";
 import { PullRequest as PullRequestTag } from "@effected/github";
 import { GitHubMarkdown } from "@effected/github-actions";
+import { PrBody } from "@savvy-web/silk-effects";
 import { Context, Effect, Layer } from "effect";
 
 import type { CatalogDelta, ChangesetFile, DependencyUpdateResult, PullRequestResult } from "../schema/domain.js";
@@ -100,7 +101,37 @@ const createOrUpdatePRImpl = (
 ): Effect.Effect<PullRequestResult, GitHubError, Repo> =>
 	Effect.gen(function* () {
 		const title = buildUpdateSubject(updates);
-		const body = generatePRBodyImpl(updates, changesets, deltas);
+
+		// Read the PR's current description BEFORE writing, so anything a human or
+		// another agent wrote OUTSIDE the managed markers survives this run. A bare
+		// `head` ref is qualified with this repo's owner by the kit, which is right
+		// here because the update branch is always in this repository — the
+		// fork-originated caveat on `list` cannot apply.
+		const open = yield* pr.list({ head: branch, base, state: "open" });
+		// `body` is optional-ABSENT on PullRequestInfo, not "" — GitHub sends
+		// `body: null` for an empty description and the projection drops the key.
+		// (ReleaseInfo and CommentRecord coalesce null to "" on a REQUIRED body;
+		// PullRequestInfo is the odd one out. Coalescing here, not asserting "".)
+		const priorBody = open[0]?.body ?? "";
+
+		// Everything this action generates lives INSIDE the managed region and is
+		// regenerated wholesale every run — the dependency tables describe the
+		// current run, so carrying them forward would show stale versions. That is
+		// why `summary` is fed this run's freshly rendered body rather than
+		// `ManagedPrBody.extractSummary(priorBody)`: this repo has no curated
+		// summary region to preserve, and manufacturing one would mean re-emitting
+		// last run's tables. What `upsert` preserves, and what this adoption
+		// actually adds, is the human prose outside the markers.
+		const managed = PrBody.ManagedPrBody.build({
+			subject: title,
+			linkedIssues: [],
+			// No slug: `generateCommitMessage` is called without one too, so both
+			// renderings carry the same identity rather than disagreeing.
+			signoff: signoffLine(),
+			summary: generatePRBodyImpl(updates, changesets, deltas),
+			priorBody,
+		});
+		const body = PrBody.ManagedPrBody.upsert(priorBody, managed);
 
 		const result = yield* pr.upsert({ head: branch, base, title, body });
 		const info = result.pullRequest;
@@ -133,20 +164,29 @@ const createOrUpdatePRImpl = (
  * When commits are created via the GitHub API without an explicit author,
  * and include a matching sign-off footer, GitHub will verify/sign the commit.
  */
-const generateCommitMessageImpl = (updates: ReadonlyArray<DependencyUpdateResult>, appSlug?: string): string => {
-	const subject = buildUpdateSubject(updates);
-
+/**
+ * The DCO signoff line, as one function so the commit message and the PR body's
+ * proposed-squash-commit fence cannot drift apart. They are two renderings of
+ * the same eventual commit; a reviewer comparing them should not find two
+ * different authors.
+ */
+const signoffLine = (appSlug?: string): string => {
 	const botName = appSlug ? `${appSlug}[bot]` : "github-actions[bot]";
 	const botEmail = appSlug
 		? `${appSlug}[bot]@users.noreply.github.com`
 		: "41898282+github-actions[bot]@users.noreply.github.com";
+	return `Signed-off-by: ${botName} <${botEmail}>`;
+};
+
+const generateCommitMessageImpl = (updates: ReadonlyArray<DependencyUpdateResult>, appSlug?: string): string => {
+	const subject = buildUpdateSubject(updates);
 
 	return `${subject}
 
 Updated dependencies:
 ${updates.map((u) => `- ${u.dependency}: ${u.from ?? "new"} -> ${u.to}`).join("\n")}
 
-Signed-off-by: ${botName} <${botEmail}>`;
+${signoffLine(appSlug)}`;
 };
 
 /**
