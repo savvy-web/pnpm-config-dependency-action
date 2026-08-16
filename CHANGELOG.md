@@ -1,5 +1,57 @@
 # silk-update-action
 
+## 4.6.0
+
+### Features
+
+* Every local git operation now runs through `@effected/git`, including the explicit-refspec fetch that a single-branch `actions/checkout` requires. The action no longer runs two subprocess mechanisms for git.
+
+### Features
+
+* The pull request description is now written through the shared `silk-release` managed-region contract. Everything the action generates lives between the managed markers and is regenerated each run; **anything you write outside those markers survives**. Previously the whole description was overwritten on every run, so a review note added to the PR body was silently destroyed by the next dependency update.
+
+### Bug Fixes
+
+* Branch management and the post-commit working-tree sync now run at the detected workspace root. They previously ran wherever the action's process happened to be, so invoking the action from a subdirectory could resolve them against unintended repository state.
+* The package-manager evidence reported in the run-context log is now the detector's own answer rather than a local re-derivation. The re-derivation could not reproduce the detector's conjunction rules, so a workspace carrying a stray lockfile could be told a confident wrong reason for a decision that was itself correct.
+
+- The DCO signoff in the proposed squash-commit block and the one in the commit message are now rendered from a single function, so the two cannot drift apart and name different authors for the same eventual commit. [#274][#274]
+
+* Runtime and package-manager version bumps are now written as surgical edits to `package.json` instead of re-serializing the whole file. Key order, indentation and line endings are preserved byte-for-byte, so the diff this action opens against your repository shows only the field it actually changed. Previously the manifest was rewritten from the parsed object with a guessed indent, which could reformat regions the run never intended to touch.
+* A write is skipped entirely when the result would be byte-identical to what was read.
+
+- The pull request description is now written through the shared `silk-release` managed-region contract. Everything the action generates lives between the managed markers and is regenerated each run; **anything you write outside those markers survives**. Previously the whole description was overwritten on every run, so a review note added to the PR body was silently destroyed by the next dependency update.
+
+### Dependencies
+
+* | Dependency               | Type          | Action  | From   | To     |
+  | :----------------------- | :------------ | :------ | :----- | :----- |
+  | @effected/workspaces     | dependency    | updated | 0.12.0 | 0.13.0 |
+  | @effected/git            | dependency    | updated | 0.7.0  | 0.8.0  |
+  | @effected/github         | dependency    | updated | 0.4.1  | 0.4.2  |
+  | @effected/github-actions | dependency    | updated | 0.6.1  | 0.7.0  |
+  | @savvy-web/silk-effects  | dependency    | updated | 5.7.1  | 5.8.1  |
+  | @savvy-web/silk          | devDependency | updated | 3.7.1  | 3.7.4  |
+
+  These move together deliberately. Each is a `0.x` package whose caret range pins the minor, so bumping one alone leaves `@savvy-web/silk-effects` on the previous minor and resolves two copies into the bundle — and two copies are two distinct `Context.Service` tags, which surfaces as a service reading unprovided in a graph that visibly provides it.
+
+- | Dependency             | Type       | Action | From | To    |
+  | :--------------------- | :--------- | :----- | :--- | :---- |
+  | @effected/package-json | dependency | added  | —    | 0.9.0 |
+
+  Adopted for `PackageJsonFile.modify` only, which is decode-free: it reads, applies each field edit through the JSONC engine, and writes. The schema-decoding read path is deliberately **not** used, because it rejects manifests this action must still be able to edit — a private workspace root with no `name`/`version`, and a non-semver `version` such as `"1.0"`, are both legal in a package nobody publishes. [#274][#274]
+
+* | Dependency              | Type       | Action  | From   | To     |                                                                              |
+  | ----------------------- | ---------- | ------- | ------ | ------ | ---------------------------------------------------------------------------- |
+  | @effected/github        | dependency | updated | ^0.4.2 | ^0.4.3 |                                                                              |
+  | @savvy-web/silk-effects | dependency | updated | ^5.8.1 | ^5.9.0 | [#274][#274] Thanks [@savvy-web-bot](https://github.com/apps/savvy-web-bot)! |
+
+### Patch Changes
+
+Thanks to [@savvy-web-bot](https://github.com/apps/savvy-web-bot) for their contributions!
+
+[#274]: https://github.com/savvy-web/silk-update-action/pull/274
+
 ## 4.5.4
 
 ### Dependencies
