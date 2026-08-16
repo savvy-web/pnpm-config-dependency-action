@@ -106,9 +106,18 @@ The action runs on **Effect v4** (`effect` / `@effect/platform-node` both resolv
     runs two subprocess mechanisms for git, accepted deliberately —
     @./09-project-status.md carries the reasoning and the revisit condition.
 - `@effect/platform-node` — Node platform bundle (`NodeServices.layer`), providing
-  FileSystem, Path and **ChildProcessSpawner** (the seam `Run` needs). Provided by
-  `Action.run`'s runtime at the platform level and also pulled in directly by
-  `makeAppLayer` for the root-bound `@effected/workspaces` layers.
+  FileSystem, Path and **ChildProcessSpawner** (the seam `Run` needs). Reaches the
+  program through `Action.run`'s runtime, as a member of `ActionServices`.
+  - **No module in `src/` imports it** — `grep -rn 'platform-node' src/` returns
+    only a comment. `makeAppLayer` used to build `NodeServices.layer` itself for
+    the root-bound `@effected/workspaces` layers, and that was the bug, not the
+    design: it shipped a second copy of the Node platform in the bundle and made
+    the action name a platform dependency it has no business naming. Every layer
+    now leaves FileSystem/Path/ChildProcessSpawner in the requirement channel.
+  - It remains a declared dependency in `package.json`. Whether that declaration
+    is still load-bearing (types, transitive resolution) or vestigial like the
+    `build.ignore` cyclonedx entries has **not** been checked — stated as
+    unverified rather than asserted either way.
 - `effect` (`catalog:effect`) — typed error handling, retries, resource management, plus
   `FileSystem`/`Path`, `HttpClient`/`FetchHttpClient` (`effect/unstable/http`) and
   `ChildProcess`/`ChildProcessSpawner` (`effect/unstable/process`).
@@ -220,6 +229,29 @@ The action runs on **Effect v4** (`effect` / `@effect/platform-node` both resolv
 - `@effected/yaml` — parse and stringify `pnpm-workspace.yaml` with consistent formatting.
   `Yaml.parse` / `Yaml.stringify` return Effects (rather than throwing like the `yaml` npm
   package), so `workspace-yaml.ts` yields them and maps failures into `FileSystemError`.
+- **`@effected/package-json` (`^0.9.0`) — adopted for `PackageJsonFile.modify`, and
+  for nothing else.** `modify(path, edits)` applies a list of `PackageFieldEdit`s
+  (a JSONC `path` plus a `value`; `value: undefined` deletes) to a manifest on disk in
+  one read/edit/write pass, preserving **every byte outside the edited span** — key
+  order, indentation, line endings, trailing newline — and skipping the write entirely
+  when the result would be byte-identical. `RuntimeUpgrade` and
+  `PackageManagerUpgrade` both use it; both still read with `readFileSync` +
+  `JSON.parse` and decide from the parsed object.
+  - **The schema-decoding surface is deliberately unused.** `Package.decode` requires
+    `name` and a strict-semver `version`, so it rejects the private workspace root this
+    action must edit. `0.9.0` also shipped `PackageManifest`, a presence-lenient model
+    that *would* accept it — it is unadopted because the read only feeds a decision and
+    a typed field buys nothing there, not because it is unusable. This whole package was
+    **declined outright** until `0.9.0` — and that ruling was **narrowed to this one
+    decode-free member, not overturned**: the objection in the sentence above is the
+    ruling's own central objection, still standing and still governing everything except
+    `modify`. What changed upstream, and what the adoption cost, are in
+    @./09-project-status.md.
+  - **Adopting it into a second consumer is a layer-wiring change.** Both services
+    resolve `PackageJsonFile` in their *layer bodies*, so `makeAppLayer` must provide it
+    to each. Providing it to only one is **not** a type error — see the `Action.run`
+    hole in @./06-effect-patterns.md — and shipped as a total production outage in
+    v4.6.0.
 
 ### Duplicate resolutions — RESOLVED by the beta.107 wave
 

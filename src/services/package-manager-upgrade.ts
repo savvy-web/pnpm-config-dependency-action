@@ -116,7 +116,13 @@ export interface PackageManagerUpgradeSkipped {
 
 export type PackageManagerUpgradeOutcome = PackageManagerUpgradeApplied | PackageManagerUpgradeSkipped;
 
-/** Parsed package-manager version info (mirrors the pnpm-only `ParsedPnpmVersion`). */
+/**
+ * Parsed package-manager version info.
+ *
+ * Generalized over all three managers. It superseded a pnpm-only
+ * `ParsedPnpmVersion` in `utils/pnpm.ts`, which was left exported with no
+ * callers until it was deleted.
+ */
 interface ParsedPmVersion {
 	readonly version: string;
 	readonly hasCaret: boolean;

@@ -73,7 +73,9 @@ Provided by `Action.run()`:
 
 Subprocess execution is **free functions over core `ChildProcessSpawner`**, not a
 service — there is no `CommandRunner` tag to inject, and a caller's requirement is
-`ChildProcessSpawner.ChildProcessSpawner` (supplied by `NodeServices.layer`).
+`ChildProcessSpawner.ChildProcessSpawner` — which `makeAppLayer` deliberately
+does **not** build, leaving it in the requirement channel for `ActionServices`
+(whose `NodeServices` member supplies it) to satisfy at the boundary.
 
 - `Run.collect(command)` — exit code as a **result** (`succeeded`, `exitCode`,
   `stdout`, `stderr`); only a genuine spawn failure hits the error channel.
@@ -150,8 +152,8 @@ assignment is tree-shaken out of the bundled `dist`, and it fails only in
 production because vitest runs the source.
 
 - `BranchManager.layer` — `GitBranch`, `GitCommit`, `Git`, `ChildProcessSpawner`
-- `PackageManagerUpgrade.layer` — `NpmRegistry`
-- `RuntimeUpgrade.layer` — the three resolvers
+- `PackageManagerUpgrade.layer` — `NpmRegistry`, **`PackageJsonFile`**
+- `RuntimeUpgrade.layer` — the three resolvers, **`PackageJsonFile`**
 - `ReleaseAge.layer` — `WorkspaceCatalogs`, `NpmRegistry`. Not a factory and no
   workspace-root parameter: the root is bound when `WorkspaceCatalogs`' layer is
   built, and the hook-replay subprocess is the kit's now, not ours.
@@ -208,13 +210,46 @@ the table in @./04-module-entry-points.md.
   notes the change. Full write-up in @./04-module-entry-points.md.
 
 ```typescript
-// main.ts — no { layer }; program needs only what Action.run injects:
+// main.ts — no { layer }; program should need only what Action.run injects.
+// "Should" is exact: nothing at this call site checks it. See below.
 Action.run(program);
 
 // Inside program (program.ts) — no token plumbing:
 const appLayer = makeAppLayer(dryRun, { runtimeLive });
 yield* innerProgram(inputs, dryRun, headSha, appLayer);
 ```
+
+### The anti-pattern in the same family: an unprovided service is not a type error
+
+Every pattern above works by keeping a requirement channel honest. **The channel
+itself is not checked at the top.** `Action.run` takes an optional `options`:
+
+```typescript
+static readonly run: <E, R = never>(
+ program: Effect.Effect<void, E, ActionServices | R>,
+ options?: ActionRunOptions<R>,
+) => Promise<void>;
+```
+
+Because `options` is optional, `R` infers to whatever is left over and nothing
+demands a layer for it. So the failure mode of the "resolve dependencies in the
+layer body" convention is: a service resolved in a layer body rises into
+`makeAppLayer`'s requirement channel, `makeAppLayer` does not provide it,
+`Action.run(program)` accepts the leftover silently, and the run dies as a
+**defect** on the runner. It is not hypothetical — v4.6.0 shipped this way with
+`PackageJsonFile` and failed 100% of runs before creating a check run, under a
+clean `tsc` and 588 green tests.
+
+The counter-measure is a compile-time assertion over the composed layer, not
+discipline at the call site — `__test__/unit/layers/app.test.ts` asserts
+`Exclude<AppLayerRequirements, ActionServices>` is `never` and fails
+`pnpm typecheck`, naming the missing service. **The generalizable rule:** when a
+framework entry point accepts your requirement channel *as a type parameter with
+a default*, it is documenting a shape, not enforcing one — the enforcement has to
+be written separately, and it belongs where the graph is composed. What would
+stop it discriminating (an `any` in the channel, `ActionServices` widening
+upstream, or a service resolved in a method rather than a layer body) is in
+@./09-project-status.md.
 
 ## Error Handling Strategy
 

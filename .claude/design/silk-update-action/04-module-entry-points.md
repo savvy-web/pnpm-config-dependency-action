@@ -73,9 +73,28 @@ mirroring `PreLive`.
 ## src/main.ts - Main-Phase Entry
 
 `main.ts` is intentionally tiny: it calls `Action.run(program)` on the program
-imported from `./program.ts`. No `{ layer }` is needed — `program`'s only
-requirements are the core services `Action.run` injects; the `GitHubClient` and
-the domain services are provided internally by `appLayer`.
+imported from `./program.ts`. No `{ layer }` is passed — `program`'s only
+requirements should be the core services `Action.run` injects; the `GitHubClient`
+and the domain services are provided internally by `appLayer`.
+
+**Read "should be" literally: that is an invariant this file cannot enforce, and
+it has been violated in a shipped release.** `Action.run` is declared with an
+*optional* `options` parameter
+(`<E, R = never>(program: Effect<void, E, ActionServices | R>, options?: ActionRunOptions<R>)`,
+`@effected/github-actions/index.d.ts:803`), so `R` infers to whatever the program
+still requires and a bare `Action.run(program)` typechecks at **any** `R`. There
+is no "you forgot a layer" error here, ever. In v4.6.0 that `R` was
+`PackageJsonFile`, and every run in every consumer repo died ~30ms in with
+`Service not found: @effected/package-json/PackageJsonFile` — before the check run
+was created, so the failure was invisible in the GitHub UI.
+
+What enforces it now is **`__test__/unit/layers/app.test.ts`**, not this call
+site: a type-level assertion that `Exclude<AppLayerRequirements, ActionServices>`
+is `never`, read off `ReturnType<typeof makeAppLayer>`. Tests are inside the tsc
+project, so it fails `pnpm typecheck` at pre-commit and in CI rather than only in
+a test run, and it names the missing service in the compiler error. Its three
+blind spots — and the reason it does not cover *broken* wiring, only *missing*
+wiring — are in @./09-project-status.md.
 
 ```typescript
 import { Action } from "@effected/github-actions";

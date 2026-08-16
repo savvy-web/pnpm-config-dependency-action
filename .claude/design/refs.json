@@ -4,20 +4,44 @@
 		{
 			"source": "CLAUDE.md",
 			"target": ".claude/design/silk-update-action/01-dependencies.md",
-			"hash": "0c79e426e3563ad48fd5bb61744365e8f99d3f4f2ee9781d0984fe21eccd6afa",
-			"recordedAt": "2026-07-26"
+			"hash": "f43e96332a77c23d8bbdc20011023650af0b6d0e2a29608ddd3dba12cdade8a4",
+			"recordedAt": "2026-08-16"
+		},
+		{
+			"source": "CLAUDE.md",
+			"target": ".claude/design/silk-update-action/03-type-definitions.md",
+			"hash": "4f2957d8b9854e45d398edcccb63de4b5d9070654d0a68c3c87d5f7e75bfca36",
+			"recordedAt": "2026-08-16"
 		},
 		{
 			"source": "CLAUDE.md",
 			"target": ".claude/design/silk-update-action/05-module-library.md",
-			"hash": "21447f797f889ca5de4a04ab5390dc10458d323cdde419616153005586184f78",
-			"recordedAt": "2026-07-26"
+			"hash": "9dc3db6f78b6b025610235e02bbfaf485462d4cda422906116b74f65154ff73b",
+			"recordedAt": "2026-08-16"
+		},
+		{
+			"source": "CLAUDE.md",
+			"target": ".claude/design/silk-update-action/06-effect-patterns.md",
+			"hash": "0f7c1a27f9d0d7d945cce3f2f8c6634cc1faa20d9086335d53d282b66ff54f46",
+			"recordedAt": "2026-08-16"
+		},
+		{
+			"source": "CLAUDE.md",
+			"target": ".claude/design/silk-update-action/08-testing.md",
+			"hash": "5ad0d6976f3baf3b7598552e14d859b921b32d65e0228c423385a734c5260b6d",
+			"recordedAt": "2026-08-16"
+		},
+		{
+			"source": "CLAUDE.md",
+			"target": ".claude/design/silk-update-action/09-project-status.md",
+			"hash": "fc4ea453d4b5c08d30413a37108fffa6e5684d93695daff3c0ce90900c56c73d",
+			"recordedAt": "2026-08-16"
 		},
 		{
 			"source": "CLAUDE.md",
 			"target": ".claude/design/silk-update-action/_index.md",
-			"hash": "affb6bb873ceaca6fa6cc22b31ece777ae837c6013f9b69e73bb5bfbcd049f81",
-			"recordedAt": "2026-07-26"
+			"hash": "eda2387d52cf26d7bf9e1ee220baec217e7b2a60cf4d9f976664bb882d6ded8e",
+			"recordedAt": "2026-08-16"
 		}
 	]
 }

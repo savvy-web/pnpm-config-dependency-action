@@ -46,7 +46,7 @@ pnpm run generate-schema           # Regenerate docs/schema/run-result.schema.js
 pnpm run lint:md                   # markdownlint-cli2 (docs + this file)
 
 pnpm vitest run __test__/unit/services/regular-deps.test.ts   # single file
-pnpm vitest run --testNamePattern="parsePnpmVersion"          # by name
+pnpm vitest run --testNamePattern="buildUpdateSubject"        # by name
 ```
 
 ## Architecture
@@ -75,170 +75,36 @@ pnpm vitest run --testNamePattern="parsePnpmVersion"          # by name
 
 ### Effect-TS Patterns
 
-- **Kit services**: `@effected/github-actions` (`Action`, `ActionInput`,
-  `ActionEnvironment`, `ActionOutputs`, `ActionState`, `DryRun`, `GitHubToken`,
-  **`GitHubMarkdown`** — the GFM writer, capital H; `GithubMarkdown` was a
-  *rename*, not a removal, and this repo hand-rolled a copy for a release on
-  that misreading. The local copy (`src/utils/github-markdown.ts`) is now
-  **deleted**; only `bold`/`rule` have no kit equivalent and they stay in
-  `src/utils/markdown.ts`);
-  `@effected/github` (`GitHubApp`, `Repo`, `GitBranch`, `GitCommit`, `CheckRun`,
-  `PullRequest` — all failing with a single `GitHubError`, discriminated by
-  `hasKind`); `@effected/commands` (`Run` free functions over core
-  `ChildProcessSpawner` — no `CommandRunner` service); `@effected/git`
-  (`Git.status` / `Git.configSet` only — the mutating tier is declined);
-  `@effected/npm`, `workspaces`, `lockfiles`, `runtimes`, `semver`, `yaml`.
-  Layers are `.layer` /
-  `.layer(opts)` **statics on the service class**, not `*Live` constants; services
-  expose companion `*Shape` interfaces; workspace layers are **root-bound at
-  build**, so their methods are arg-less.
-- **Domain services**: `BranchManager`, `PackageManagerUpgrade`, `ConfigDeps`,
-  `CatalogConfigDeps`, `RegularDeps`, `ReleaseAge`, `RuntimeUpgrade`, `Lockfile`,
-  `Changesets`, `Report` — **every one wired as a `static layer` on the class**,
-  the same convention as the kit, declared *in* the class body (a member attached
-  after the class is tree-shaken out of `dist` and fails only in production). No
-  `*Live` constant survives in `src/services/`. Stateless helpers:
-  `detectPackageManager`, `syncPeers`, `fetchModuleCatalogs`, and the
-  `workspace-yaml` functions — the `WorkspaceYaml` **tag and layer were deleted**,
-  since nothing in `src/` wired them and their only consumer was their own test.
-- **Changesets**: `services/changesets.ts` is a thin adapter over
-  `Changesets.DepsRegen` (`@savvy-web/silk-effects`, wired as `DepsRegenDefault`),
-  which owns the cumulative `merge-base(base) → worktree` diff, consolidation and
-  versionable-minus-ignored gating — this repo computes none of it. `plan`
-  refreshes workspace discovery, so it sees manifests edited earlier in the run.
-- **Errors**: the `ActionError` union is exactly `InvalidInputError` (inputs,
-  branch refs, yarn/no-workspace), `FileSystemError`, `ChangesetError` and
-  `LockfileError` — every member has a construction site. Kit failures arrive as
-  `GitHubError` and `CommandFailedError`/`CommandOutputError`. `GitHubApiError`,
-  `GitError`, `PnpmError` and `DependencyUpdateFailures` were **deleted** for
-  having none; `__test__/unit/errors/errors.test.ts` pins the exported set, so
-  re-adding one fails a test.
-- **Effect v4 spellings**: `Context.Service`; `NodeServices.layer`;
-  `FileSystem`/`Path` from `effect`, `HttpClient`/`FetchHttpClient` from
-  `effect/unstable/http`, `ChildProcess`/`ChildProcessSpawner` from
-  `effect/unstable/process`; `Effect.catch`, `Effect.result` (returns a `Result`),
-  `Effect.timeoutOrElse`; log levels are string literals set via
-  `References.MinimumLogLevel`.
-  - **`Schema.TaggedError`, not `Schema.TaggedErrorClass`.** The `*Class` spelling
-    existed only on the earlier v4 betas and was renamed back to the v3 name in
-    `beta.107`; the curried shape is identical, so the fix is the name alone.
-    Worth knowing how this presents: the four class declarations in
-    `src/errors/errors.ts` are the *only* real breakage, but their base type
-    collapses, so every `new SomeError({...})` in the codebase reports
-    "Expected 0 arguments, but got 1" and every field getter reports a missing
-    property — 50 errors across 14 files, all of which clear when the four names
-    are fixed. Do not go site-by-site; find the declaration.
-- **Token**: provisioned in `pre.ts` (credentials via `ActionInput`, fail-fast
-  `required` scope check for `contents`/`pull_requests`/`checks: write`), persisted
-  to `ActionState`, read back by `GitHubToken.clientLayer()` in `makeAppLayer`,
-  revoked in `post.ts`. No `GITHUB_TOKEN` bridge.
-- **Tests**: mock via `Layer.succeed`, a service's `layerTest`, or the doubles in
-  `__test__/utils/action-doubles.ts`; script commands with `ScriptedSpawner`. Never
-  mock `@actions/*` — the kit implements the protocol natively.
+Service and layer inventory — which kit package owns which service, the domain
+service list, Effect v4 spellings, the token lifecycle:
+-> @./CLAUDE.effect-kit.md
 
-### Dogfooding First-Party Dependencies
+Load before wiring or editing a service or layer, or when a kit API is not where
+you expect. The two Effect hazards that bite *without* being looked up — the
+`Action.run` requirement-channel hole and the `Schema.TaggedError` rename — are
+in **Gotchas** below, not behind that pointer.
 
-Every first-party dependency is ours, so a bug or missing API can be fixed **in
-its own repo** and dogfooded here before publishing. The action is **bundled** —
-`pnpm build` inlines everything into `dist/{pre,main,post}.js` — so a consumer
-workflow on `@dev` runs the committed `dist`, not `node_modules`.
+### Dogfooding, Branching and Release
 
-| Package | Repo | Link mechanism |
-| --- | --- | --- |
-| `@savvy-web/silk-effects`, `@savvy-web/github-action-builder`, `@savvy-web/silk` | `savvy-web/systems` (`packages/<name>`) | direct → `pnpm link` |
-| `@effected/*` (the whole kit + its transitives) | `spencerbeggs/effected` (one monorepo, `packages/<name>`) | direct + transitive → `link:` override |
+Linking/overriding a first-party dep, the `dev` -> `main` -> release flow, and
+the two workflows that clobber `dev`:
+-> @./CLAUDE.workflow.md
 
-- **Direct-only → `pnpm link`** (e.g. `pnpm link ../systems/packages/silk-effects`);
-  verify via `node:fs` (NOT `require(...package.json)` — `exports` hides it) or
-  `pnpm why <pkg>`.
-- **Also transitive → `pnpm-workspace.yaml` `overrides`** targeting
-  `link:../../spencerbeggs/effected/packages/<name>/dist/dev/pkg`, then
-  `pnpm install`. A bare `pnpm link` would leave the transitive copy on the
-  registry version and bundle two copies; verify with
-  `find node_modules -path "*@effected/<name>"`.
+Load before linking a dependency, cutting a release, or editing
+`.github/workflows/**`. **Currently nothing is linked and there are no
+`overrides` entries** — if you were only checking that, you now have the answer
+and do not need the pointer.
 
-Procedure: build the library (`pnpm ci:build`) → link/override + `pnpm install` →
-keep the declared range correct for the eventual unlinked install → iterate
-(`pnpm typecheck`, `pnpm test`, `pnpm build`) → commit the **full dogfood state**
-to `dev` (`src` + `dist` + changeset + override + `pnpm-lock.yaml`) → exercise it
-via a consumer workflow on `@dev` → **after** the library publishes, remove the
-link/override and pin the published range. The override holds a machine-specific
-path, so `dev` then only installs with the sibling repos checked out — the
-accepted trade-off. Commits must be GPG-signed with the verified key for
-`C. Spencer Beggs <spencer@savvyweb.systems>`.
-
-**Currently active:** nothing is **linked** — every first-party dep is on its
-published registry version (see `package.json`). `@effect/vitest` reads
-`catalog:effect`, so the lockstep with `effect` is now **structural**: the
-`effect` catalog pins both to the same beta, and a catalog advance moves them
-together with no hand-edit. It used to be an exact literal pin that had to be
-bumped manually, which is the failure mode this removed.
-
-There are **no `overrides` entries**. The former `@effect/platform-node-shared`
-pin (held at `4.0.0-beta.101` because a caret on a prerelease admitted a
-`beta.102` whose peer range the catalog pin did not satisfy) went away with the
-`beta.107` advance — the whole graph now resolves a single
-`platform-node-shared@4.0.0-beta.107` against a single `effect@4.0.0-beta.107`.
-
-The **duplicate resolutions are also gone**: `@effected/workspaces` and
-`@effected/npm` each resolve exactly one copy, so the second workspaces copy that
-`@savvy-web/silk-effects` used to drag into `dist` is no longer bundled. Verify
-with `pnpm why <pkg>` — the lockfile grep reports which versions exist, never who
-pulls them.
-
-## Development & Release Cycle
-
-### The `dev` branch convention
-
-All in-progress work lands on the long-lived **`dev`** branch, never directly on
-`main`; `main` always reflects the last released state. The shared release
-workflow (`savvy-web/.github/.github/workflows/release.yml`) has a matching `dev`
-branch — a caller normally pins `@main`.
-
-### Testing dev-branch builds
-
-Two independent switch points: `.github/workflows/silk-update.yml` here runs
-`uses: savvy-web/silk-update-action@v4` (flip to `@dev` to run the committed
-dev-branch `dist` against this repo), and `.github/workflows/release.yml` calls
-the shared workflow at `@main` (flip to `@dev`). Trigger, `gh run watch`, then
-revert once the release is cut.
-
-### Flow: `dev` → `main` → release
-
-Work accumulates on `dev` and merges to `main` (dependency-update PRs arrive via
-`promote-deps-to-main.yml`). Push to `main` → **Phase 1** changeset detection and
-the release PR on `changeset-release/main`; pushes to that branch → **Phase 2**
-validation (build, publish dry-runs, release-notes preview, sticky comment);
-merging it → **Phase 3** publish, tags, GitHub release, which fires
-`release-sync.yml`.
-
-### `release-sync.yml` / `promote-deps-to-main.yml`
-
-`release-sync.yml` (on `release: [published]`, as the App bot) closes the loop: on
-a **stable SemVer >= 1.0.0** tag it moves the `v<major>` alias tag and
-**hard-resets `dev` to `main`** — a genuine clobber, safe because `dev` work always
-lands in `main` first. Pushes are skipped when the ref already matches;
-prerelease/sub-1.0.0 tags are no-ops.
-
-`promote-deps-to-main.yml` opens it: `silk-update.yml` must run with
-`source-branch: dev` so its `pnpm/config-deps` PR merges into `dev`, which
-triggers this workflow to mint an App token
-(`actions/create-github-app-token@v3`) and open a `dev -> main` PR left **open for
-review**. Idempotent and non-recursive.
-
-### Code Quality
-
-Biome (lint + format, **tabs**), commitlint (conventional commits + DCO signoff),
-husky (`pre-commit` lint-staged, `commit-msg` validation, `pre-push` tests).
-
-### TypeScript
-
-Composite builds with project references, strict mode, ES2022/ES2023.
-
-### Testing
+## Testing
 
 - **Framework**: Vitest with v8 coverage, forks pool (Effect compatibility).
-  Current suite: **581 tests**. `@effect/vitest` reads `catalog:effect`, the same
+  Current suite: **589 tests across 41 files**, measured, not carried forward.
+  **Treat a test count here as evidence and re-derive it** (`pnpm vitest run`) —
+  the **581** this line used to state was never a real count, edited by a
+  plausible `+1` in the very commit that invalidated it, which is what made it
+  credible. Per-commit accounting in
+  `@./.claude/design/silk-update-action/08-testing.md`.
+  `@effect/vitest` reads `catalog:effect`, the same
   catalog entry as `effect`, so the required lockstep is maintained by the catalog
   rather than by remembering to bump a literal; a few suites use `it.effect`,
   real-IO suites deliberately do not.
@@ -265,6 +131,17 @@ Composite builds with project references, strict mode, ES2022/ES2023.
 ## Gotchas
 
 - Biome enforces **tabs**, not spaces
+- **`Schema.TaggedError`, not `Schema.TaggedErrorClass`.** The `*Class` spelling
+  existed only on the earlier v4 betas and was renamed back to the v3 name in
+  `beta.107`; the curried shape is identical, so the fix is the name alone. Worth
+  knowing how it presents, because the shape recurs on every advance: the four
+  class declarations in `src/errors/errors.ts` are the *only* real breakage, but
+  their base type collapses, so every `new SomeError({...})` reports "Expected 0
+  arguments, but got 1" and every field getter reports a missing property — 50
+  errors across 14 files, in modules that never mention the renamed API. **An
+  advance whose error list is dominated by call sites is still, usually, a
+  declaration-site problem: find the declaration before touching a single call
+  site.**
 - **Read inputs with `ActionInput.*`, never bare `Config`.** The runner exports
   inputs as `INPUT_*` (only spaces mangled), so `Config.string("dependencies")`
   resolves nothing and silently takes its `withDefault` — including `dry-run`, so a
@@ -273,6 +150,27 @@ Composite builds with project references, strict mode, ES2022/ES2023.
   absent and empty**, so `Config.withDefault([])` on each list read is load-bearing.
   `readInputs` lives in `src/schema/inputs.ts` (beside the `INPUT_NAMES` tuple)
   and is pinned by `INPUT_*`-keyed tests.
+- **A service `makeAppLayer` does not provide is NOT a type error.** Same class as
+  the entry above — a framework surface that silently accepts a wrong call.
+  `Action.run` is declared `<E, R = never>(program: Effect<void, E,
+  ActionServices | R>, options?: ActionRunOptions<R>)`; `options` is **optional**,
+  so `R` infers to whatever is left over and `Action.run(program)` typechecks at
+  *any* leftover requirement. There is no "you forgot a layer" error, ever. So a
+  service resolved in a **domain layer's body** that `makeAppLayer` does not
+  provide ships under a clean `tsc` and a green suite and dies on the runner as a
+  defect ~30ms in — **before the check run is created**, so nothing appears in the
+  GitHub UI. Not hypothetical: v4.6.0 shipped with `PackageJsonFile` provided to
+  `RuntimeUpgrade.layer` only and failed 100% of runs in every consumer repo. The
+  only thing standing between that and the next release is
+  **`__test__/unit/layers/app.test.ts`**, a compile-time assertion that
+  `Exclude<AppLayerRequirements, ActionServices>` is `never` — it fails
+  `pnpm typecheck`, and the error names the missing service. **So adopting a
+  service into a second consumer is a layer-wiring change, not a call-site
+  change.** Its blind spots, so it is not over-trusted: it catches *missing*
+  wiring, not *broken* wiring (nothing builds the graph), and a service resolved
+  in a **method** rather than a layer body never reaches the requirement channel
+  at all. Depth in
+  `@./.claude/design/silk-update-action/06-effect-patterns.md`
 - **The `result` output is the whole run as JSON** (`RunResultDocument`, composed
   from the existing domain schemas rather than a parallel reporting shape),
   emitted **on every exit path** as an empty-run document — never an empty
@@ -282,16 +180,13 @@ Composite builds with project references, strict mode, ES2022/ES2023.
   devDependency, previously transitive-only); change it by editing the domain
   types and running `pnpm generate-schema`. The four scalar outputs are
   unchanged.
-  - **Every shared schema needs an explicit `identifier` annotation**, because
-    the beta.107 lowering hoists a reused sub-schema into `$defs` instead of
-    inlining it at each use site, and invents a positional name when there is no
-    identifier to use. `DependencyType` lowered to `$defs/Union_` on the first
-    regeneration after the advance — a generated, position-dependent name in a
-    document published at a public `$id`, where a second anonymous union would
-    have shifted it to `Union_1`. It now carries
-    `identifier: "DependencyType"`. If a regeneration produces a `$defs` key
-    matching `Union_`/`Struct_`/similar, that is a missing annotation at the
-    definition site, not something to accept into the committed artifact.
+  - **Every shared schema needs an explicit `identifier` annotation.** From
+    beta.107 the lowering hoists a sub-schema used in more than one place into
+    `$defs` and invents a *positional* name when there is none — so a second
+    anonymous union silently renames the first. Nothing fails, which is why this
+    needs a rule: **a `$defs` key matching `Union_`/`Struct_` is a missing
+    annotation at the definition site, not an artifact to commit.** Depth in
+    `@./.claude/design/silk-update-action/03-type-definitions.md`
 - **Tests are not co-located**: every unit suite lives in `__test__/unit/**`
   mirroring `src/`. `utils`, `fixtures` and `snapshots` are **reserved by
   AgentPlugin for helpers and mocks and excluded from collection — at ANY depth
@@ -338,16 +233,13 @@ Composite builds with project references, strict mode, ES2022/ES2023.
   time via `ReleaseAge.filterVersions`, so the action never proposes a version pnpm
   would reject (`ERR_PNPM_NO_MATURE_MATCHING_VERSION`). **Gate discovery is the
   kit's**, not this repo's: `WorkspaceCatalogs.releaseAgeGate()` over
-  `layerWithConfigDependenciesSubprocess()` combines inline `pnpm-workspace.yaml`
-  keys with the replayed config-dependency pnpmfile hooks (`pnpm config get` never
-  sees hook-injected values). The **subprocess** variant is mandatory — rspack
-  miscompiles the in-process computed dynamic `import()` into a context module —
-  and it is what unblocked this adoption. Publish times come from
-  `NpmRegistry.publishTimes`. **What stays local is the fail-open posture**: the
-  kit fails typed with `CatalogAssemblyFailure`, correct for a library, and this
-  action degrades it to "no gate" with a warning in a one-line `Effect.catch` at
-  the single call site in `ReleaseAge.layer`, because pnpm re-enforces the gate at
-  install. Depth in
+  **`layerWithConfigDependenciesSubprocess()`** — the subprocess variant is
+  mandatory, because rspack miscompiles the in-process computed dynamic
+  `import()` into a context module. **What stays local is the fail-open
+  posture**: the kit fails typed with `CatalogAssemblyFailure` (right for a
+  library), and this action degrades that to "no gate" with a warning in a
+  one-line `Effect.catch` in `ReleaseAge.layer`, because pnpm re-enforces the
+  gate at install anyway. Depth in
   `@./.claude/design/silk-update-action/05-module-library.md`
 - Runtime bumps (`upgrade-runtime-*`) **upgrade only, never add** — in *every*
   mode — and always write the **bare exact** resolved version (the range only
@@ -372,11 +264,32 @@ Composite builds with project references, strict mode, ES2022/ES2023.
   checkout (benign, and stated in the design docs rather than assumed)
 - Auto-merge requires GraphQL (no REST endpoint) and is a **separate**
   `setAutoMerge` call whose failure degrades to a warning
-- **`@effected/package-json` was evaluated and DECLINED on evidence — do not
-  re-propose it.** `Package.decode` requires `name` + a strict-semver `version`,
-  so it **rejects the private workspace root** this action must edit, and its
-  write path reorders keys in a manifest the action then commits to someone
-  else's repo (upstream spencerbeggs/effected#286)
+- **`@effected/package-json` is adopted for `PackageJsonFile.modify` ONLY** —
+  `^0.9.0`, a declared runtime dependency wired as `PackageJsonFile.layer` and
+  consumed by both `RuntimeUpgrade` and `PackageManagerUpgrade`. This line used to
+  read "evaluated and DECLINED — do not re-propose it"; that ruling was
+  **narrowed, not overturned**, and the distinction is the content. Its central
+  objection still governs: `Package.decode` requires `name` + a strict-semver
+  `version`, so it **rejects the private workspace root** this action must edit.
+  That is honored by *not using the decode path* — both services still
+  `readFileSync` + `JSON.parse` to **decide**, routing only the **write** through
+  `modify` (a decode-free JSONC edit at a field path; key order, indent and line
+  endings survive byte-for-byte). What changed is upstream: `0.9.0` (PR
+  spencerbeggs/effected#366) shipped the two things the old ruling named as its
+  own falsification condition — a presence-lenient `PackageManifest` and an
+  order-preserving single-field edit — answering **#286**. Nothing here noticed
+  for a release, because "do not re-propose" is the sentence that stops the next
+  reader checking. **Re-checking the ruling's four "therefore staying" helpers by
+  call site deleted two of them**: `parsePnpmVersion` / `formatPnpmVersion` (and
+  `ParsedPnpmVersion`) had no caller anywhere and the reason recorded for keeping
+  them had independently expired, so they are **gone** from `src/utils/pnpm.ts`,
+  which now exports only `detectIndent` and `corepackHashFromIntegrity`. That is
+  the sequence worth copying — a doc pass that checks call sites is how dead
+  exports get found, the same argument that removed four error classes. The
+  per-helper verdicts (including why `detectIndent` stays but *not* for its
+  recorded reason) are in
+  `@./.claude/design/silk-update-action/09-project-status.md`; re-derive by grep
+  rather than re-reading either list
 - **`@effected/git` is adopted for `status` only.** The mutating tier is still
   declined — it covers 2 of the 9 local git operations `services/branch.ts`
   performs, so seven stay on `Run` (spencerbeggs/effected#279). The earlier

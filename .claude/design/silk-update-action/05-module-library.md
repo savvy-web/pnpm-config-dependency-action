@@ -238,7 +238,15 @@ pnpm-only `PnpmUpgrade` to every `SupportedPm`: all three are published on npm, 
 the registry lookup and range logic are identical; only the write format differs.
 Depends on `NpmRegistry` (an HTTP client — no `npm view` subprocess, so the
 root-owned `~/.npm` EACCES class of failure on macOS runners is gone by
-construction).
+construction) **and `PackageJsonFile`** from `@effected/package-json`, both
+resolved in the layer body so `upgrade`'s `R` stays `never`.
+
+> **Wiring note, because omitting it is not a type error.** This service's
+> `PackageJsonFile` requirement was added without `makeAppLayer` providing it,
+> which typechecked and killed every run in v4.6.0. `makeAppLayer` now provides
+> it here *and* to `RuntimeUpgrade`, and
+> `__test__/unit/layers/app.test.ts` fails the build if a future layer resolves
+> something the app layer does not supply. See @./09-project-status.md.
 
 ```typescript
 export class PackageManagerUpgrade extends Context.Service<PackageManagerUpgrade, {
@@ -264,6 +272,23 @@ export class PackageManagerUpgrade extends Context.Service<PackageManagerUpgrade
    corepack switch. **bun is not corepack-managed** — it never consults
    `packageManager` — so it is written as a bare `bun@<version>` and the integrity
    fetch is skipped entirely.
+
+**The write is a surgical edit, not a re-serialize.** Nothing is mutated on the
+parsed object: the steps above *collect* `PackageFieldEdit`s (`["packageManager"]`,
+`["devEngines", "packageManager", "version"]`) and hand them to
+`PackageJsonFile.modify` in one call, which rewrites only those spans and leaves
+key order, indentation and line endings exactly as the consumer had them. This
+manifest is committed to someone else's repository, so a whole-file
+`JSON.stringify` — the previous approach, formatting guessed by `detectIndent` —
+made the diff unreviewable whenever the guess was wrong.
+
+The **read** is still `readFileSync` + `JSON.parse`, deliberately: the kit's
+`Package.decode` rejects a private workspace root, and the lenient
+`PackageManifest` that `0.9.0` added is unadopted because the parse only feeds a
+decision. **Only `modify` was adopted** — the prior ruling against this package
+was narrowed to that one decode-free member, not overturned, and its central
+objection still governs this read. See the settled decision in
+@./09-project-status.md.
 
 **`upgrade()` never returns `null`.** It always resolves to a
 `PackageManagerUpgradeOutcome` (see @./03-type-definitions.md) so the caller can
@@ -539,7 +564,9 @@ each supported manager writes), `captureLockfileState(pm, workspaceRoot?)`,
 
 Upgrade `devEngines.runtime` entries (node/deno/bun) in the root `package.json`
 via `@effected/runtimes`' `NodeResolver` / `DenoResolver` / `BunResolver`. Resolver
-failures are caught and skipped per-runtime, never fatal.
+failures are caught and skipped per-runtime, never fatal. Also requires
+**`PackageJsonFile`** (`@effected/package-json`), resolved in the layer body
+alongside the three resolvers so `upgrade`'s `R` stays `never`.
 
 ```typescript
 export class RuntimeUpgrade extends Context.Service<RuntimeUpgrade, {
@@ -551,10 +578,10 @@ export class RuntimeUpgrade extends Context.Service<RuntimeUpgrade, {
 **Per runtime:**
 
 1. `"false"` → skip.
-2. Look up the existing entry via `findRuntimeEntry`. **If none exists, skip with a
-   warning** — in *every* mode. These inputs upgrade a runtime the repo already
-   declares; they never add one. (An explicit range used to add a missing entry,
-   which grew an unwanted node entry in a bun-only repo.)
+2. Look up the existing entry via `locateRuntimeEntry`. **If none exists, skip
+   with a warning** — in *every* mode. These inputs upgrade a runtime the repo
+   already declares; they never add one. (An explicit range used to add a missing
+   entry, which grew an unwanted node entry in a bun-only repo.)
 3. `auto`: skip on a static pin (`isStaticVersion`); otherwise the existing version
    string is the target range.
 4. Explicit range: the user-typed value is the target range — it only selects
@@ -562,12 +589,24 @@ export class RuntimeUpgrade extends Context.Service<RuntimeUpgrade, {
 5. `resolver.resolve({ range })` → `.latest`; on any error (including
    `VersionNotFoundError` for an EOL line) warn and skip.
 6. Skip if `latest` equals the current value.
-7. Assign `entry.version = latest` — the **bare, exact** version, no operator
-   re-attached. `findRuntimeEntry` returns the live object inside `devEngines`, so
-   this rewrites in place, preserving the entry's other keys and the surrounding
-   array/object shape.
-8. Write back once, preserving indentation via `detectIndent`, only if at least one
-   runtime updated.
+7. Record a planned edit: the **bare, exact** version, no operator re-attached,
+   at the `versionPath` the locator returned. **Nothing is mutated here** — the
+   parsed manifest is read only to decide.
+8. If at least one runtime moved, one `PackageJsonFile.modify` call applies every
+   planned edit in a single read/edit/write pass, and skips the write entirely
+   when the result would be byte-identical.
+
+**Why a path and not a live object — the inversion is deliberate.** This module
+used to call `findRuntimeEntry`, whose stated virtue was returning the *live*
+object inside `devEngines` so that `entry.version = latest` rewrote the parsed
+tree in place; the manifest was then re-serialized wholesale with an indent
+guessed by `detectIndent`. That preserved formatting only by accident.
+`locateRuntimeEntry` returns the entry **and** the JSONC path to its `version`,
+because the write is now a surgical edit and mutation is exactly what must not
+happen. The path is shape-dependent — `devEngines.runtime` is legally either a
+single object or an array, so it is `["devEngines","runtime","version"]` or
+`["devEngines","runtime",<index>,"version"]` — which is why one walker produces
+both rather than a second walker deriving the path and drifting from the first.
 
 **Why exact:** `silk-runtime-action`, the next pipeline step, does not support
 range operators in `devEngines.runtime`, so any operator written here is a latent
@@ -644,89 +683,158 @@ whole function body is `/* v8 ignore */`-d as pure wiring, exercised indirectly.
 convention. No `*Live` constant survives. Each is declared *in* the class body,
 which is load-bearing: a member attached by post-class assignment is tree-shaken
 out of the bundled `dist`, and that fails only in production because vitest runs
-the source. The sketch below is illustrative, not a transcript — read
-`src/layers/app.ts` for the current wiring.
+the source.
+
+**The sketch below is illustrative and stays that way deliberately.** Read
+`src/layers/app.ts` for the wiring itself. It is kept as a sketch rather than
+promoted to a transcript because a transcript acquires an obligation to be
+byte-accurate — which is the maintenance burden that let the previous version of
+this sketch drift into teaching the *opposite* of the invariant this module
+exists to state (it showed `NodeServices.layer` and `FetchHttpClient.layer` being
+built locally and merged into `libraryLayers`, which is exactly what
+`makeAppLayer` must not do). What a reader has to get right is the **`Layer.provide`
+topology** and **which services are deliberately not built here**; the sketch is
+answerable for those two things and nothing else.
 
 ```typescript
-import { NodeServices } from "@effect/platform-node";
-import { Git } from "@effected/git";
-import { CheckRun, GitBranch, GitCommit, PullRequest, Repo } from "@effected/github";
-import { DryRun, GitHubToken } from "@effected/github-actions";
-import { NpmRegistry } from "@effected/npm";
-import { BunResolver, DenoResolver, NodeResolver, GitHubClient as RuntimesGitHubClient } from "@effected/runtimes";
-import { LockfileReader, PackageManagerDetector, WorkspaceDiscovery, WorkspaceRoot } from "@effected/workspaces";
-import { Changesets as SilkChangesets } from "@savvy-web/silk-effects";
-import { Layer } from "effect";
-import { FetchHttpClient } from "effect/unstable/http";
-
 export const makeAppLayer = (dryRun: boolean, options: { runtimeLive: boolean } = { runtimeLive: false }) => {
  // The token is provisioned in `pre` and persisted to ActionState.
  // clientLayer() reads it back. ActionState comes from ActionRuntime via
  // Action.run, so it is NOT rebuilt here. orDie makes a missing/expired token
- // a fatal defect, keeping R = never for the withCheckRun callback.
+ // a fatal defect rather than an error every caller must handle.
  const githubClient = GitHubToken.clientLayer().pipe(Layer.orDie);
  // Repo is required per call rather than captured, so it is a layer like any
  // other; GITHUB_REPOSITORY is read through the ambient ConfigProvider.
  const repo = Repo.layerFromConfig().pipe(Layer.orDie);
 
- // GraphQL is a member of GitHubClient in the kit — no separate service.
- const npmRegistry = NpmRegistry.layer.pipe(Layer.provide(FetchHttpClient.layer));
- // ReleaseAge.layer, not a factory: the root is bound by WorkspaceCatalogs.
- const releaseAge = ReleaseAge.layer.pipe(Layer.provide(Layer.merge(workspaceCatalogs, npmRegistry)));
+ // ── NOT BUILT HERE, and this is the load-bearing part ──────────────────────
+ // NpmRegistry needs an HttpClient; the workspace layers and PackageJsonFile
+ // need FileSystem/Path/ChildProcessSpawner. None of those is constructed in
+ // this function. They are members of `ActionServices`, which Action.run's
+ // ActionRuntime already provides, so they stay in this layer's REQUIREMENT
+ // channel and are satisfied at the boundary. Building them here shipped a
+ // second copy of the Node platform and the fetch client in the bundle.
+ // => no `NodeServices.layer`, no `FetchHttpClient.layer`, anywhere below.
+ const npmRegistry = NpmRegistry.layer;
+ const packageJsonFile = PackageJsonFile.layer;
+ const workspaceRoot = WorkspaceRoot.layer;
+ const packageManagerDetector = PackageManagerDetector.layer;
+
  const gitBranch = GitBranch.layer.pipe(Layer.provide(githubClient));
  const gitCommit = GitCommit.layer.pipe(Layer.provide(githubClient));
  const prLayer = PullRequest.layer.pipe(Layer.provide(githubClient));
 
- // Platform layer: FileSystem, Path, ChildProcessSpawner.
- const platform = NodeServices.layer;
- const workspaceRoot = WorkspaceRoot.layer.pipe(Layer.provide(platform));
- const workspaceDiscovery = WorkspaceDiscovery.layer().pipe(Layer.provide(Layer.merge(workspaceRoot, platform)));
- const packageManagerDetector = PackageManagerDetector.layer.pipe(Layer.provide(platform));
+ const workspaceDiscovery = WorkspaceDiscovery.layer().pipe(Layer.provide(workspaceRoot));
  // The lockfile records which config-dependency version is actually installed —
  // the merge base for CatalogConfigDeps' three-way catalog merge.
  const lockfileReader = LockfileReader.layer().pipe(
-  Layer.provide(Layer.mergeAll(workspaceRoot, packageManagerDetector, workspaceDiscovery, platform)),
+  Layer.provide(Layer.mergeAll(workspaceRoot, packageManagerDetector, workspaceDiscovery)),
  );
-
- const depsRegen = SilkChangesets.DepsRegenDefault.pipe(Layer.provide(platform));
+ // MUST be the subprocess variant: the in-process one loads each pnpmfile with a
+ // computed dynamic import(), which rspack compiles into a context module and
+ // breaks in the bundled dist.
+ const workspaceCatalogs = WorkspaceCatalogs.layerWithConfigDependenciesSubprocess().pipe(
+  Layer.provide(Layer.mergeAll(workspaceRoot, lockfileReader)),
+ );
+ // ReleaseAge.layer, not a factory: the root is bound by WorkspaceCatalogs.
+ const releaseAge = ReleaseAge.layer.pipe(Layer.provide(Layer.merge(npmRegistry, workspaceCatalogs)));
+ const depsRegen = SilkChangesets.DepsRegenDefault;
 
  const libraryLayers = Layer.mergeAll(
   githubClient, repo, gitBranch, gitCommit,
   CheckRun.layer.pipe(Layer.provide(githubClient)),
   prLayer, npmRegistry,
-  NodeServices.layer,
   // Read-mostly: status for the change verdict and commit file list, configSet
   // once for the core.fileMode pin. History still moves through the API.
   Git.layer,
   DryRun.layerFrom(dryRun),
-  FetchHttpClient.layer,
  );
 
  const domainLayers = Layer.mergeAll(
   workspaceRoot, workspaceDiscovery, packageManagerDetector,
   Changesets.layer.pipe(Layer.provide(depsRegen)),
   BranchManager.layer.pipe(Layer.provide(Layer.mergeAll(gitBranch, gitCommit, Git.layer))),
-  PackageManagerUpgrade.layer.pipe(Layer.provide(npmRegistry)),
+  // BOTH package.json writers resolve PackageJsonFile in their layer bodies, so
+  // BOTH must be provided it. Providing it to only one is NOT a type error and
+  // fails only on the runner — this line is the v4.6.0 fix.
+  PackageManagerUpgrade.layer.pipe(Layer.provide(Layer.merge(npmRegistry, packageJsonFile))),
   ConfigDeps.layer.pipe(Layer.provide(Layer.merge(npmRegistry, releaseAge))),
-  CatalogConfigDeps.layer.pipe(
-   Layer.provide(Layer.mergeAll(npmRegistry, lockfileReader, FetchHttpClient.layer, NodeServices.layer)),
-  ),
+  CatalogConfigDeps.layer.pipe(Layer.provide(Layer.merge(npmRegistry, lockfileReader))),
   RegularDeps.layer.pipe(Layer.provide(Layer.mergeAll(npmRegistry, workspaceDiscovery, releaseAge))),
   Report.layer.pipe(Layer.provide(prLayer)),
-  RuntimeUpgrade.layer.pipe(Layer.provide(makeRuntimeResolvers(options.runtimeLive))),
+  RuntimeUpgrade.layer.pipe(
+   Layer.provide(Layer.merge(makeRuntimeResolvers(options.runtimeLive), packageJsonFile)),
+  ),
  );
 
  return Layer.provideMerge(domainLayers, libraryLayers);
 };
 ```
 
+Two properties the sketch is answerable for, both checkable in one pass:
+
+- **`Layer.provide` topology.** Every domain layer names exactly the services its
+  own layer body resolves. `PackageManagerUpgrade` and `RuntimeUpgrade` each name
+  `packageJsonFile`; missing it on either is the v4.6.0 defect.
+- **Nothing platform-shaped is constructed.** `NodeServices.layer` and
+  `FetchHttpClient.layer` must not appear. *Falsified if* either does — that is
+  the drift, not a stylistic difference, and it is worth grepping this block for
+  before trusting it.
+
 `makeRuntimeResolvers(live)` returns either the three `*Resolver.layerOffline`
-layers (bundled snapshot, no IO, no requirements) or the live `*.layer` layers —
-`NodeResolver` over `FetchHttpClient.layer` (nodejs.org, unauthenticated) and
-Deno/Bun over `@effected/runtimes`' `GitHubClient.layerDefault`, which pre-wires
-auth + `FetchHttpClient` so the live graph is self-contained (`E = never`). Each
-live resolver falls back to the bundled snapshot on a fetch failure, logging a
-warning.
+layers (bundled snapshot, no IO, no requirements) or the live `*.layer` layers.
+On the live path `NodeResolver.layer` is used **bare** — it needs only
+`HttpClient.HttpClient`, which `ActionServices` already supplies, so giving it a
+private `FetchHttpClient` would be the same second-copy mistake as above. Deno
+and Bun are provided `@effected/runtimes`' `GitHubClient.layerDefault`, which
+pre-wires auth + `FetchHttpClient` and is genuinely self-contained (`E = never`),
+so those two do keep a `Layer.provide`. Each live resolver falls back to the
+bundled snapshot on a fetch failure, logging a warning.
+
+### The requirement channel is the contract, and it is checked
+
+`makeAppLayer` deliberately does **not** build everything it needs. Several
+layers leave `FileSystem`, `Path`, `HttpClient` and `ChildProcessSpawner` in the
+returned layer's requirement channel, because `Action.run` already supplies them
+as `ActionServices` and building private copies would bundle a second platform
+into `dist`. So the contract of this function is precisely:
+
+> everything left in `makeAppLayer`'s requirement channel must be a member of
+> `ActionServices`.
+
+**Nothing in the production call path enforces that.** `Action.run`'s `options`
+parameter is optional, so `Action.run(program)` typechecks whatever is left over
+— a bare leftover requirement is not an error, it is an inference. `makeAppLayer`
+is also `/* v8 ignore */`-d and never built in a test, so no runtime signal
+existed either.
+
+That combination shipped v4.6.0 dead: `PackageManagerUpgrade.layer` started
+resolving `PackageJsonFile`, only `RuntimeUpgrade` was provided it,
+`PackageJsonFile` sat in the channel, and every run in every consumer repo failed
+~30ms in with `Service not found: @effected/package-json/PackageJsonFile` —
+before the check run existed. Clean `tsc`, 588 passing tests.
+
+`__test__/unit/layers/app.test.ts` now states the contract as a type:
+
+```typescript
+type AppLayerRequirements = RequirementsOf<ReturnType<typeof makeAppLayer>>;
+type UnsatisfiedRequirements = Exclude<AppLayerRequirements, ActionServices>;
+
+const _everyRequirementIsProvidedByActionRun: [UnsatisfiedRequirements] extends [never]
+ ? true
+ : UnsatisfiedRequirements = true;
+```
+
+The teeth are the annotation — when the exclusion is non-empty, `true` stops
+being assignable and the compiler error *names the missing service*. Tests are in
+the tsc project, so this fails `pnpm typecheck` at pre-commit and in CI, not only
+under vitest. The runtime `expect` in that file is deliberately weak and says so.
+
+**What it does not cover, stated so it is not over-trusted:** it catches a
+*missing* provide, not a *broken* one. Nothing builds the graph, so a layer that
+is wired but fails to construct still gets through. And it is only as good as
+`ActionServices` being an honest list of what `Action.run` constructs — see the
+three falsification conditions in @./09-project-status.md.
 
 ## The Rendering Surface (src/format.ts)
 
@@ -883,22 +991,38 @@ grammar itself is still pinned locally by `INPUT_*`-keyed tests, now in
 
 ### src/utils/pnpm.ts
 
-- `parsePnpmVersion(raw, stripPnpmPrefix?)`, `formatPnpmVersion(version, hasCaret)`
-- `detectIndent(content)` — detect JSON indentation (reused by `RegularDeps`,
-  `PeerSync`, `RuntimeUpgrade`, `PackageManagerUpgrade`, `CatalogConfigDeps`).
+- `detectIndent(content)` — detect JSON indentation. **Three call sites:**
+  `RegularDeps`, `PeerSync`, `CatalogConfigDeps`. It is *no longer* used by
+  `RuntimeUpgrade` or `PackageManagerUpgrade` — those write through
+  `PackageJsonFile.modify`, which preserves the existing indentation exactly
+  rather than guessing it.
 - `corepackHashFromIntegrity(integrity)` — convert an npm registry integrity
   (`sha512-<base64>`) to corepack's `packageManager` hash form (`sha512.<hex>`) —
   the exact string `corepack use` would write. Tolerates a JSON-quoted value;
-  returns `null` when missing or not a sha512 integrity.
+  returns `null` when missing or not a sha512 integrity. Still the only such
+  converter anywhere in the graph (upstream #281).
+Those two are the **whole** of this module's exports. `parsePnpmVersion`,
+`formatPnpmVersion` and the `ParsedPnpmVersion` interface were **deleted** — they
+had no caller in `src/` or `__test__/`, `PackageManagerUpgrade` having moved to a
+module-private `parsePmVersion` generalized over all three package managers
+during the multi-package-manager work. The module keeps a comment block where
+they were, recording both that argument and the fact that their stated
+justification (the kit rejecting a caret `packageManager` pin) had expired
+independently. Detail in @./09-project-status.md and @./03-type-definitions.md.
 
 ### src/utils/runtime.ts
 
 - `isStaticVersion(raw)` — true when `raw` is a static exact version with no range
   operator, wildcard, OR-set or partial form. Makes `auto` a no-op on pins.
-- `findRuntimeEntry(devEngines, runtime)` — find the entry (object or array shape),
-  or `null`. Returns the **live object**, so assigning `version` rewrites the
-  manifest in place. There is no upsert/promote helper and no operator helper: the
-  action never adds an entry and always writes a bare exact version.
+- `locateRuntimeEntry(devEngines, runtime)` — find the entry (object or array
+  shape) and the JSONC `versionPath` to its `version`, or `null`. **Do not mutate
+  the returned entry**: it is for reading the current version, and the path is
+  what gets handed to `PackageJsonFile.modify`. There is no upsert/promote helper
+  and no operator helper — the action never adds an entry and always writes a
+  bare exact version.
+  - Replaces `findRuntimeEntry`, which returned the live object precisely *so*
+    callers could assign to it. That property was the point until the write
+    became surgical; it is now the thing being designed against.
 
 ### src/utils/semver.ts
 

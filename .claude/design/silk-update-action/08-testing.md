@@ -17,7 +17,35 @@ implementation-plans: []
 [Back to index](./_index.md)
 
 **Framework:** Vitest with v8 coverage, forks pool for Effect-TS compatibility.
-Current suite: **581 tests, all passing**.
+Current suite: **589 tests across 41 files, all passing** (verified by
+`pnpm vitest run`, not carried forward from this document's previous figure).
+
+**Accounting for the delta from the 581 this document used to state** — and the
+answer is not "it drifted", which is what it looks like:
+
+| count | where | measured how |
+| --- | --- | --- |
+| 580 | this file at `5c97829` | — |
+| **581** | this file at `f55fab6` | **never measured — this figure was wrong when it was written** |
+| 588 | the tree at `f55fab6`, and at the 4.6.0 release commit | `pnpm vitest run`, 40 files |
+| 589 | now, with `unit/layers/app.test.ts` | `pnpm vitest run`, 41 files |
+
+**The 581 was never a real count.** `f55fab6` — the kit-wave and
+`@effected/package-json` adoption — added 8 tests and edited this file's figure
+by **+1**. The release commit on top of it (`768d15a`) touched no tests at all,
+so the tree stood at 588 for the whole of 4.6.0 while this document said 581.
+Verified by re-running the suite with `__test__/unit/layers/` temporarily
+removed: 588 across 40 files.
+
+That is worse than staleness and is the reason this table exists. A stale number
+is one nobody revisited; **this one was revisited in the very commit that
+invalidated it, and adjusted by a plausible-looking increment.** The edit is what
+made it credible. See the note on partial reconciliation in
+@./09-project-status.md.
+
+*Re-derive rather than trust this table:* `pnpm vitest run` for the total, and
+`git log -p -- .claude/design/silk-update-action/08-testing.md` for when each
+figure was claimed. If those two disagree, the document is wrong, not the runner.
 
 ## Layout
 
@@ -27,6 +55,7 @@ mirroring `src/`; there are no `.test.ts` siblings in `src/`.
 ```text
 __test__/
 ├── unit/           # mirrors src/ — discovered suites
+│   ├── layers/     # app.test.ts — a COMPILE-TIME guard (see notable suites)
 │   └── utilities/  # tests for src/utils/ — NOT named `utils/` (see below)
 ├── integration/    # real-IO suites (*.int.test.ts) + integration/utils/
 └── utils/          # RESERVED: helper modules, EXCLUDED from collection
@@ -148,6 +177,32 @@ Shared helpers currently in that directory:
 - **Install dispatch** (`unit/steps/install.test.ts`) — `runInstall` per package
   manager over a `ScriptedSpawner`, asserting the command lines and their order,
   and that the npm path unlinks `package-lock.json` through `node:fs`.
+- **Layer requirement channel** (`unit/layers/app.test.ts`) — **the only suite
+  here whose assertion is not a runtime assertion.** It declares
+  `type UnsatisfiedRequirements = Exclude<AppLayerRequirements, ActionServices>`
+  over `ReturnType<typeof makeAppLayer>` and annotates a constant
+  `[UnsatisfiedRequirements] extends [never] ? true : UnsatisfiedRequirements`,
+  so a leftover requirement makes `true` unassignable and the compiler error
+  names the missing service.
+  - It exists because `Action.run`'s `options` parameter is **optional**, so
+    `Action.run(program)` typechecks at any leftover `R` — v4.6.0 shipped with
+    `PackageJsonFile` unprovided under a clean `tsc` and 588 green tests, and
+    died on 100% of runs before the check run was created.
+  - **Mutation-verified in both directions**, which is the bar this document
+    sets: reinstating the bug produces `error TS2322: Type 'boolean' is not
+    assignable to type 'PackageJsonFile'`; with the fix, `tsc --noEmit` is clean.
+  - The `expect` calls in it are **deliberately weak and the file says so** —
+    they only prove the module was evaluated. That is the inverse of the "false
+    justification" hazard: an honest note that a signal is decoration is worth
+    more than a confident one that it is not.
+  - Its teeth depend on tests being inside the tsc project (`__test__/**/*.ts` is
+    in the resolved `include`), so it blocks `pnpm typecheck` at pre-commit and in
+    CI rather than only under vitest. *Falsified if* the tsconfig `include`
+    narrows — the suite would keep passing while enforcing nothing.
+  - **What it does not cover:** a *broken* provide. Nothing builds the graph, so
+    a layer that is wired but fails to construct still ships. See
+    @./09-project-status.md for the three ways the type assertion itself can stop
+    discriminating.
 - **Entry points** (`unit/main.test.ts`, `unit/main.effect.test.ts`,
   `unit/pre.test.ts`, `unit/post.test.ts`) — orchestration with injected fakes,
   and the token lifecycle. The `pre` / `post` suites drive the **real**
@@ -224,6 +279,16 @@ average. This is precisely how `innerProgram` (~250 lines of orchestration) sat
 untested behind a passing gate and a `/* v8 ignore */` block, and how the bare
 `Config` input regression shipped. A green coverage run is **not** evidence that a
 module is exercised.
+
+**And `src/layers/app.ts` is the case where coverage cannot help at all.** It is
+`/* v8 ignore */`-d as pure wiring, and the defect it shipped in v4.6.0 was a
+*missing* provide — a fact about a type, not about a line, so no amount of
+executing that module would have surfaced it. `unit/layers/app.test.ts` answers it
+at compile time instead. The general point: some invariants are not statements
+about executed lines, and reaching for coverage or fault injection on those is
+looking under the wrong lamppost. Fault injection remains the right tool for
+"is this code path exercised"; a type-level assertion is the right tool for "is
+this graph complete".
 
 **A second, subtler counting trap.** While suites were co-located, importing a
 `.test.ts` fixture module from another suite **re-executed its tests** in the

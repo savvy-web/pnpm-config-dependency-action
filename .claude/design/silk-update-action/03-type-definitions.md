@@ -290,16 +290,9 @@ total gate) and `PartialReleaseAgeGate` (a per-source contribution), the latter
 re-exported by `src/services/release-age.ts`. The action treats them as opaque
 beyond `combine`, `isExcluded` and `filterVersions`.
 
-## Pure Helper Types (src/utils/pnpm.ts, src/utils/runtime.ts)
+## Pure Helper Types (src/utils/runtime.ts)
 
 ```typescript
-/** Parsed pnpm version info. */
-export interface ParsedPnpmVersion {
- readonly version: string;
- readonly hasCaret: boolean;
- readonly hasSha: boolean;
-}
-
 /** A JavaScript runtime managed by this action. */
 export type RuntimeName = "node" | "deno" | "bun";
 
@@ -310,7 +303,47 @@ export interface RuntimeEntry {
  onFail?: string;
  [key: string]: unknown;
 }
+
+/**
+ * A located `devEngines.runtime` entry and the JSONC path to its `version`.
+ * `locateRuntimeEntry` returns both from one walk.
+ */
+export interface LocatedRuntimeEntry {
+ /** The entry as parsed — read the current version; do NOT mutate it. */
+ readonly entry: RuntimeEntry;
+ /** Path for `PackageJsonFile.modify`. Shape-dependent — see below. */
+ readonly versionPath: ReadonlyArray<string | number>;
+}
 ```
+
+`versionPath` is returned rather than rebuilt by the caller because
+`devEngines.runtime` is legally either a single object or an array, so the path
+is `["devEngines","runtime","version"]` in one case and
+`["devEngines","runtime",<index>,"version"]` in the other. One walker produces
+the entry and the path together; two walkers would drift.
+
+**`src/utils/pnpm.ts` no longer contributes a type here.** It exported
+`ParsedPnpmVersion` alongside `parsePnpmVersion` / `formatPnpmVersion`; all three
+are **deleted**. `PackageManagerUpgrade` parses with a module-private
+`ParsedPmVersion` of the same shape, generalized over all three package managers,
+which superseded the pnpm-only original during the multi-package-manager work —
+the exports simply outlived their last caller.
+
+That is the **same argument that removed four error classes** from
+`errors/errors.ts` (see the note at the end of this document): an export with no
+construction site is a claim the type system carries indefinitely and no test can
+falsify. Worth recording how this one surfaced, because the order is unusual and
+reusable: **a documentation pass found it.** Reconciling the
+`@effected/package-json` record required checking, call site by call site, which
+of four helpers the adoption had actually replaced — and that check found both
+that these two had no callers *and* that the justification for keeping them
+(the kit rejecting a caret `packageManager` pin) had independently expired. The
+source deletion followed from the doc work rather than the other way round.
+
+`utils/pnpm.ts` now exports only `detectIndent` and `corepackHashFromIntegrity`,
+neither of which carries a type. The module retains a comment block where the
+deleted exports were, so the reasoning is discoverable from the source and not
+only from here.
 
 ## Effect Error Types (src/errors/errors.ts)
 
