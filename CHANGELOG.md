@@ -1,14 +1,40 @@
 # silk-update-action
 
+## 4.6.1
+
+### Bug Fixes
+
+* Fixes a startup failure introduced in 4.6.0 that failed **every run, in every
+  consumer repository**, immediately in the main phase — before the check run
+  was even created, so the GitHub UI showed nothing useful beyond a red job:
+
+  ```text
+  Service not found: @effected/package-json/PackageJsonFile
+  ```
+
+  The application layer provided the `PackageJsonFile` service to only one of
+  the two consumers that needed it, so the service graph failed to build and
+  the run died as an unhandled defect roughly 30ms in. If you're tracking the
+  `@v4` alias tag, taking this release fixes it automatically; if you're pinned
+  to `4.6.0` exactly, upgrade to pick up the fix.
+
+  * Adds a compile-time guard that fails the build if the application layer is
+    ever again composed with a service it doesn't provide, naming the missing
+    service directly in the error. [#277][#277]
+
+### Patch Changes
+
+Thanks to [@spencerbeggs](https://github.com/spencerbeggs) for their contributions!
+
+[#277]: https://github.com/savvy-web/silk-update-action/pull/277
+
 ## 4.6.0
 
 ### Features
 
 * Every local git operation now runs through `@effected/git`, including the explicit-refspec fetch that a single-branch `actions/checkout` requires. The action no longer runs two subprocess mechanisms for git.
 
-### Features
-
-* The pull request description is now written through the shared `silk-release` managed-region contract. Everything the action generates lives between the managed markers and is regenerated each run; **anything you write outside those markers survives**. Previously the whole description was overwritten on every run, so a review note added to the PR body was silently destroyed by the next dependency update.
+- The pull request description is now written through the shared `silk-release` managed-region contract. Everything the action generates lives between the managed markers and is regenerated each run; **anything you write outside those markers survives**. Previously the whole description was overwritten on every run, so a review note added to the PR body was silently destroyed by the next dependency update.
 
 ### Bug Fixes
 
