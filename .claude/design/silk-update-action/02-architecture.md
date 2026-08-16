@@ -71,8 +71,9 @@ src/
     ├── commit-subject.ts  # buildUpdateSubject (PR title / commit subject)
     ├── deps.ts            # parseConfigEntry, matchesPattern, parseSpecifier
     ├── markdown.ts        # bold, rule (the 2 builders the kit lacks), npmUrl, cleanVersion
-    ├── pnpm.ts            # parsePnpmVersion, formatPnpmVersion, detectIndent, corepackHashFromIntegrity
-    ├── runtime.ts         # isStaticVersion, findRuntimeEntry
+    ├── pnpm.ts            # detectIndent, corepackHashFromIntegrity (only — the
+    │                      #   pnpm version parse/format pair was deleted, no callers)
+    ├── runtime.ts         # isStaticVersion, locateRuntimeEntry (entry + JSONC versionPath)
     └── semver.ts          # resolveLatestSatisfying, configDepUpgradeRange, …
 
 __test__/
@@ -81,7 +82,10 @@ __test__/
 │   ├── format.test.ts           # shape of the decision record; wording owned by the above
 │   ├── generate-schema.test.ts  # JSON Schema drift guard
 │   ├── doubles.test.ts          # self-tests for the shared doubles
-│   ├── schema/…  steps/…  services/…  utils/…  errors/…
+│   ├── test-collection.test.ts  # guards the reserved-directory collection rule
+│   ├── layers/app.test.ts       # COMPILE-TIME guard: makeAppLayer's requirement
+│   │                            #   channel must be a subset of ActionServices
+│   ├── schema/…  steps/…  services/…  utilities/…  errors/…
 ├── integration/           # real-IO suites (workspaces, lockfile compare, changesets, runtimes)
 └── utils/                 # RESERVED helper modules — excluded from collection (see 08-testing)
     ├── action-doubles.ts  # in-memory ActionState / GitHubApp / ActionOutputs doubles
@@ -263,14 +267,27 @@ const appLayer = makeAppLayer(dryRun, { runtimeLive });
   `Repo.layerFromConfig()`, and the `@effected/github` resource layers built over
   them: `GitBranch.layer`, `GitCommit.layer`, `CheckRun.layer`,
   `PullRequest.layer`.
-- `NpmRegistry.layer` over `FetchHttpClient.layer`, `NodeServices.layer` (the
-  `ChildProcessSpawner` `Run` needs, plus FileSystem/Path) and
-  `DryRun.layerFrom(dryRun)`.
+- `NpmRegistry.layer` and `DryRun.layerFrom(dryRun)`. **`NpmRegistry.layer` is
+  used bare** — its `HttpClient` requirement is left in the channel, not
+  satisfied with a locally-built `FetchHttpClient`.
 - Workspace layers from `@effected/workspaces`: `WorkspaceRoot.layer`,
-  `WorkspaceDiscovery.layer()`, `PackageManagerDetector.layer` and
-  `LockfileReader.layer()` (all root-bound at build).
-- `Changesets.DepsRegenDefault` from `@savvy-web/silk-effects` over the platform
-  layer.
+  `WorkspaceDiscovery.layer()`, `PackageManagerDetector.layer`,
+  `LockfileReader.layer()` and `WorkspaceCatalogs` (all root-bound at build).
+  `WorkspaceCatalogs` must be the
+  `layerWithConfigDependenciesSubprocess()` variant — the in-process one's
+  computed dynamic `import()` is what rspack miscompiles.
+- `Changesets.DepsRegenDefault` from `@savvy-web/silk-effects`, also bare.
+
+**Neither `NodeServices.layer` nor `FetchHttpClient.layer` is built here**, and
+that is a rule rather than an accident. Both are members of `ActionServices`,
+which `Action.run`'s runtime already provides, so every layer needing
+FileSystem/Path/ChildProcessSpawner/HttpClient leaves that requirement in
+`makeAppLayer`'s channel to be satisfied at the boundary. Constructing them
+locally shipped a second copy of the Node platform and the fetch client in the
+bundle. It is also what the compile-time guard below is checking: the channel is
+*supposed* to be non-empty, and the assertion is that everything in it is an
+`ActionServices` member.
+
 - Domain layers, all on the kit's `static layer` convention: `BranchManager.layer`,
   `PackageManagerUpgrade.layer`, `ConfigDeps.layer`, `CatalogConfigDeps.layer`,
   `RegularDeps.layer`, `Changesets.layer`, `Report.layer`, `RuntimeUpgrade.layer`.
@@ -289,12 +306,29 @@ const appLayer = makeAppLayer(dryRun, { runtimeLive });
 - `ReleaseAge.layer` over `WorkspaceCatalogs` + `NpmRegistry`, provided to
   `ConfigDeps.layer` and `RegularDeps.layer`; `ReleaseAge.layerNoop` is the inert
   variant unit tests and non-pnpm paths wire.
-- `Git.layer` (from `@effected/git`) over the platform layer — read-mostly here:
+- `Git.layer` (from `@effected/git`), bare — read-mostly here:
   `status` for the change verdict and the commit file list, `configSet` once for
   the `core.fileMode` pin. Everything that mutates history still goes through the
   GitHub API so the commit verifies.
 - Runtime resolver layers: `*Resolver.layerOffline` (default) or `*Resolver.layer`
   (live), selected by `runtimeLive`.
+- `PackageJsonFile.layer` (from `@effected/package-json`) — the surgical,
+  decode-free manifest editor, provided to **both** `PackageManagerUpgrade.layer`
+  and `RuntimeUpgrade.layer`. Both resolve it in their layer bodies, and
+  providing it to only one is **not a type error**: it merely leaves the service
+  in `makeAppLayer`'s requirement channel, which `Action.run`'s optional
+  `options` parameter silently accepts. That shipped as v4.6.0 and failed every
+  run in every consumer repo before the check run was created.
+
+**What the returned layer still requires, and why that is deliberate.**
+`makeAppLayer` does not build FileSystem/Path/HttpClient/ChildProcessSpawner —
+`Action.run` already supplies them as `ActionServices`, and private copies would
+bundle a second platform into `dist`. The contract is therefore *"everything left
+in the channel is a member of `ActionServices`"*, and it is asserted at compile
+time by `__test__/unit/layers/app.test.ts`
+(`Exclude<AppLayerRequirements, ActionServices>` must be `never`) because nothing
+in the production call path checks it. Detail and blind spots in
+@./05-module-library.md and @./09-project-status.md.
 
 ### Step 3: Create Check Run
 
@@ -365,8 +399,13 @@ const appLayer = makeAppLayer(dryRun, { runtimeLive });
 ### Step 8: Upgrade Runtimes (conditional)
 
 - `RuntimeUpgrade.upgrade(config, root)` reads root `package.json`, resolves via
-  `@effected/runtimes` (offline snapshot or live per `runtime-data`) and rewrites
-  `devEngines.runtime` in place, preserving the object/array shape.
+  `@effected/runtimes` (offline snapshot or live per `runtime-data`) and applies
+  one `PackageJsonFile.modify` call carrying a `version` edit per runtime that
+  moved — a surgical JSONC edit at each entry's path, so the object/array shape,
+  key order, indentation and line endings all survive untouched, and a
+  byte-identical result skips the write entirely. **Nothing is mutated on the
+  parsed object**; it is read only to decide. (It previously assigned to the live
+  entry and re-serialized the whole file with a guessed indent.)
 - **Upgrade only, never add** (all modes): a runtime with no existing entry is
   skipped with a warning naming the runtime and the input.
 - **Always writes an exact version** (all modes): the range only selects which

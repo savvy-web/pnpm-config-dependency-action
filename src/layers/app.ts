@@ -81,7 +81,11 @@ export const makeAppLayer = (dryRun: boolean, options: { runtimeLive: boolean } 
 	// copy of the Node platform and the fetch client in its bundle, and forced a
 	// direct `@effect/platform-node` dependency the program has no business naming.
 	const npmRegistry = NpmRegistry.layer;
-	// Surgical, decode-free package.json edits for RuntimeUpgrade. Like the
+	// Surgical, decode-free package.json edits. BOTH RuntimeUpgrade and
+	// PackageManagerUpgrade resolve it in their layer bodies, so both must be
+	// provided it — omitting it for one of them is not a type error (see the
+	// requirement-channel test) and fails only at runtime, on the runner, as
+	// "Service not found: @effected/package-json/PackageJsonFile". Like the
 	// workspace layers above, its FileSystem/Path requirements stay in this
 	// layer's requirement channel rather than being built here.
 	const packageJsonFile = PackageJsonFile.layer;
@@ -143,7 +147,7 @@ export const makeAppLayer = (dryRun: boolean, options: { runtimeLive: boolean } 
 		packageManagerDetector,
 		Changesets.layer.pipe(Layer.provide(depsRegen)),
 		BranchManager.layer.pipe(Layer.provide(Layer.mergeAll(gitBranch, gitCommit, Git.layer))),
-		PackageManagerUpgrade.layer.pipe(Layer.provide(npmRegistry)),
+		PackageManagerUpgrade.layer.pipe(Layer.provide(Layer.merge(npmRegistry, packageJsonFile))),
 		ConfigDeps.layer.pipe(Layer.provide(Layer.merge(npmRegistry, releaseAge))),
 		CatalogConfigDeps.layer.pipe(Layer.provide(Layer.merge(npmRegistry, lockfileReader))),
 		RegularDeps.layer.pipe(Layer.provide(Layer.mergeAll(npmRegistry, workspaceDiscovery, releaseAge))),

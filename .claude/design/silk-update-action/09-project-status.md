@@ -50,7 +50,11 @@ composition is centralized in `src/layers/app.ts`.
   `GitHubClient` from `GitHubToken.clientLayer()` (`Layer.orDie`) and `Repo` from
   `Repo.layerFromConfig()`; `ActionState` comes from `Action.run`'s runtime rather
   than being rebuilt. `runtimeLive` selects offline vs live `@effected/runtimes`
-  resolvers.
+  resolvers. **Its requirement channel is pinned at compile time** by
+  `__test__/unit/layers/app.test.ts` — `Exclude<AppLayerRequirements,
+  ActionServices>` must be `never` — because `Action.run`'s optional `options`
+  parameter means a missing provide is not otherwise a type error. See the
+  settled decision below for the production failure that motivated it.
 - **Tests are not co-located:** every unit suite lives under `__test__/unit/`
   mirroring `src/`, with reserved helper modules in `__test__/utils/`.
 - **No barrel re-exports:** direct imports everywhere.
@@ -91,6 +95,14 @@ composition is centralized in `src/layers/app.ts`.
   never add; always writes the bare exact resolved version; `auto` no-ops on a
   static pin; EOL major lines are skipped with a warning. Runtime bumps never
   create a changeset and never trigger the install.
+- **Both manifest writers edit surgically.** `RuntimeUpgrade` and
+  `PackageManagerUpgrade` apply their changes through
+  `@effected/package-json`'s `PackageJsonFile.modify` — a decode-free JSONC edit
+  at a field path — so key order, indentation and line endings survive
+  byte-for-byte, and a write that would be byte-identical is skipped entirely.
+  They previously re-serialized the parsed tree with a guessed indent, which
+  could reformat regions the run never intended to touch in a manifest the
+  action then commits to someone else's repository.
 - Lockfile regeneration per manager (`pnpm clean --lockfile` + install;
   `bun install --force`; unlink `package-lock.json` + `npm install`).
 - Workspace YAML formatting (pnpm only), custom command execution with error
@@ -119,28 +131,69 @@ rather than silently performing a package-manager-only run.
   — closed when silk-effects moved onto the same wave. Re-verify with
   `pnpm why <pkg>`, never a lockfile grep: the grep reports which versions exist,
   only `pnpm why` reports who pulls each one.
-- **`@effected/package-json` is deliberately NOT adopted** (upstream
-  spencerbeggs/effected#286), and the reason is
-  measured rather than stylistic. `Package.decode` requires both `name` and
-  `version`, with `version` a strict semver — so it rejects a private monorepo
-  root (`{ "private": true, "packageManager": …, "devEngines": … }`), which is
-  exactly the file `RuntimeUpgrade` and `PackageManagerUpgrade` edit. It also
-  rejects a caret `packageManager` pin (`pnpm@^11.20.0`), a form `parsePnpmVersion`
-  supports and `PackageManagerUpgrade` reads as a reference. Separately, the
-  write path sorts keys canonically, so adopting it would reformat unrelated
-  regions of a manifest the action then commits to someone else's repo; the
-  current surgical edit (mutate the parsed object, `JSON.stringify` with
-  `detectIndent`) preserves key order exactly.
+- **`@effected/package-json` is adopted for `PackageJsonFile.modify` only** —
+  `^0.9.0`, a declared runtime dependency, wired as `PackageJsonFile.layer` in
+  `makeAppLayer` and consumed by both `RuntimeUpgrade` and
+  `PackageManagerUpgrade`, landing in `f55fab6` (the commit immediately before
+  the 4.6.0 release).
+  - **The prior "deliberately NOT adopted" ruling was NARROWED, not
+    overturned.** That distinction is the whole content of this entry. The
+    ruling's central objection — `Package.decode` requires `name` and a
+    strict-semver `version`, so it rejects the private workspace root this action
+    must edit — **still stands and is still operative**: the decode path is
+    unused, both services still read with `readFileSync` + `JSON.parse`. What was
+    adopted is one decode-free member. Read it as *"declined in whole → adopted
+    for one member, with the original objection intact for the rest"*.
+  - Detail, the superseded argument reproduced in full, and what changed upstream
+    are in the settled-decisions section below.
 
-  Four helpers therefore stay, each a **deliberate divergence with its own
-  reason** — recorded so the next audit does not re-propose them:
+  Of the four helpers the decline listed as "therefore staying", the adoption
+  **replaced one, orphaned two and left one genuinely load-bearing** — verified
+  by call site, not by reading the old table:
 
-  | helper | why it stays |
+  | helper | status now |
   | --- | --- |
-  | `parsePnpmVersion` / `formatPnpmVersion` | `PackageManager.FromString` rejects the caret pin (`pnpm@^11.20.0`) these accept and `PackageManagerUpgrade` documents |
-  | `findRuntimeEntry` | returns the **live object** inside `devEngines`, so assigning `.version` rewrites in place and preserves the entry's other keys; `DevEngine` decoding yields a detached copy |
-  | `detectIndent` | serves the surgical write path that `PackageIndent` would replace only if the kit's writer were adopted |
-  | `corepackHashFromIntegrity` | the kit has no SRI (`sha512-<base64>`) → corepack (`sha512.<hex>`) converter — upstream #281 |
+  | `corepackHashFromIntegrity` | **stays, still the only reason given that holds.** One call site (`package-manager-upgrade.ts:330`); the kit still ships no SRI (`sha512-<base64>`) → corepack (`sha512.<hex>`) converter — upstream #281 |
+  | `detectIndent` | **stays, but not for the recorded reason.** Its three call sites are `peer-sync`, `regular-deps` and `catalog-config-deps`, none of which went through `PackageJsonFile`. The two services the decline was *about* no longer call it at all: `modify` preserves indentation exactly, where `detectIndent` could only guess right |
+  | `findRuntimeEntry` | **replaced** by `locateRuntimeEntry`, which returns the entry **and the JSONC path to its `version`**. The decline's stated virtue — returning the live object so `.version =` rewrites in place — is now the thing being avoided: nothing is mutated, the path is handed to `modify` |
+  | `parsePnpmVersion` / `formatPnpmVersion` | **DELETED**, along with the `ParsedPnpmVersion` interface. Zero callers, and the recorded reason for keeping them had independently expired. See below |
+
+  **On the deleted pair, because an audit would otherwise get it wrong twice.**
+  The table's original entry justified them as *"`PackageManager.FromString`
+  rejects the caret pin (`pnpm@^11.20.0`) these accept"*. **Both halves of that
+  were false, independently:**
+
+  - The kit had stopped rejecting the caret pin. `0.9.0` added
+    `PackageManagerRange`, whose own TSDoc uses exactly this example —
+    `decode("pnpm@^11.20.0") → { name: "pnpm", range: "^11.20.0", isExact: false }`
+    (`node_modules/@effected/package-json/index.d.ts:1009`).
+  - The helpers had **no callers at all**. `package-manager-upgrade.ts` parses
+    with a module-private `ParsedPmVersion` / `parsePmVersion` generalized over
+    all three managers — which superseded the pnpm-only pair during the
+    multi-package-manager work without removing them.
+
+  So this was the "exported, never constructed" shape that got four error classes
+  deleted (@./03-type-definitions.md) — a dead export kept alive by a
+  justification that had itself stopped being true. `src/utils/pnpm.ts` now
+  exports only `detectIndent` and `corepackHashFromIntegrity`, and keeps a
+  comment block where the deleted exports were so the reasoning is discoverable
+  from the source rather than only from here.
+
+  **The loop is worth recording, because it ran in the unusual direction.** The
+  doc pass found the orphan; the doc pass established that the justification was
+  obsolete; the source change followed. Reconciling the
+  `@effected/package-json` record *required* checking, call site by call site,
+  which of these four helpers the adoption had actually replaced — and it was
+  that check, not a lint rule or a review, that surfaced two dead exports and one
+  expired rationale. Which is an argument for the audit being call-site-driven:
+  had it been done by re-reading the table, every row would have been confirmed.
+
+  A second-order trace, as a cheap general habit: `CLAUDE.md` had been
+  advertising `--testNamePattern="parsePnpmVersion"` as its example command, for
+  a test that no longer existed — **a dead export leaves fingerprints in
+  documentation that outlive every call site**, so grepping the docs for a symbol
+  finds things grepping the source does not. (Since corrected there to
+  `buildUpdateSubject`, which does have a suite.)
 
 - **`@effected/git` is adopted for `status`, not for the mutating tier**
   (upstream spencerbeggs/effected#279; local ruling
@@ -154,12 +207,22 @@ rather than silently performing a package-manager-only run.
   `FileSystem` / `Path` are ambient (they are members of `ActionServices`), so
   these are drift rather than necessity — the kit's rule is that a raw `node:`
   import is sanctioned only inside `@effected/github-actions` itself. The
-  current, **NUL-safe recount** is 14 modules: `format.ts`, `utils/deps.ts`,
-  `steps/install.ts`, and `services/{changesets, peer-sync,
-  package-manager-upgrade, config-deps, workspace-yaml, catalog-config-deps,
-  regular-deps, runtime-upgrade, branch, module-catalogs, lockfile}.ts`.
-  `module-catalogs.ts` is the one defensible case (`node:crypto` / `os` / `url`
-  for tarball extraction).
+  current count is **13 modules**, from `grep -rl 'from "node:' src/`:
+  `utils/deps.ts`, `steps/install.ts`, and `services/{branch,
+  catalog-config-deps, changesets, config-deps, lockfile, module-catalogs,
+  package-manager-upgrade, peer-sync, regular-deps, runtime-upgrade,
+  workspace-yaml}.ts`. `module-catalogs.ts` is the one defensible case
+  (`node:crypto` / `os` / `url` for tarball extraction).
+  - `format.ts` **is no longer among them** and the previous version of this
+    list was wrong to name it — the module's own doc comment records that its
+    only raw `node:fs` import was removed. Recount rather than edit this list;
+    see the note in "How to read the claims" below, where it has now been wrong
+    twice.
+  - `runtime-upgrade.ts` and `package-manager-upgrade.ts` still appear here even
+    though their **writes** go through `PackageJsonFile.modify` — both still
+    `readFileSync` the manifest to decide. That is deliberate (the kit's decode
+    path is declined; see the settled decision), so it is drift that will not be
+    closed by finishing the adoption.
   - **Correction to the original audit.** That finding claimed "14 modules" while
     enumerating only 12, and the enumeration omitted `services/lockfile.ts`
     because the grep it came from silently skipped that file — see the
@@ -233,9 +296,16 @@ These were investigated, rejected on measurement, and are the half of this
 record that a fresh audit will otherwise re-derive from scratch. Each names what
 would change the answer.
 
-### `@effected/package-json` — not adopted (upstream #286)
+### `@effected/package-json` — NARROWED: adopted for `modify`, decode path still declined (upstream #286)
 
-Probed before migrating anything, which is why nothing was half-migrated:
+**This entry previously read "not adopted". It was narrowed, not overturned** —
+and the difference matters enough to be the heading. One member was adopted; the
+ruling's central objection is untouched and still governs everything else. The
+original argument is reproduced below rather than replaced, because most of it is
+*still true*, and because the way the record went stale is itself the lesson.
+
+**What the original ruling said.** Probed before migrating anything, which is why
+nothing was half-migrated:
 
 - `Package.decode` **requires both `name` and `version`**, so it rejects a
   private monorepo root (`{ "private": true, "packageManager": …,
@@ -247,12 +317,135 @@ Probed before migrating anything, which is why nothing was half-migrated:
 - The write path **sorts keys canonically**, so adopting it would reformat
   unrelated regions of a file the action then commits to someone else's repo.
 
-**What would change the answer:** a lenient decode for the workspace-root shape,
-and an order-preserving single-field edit. Both are asked for in #286.
+It then named its own falsification condition: *"a lenient decode for the
+workspace-root shape, and an order-preserving single-field edit. Both are asked
+for in #286."*
 
-**Trap for the next auditor:** this repo's own `package.json` is already sorted
-by lint-staged, so the reordering is a no-op *here*. Checking only against this
-repo would have made it look safe.
+**Which of those three objections survived — the load-bearing summary:**
+
+| objection | status |
+| --- | --- |
+| `Package.decode` rejects the private workspace root | **stands, and is operative.** It is why the decode path is unadopted and why both services still `readFileSync` + `JSON.parse` |
+| the caret pin is rejected | **obsolete** — `PackageManagerRange` accepts `pnpm@^11.20.0` since `0.9.0`. Moot regardless: the helpers it justified had no callers and are now **deleted** (`parsePnpmVersion` / `formatPnpmVersion` / `ParsedPnpmVersion`), so the bullet above survives only as reproduced history |
+| the write path sorts keys canonically | **solved, and this is what was bought.** `modify` is a JSONC span edit, so key order never moves |
+
+**What changed.** `@effected/package-json@0.9.0` (upstream PR
+spencerbeggs/effected#366) shipped **both**, which is verifiable in the installed
+package rather than inferred — `packages/package-json/CHANGELOG.md` in the
+`.repos/effected` submodule, and the `PackageJsonFileShape` declaration in
+`node_modules/@effected/package-json/index.d.ts`:
+
+- `PackageManifest` — a presence-lenient model where `name`/`version` are
+  optional and `packageManager` accepts the range spelling via
+  `PackageManagerRange`. That answers bullets one and two.
+- `PackageJsonFormat.modify` / `PackageJsonFile.modify` — a **decode-free**
+  surgical field editor taking a JSONC `path` plus a `value`, preserving every
+  byte outside the edited span, and skipping the write entirely when the result
+  is byte-identical. That answers bullet three.
+
+**What was actually adopted, and what was not.** Only `modify`. The action still
+reads its manifests with `readFileSync` + `JSON.parse` in both
+`runtime-upgrade.ts` and `package-manager-upgrade.ts`, and **`PackageManifest`,
+`readManifest` and `writeManifest` are deliberately unused** — the adoption
+changeset (`.changeset/adopt-package-json-modify.md`, shipped in `f55fab6`) says
+so in as many words: the schema-decoding read path *"rejects manifests this
+action must still be able to edit — a private workspace root with no
+`name`/`version`, and a non-semver `version` such as `"1.0"`, are both legal in a
+package nobody publishes."* So the decline's first bullet was not refuted; the
+lenient decode simply was not needed, because the *decision* is made from the
+parsed object and only the *write* goes through the kit.
+
+**What it bought,** stated as the changeset states it rather than as a
+generality: bumps are written as surgical edits instead of a whole-file
+re-serialize, so key order, indentation and line endings survive byte-for-byte in
+a diff opened against someone else's repository. The previous write reconstructed
+the file from the parsed tree with a *guessed* indent, and could reformat regions
+the run never intended to touch.
+
+**What it cost — and this is the part the record did not capture until it broke
+production.** `PackageManagerUpgrade.layer` began resolving `PackageJsonFile` in
+its layer body, and `makeAppLayer` provided that service to `RuntimeUpgrade.layer`
+only. That typechecked (see the `Action.run` hole below), passed 588 tests, and
+killed **every run in every consumer repo** at v4.6.0 with
+`Service not found: @effected/package-json/PackageJsonFile`, ~30ms in, before the
+check run existed. Adopting a service into a second consumer is a **layer-wiring
+change**, not just a call-site change, and nothing in the type system said so.
+
+**What would change the remaining answer:** nothing outstanding is blocking the
+decode path — `PackageManifest` exists and would accept the workspace root. It
+is unadopted because the read is only used to decide, so decoding buys nothing
+the raw parse does not already provide. Adopt it if a decision starts needing a
+typed field (`packageManager.isExact` is the obvious candidate), not for
+tidiness.
+
+**Trap for the next auditor, still live:** this repo's own `package.json` is
+already sorted by lint-staged, so a canonical-reorder write is a no-op *here*.
+Checking only against this repo would have made the original write path look
+safe — and would equally hide a regression if `modify` were ever swapped back
+for a re-serialize.
+
+### `makeAppLayer`'s requirement channel is guarded at compile time — keep the guard
+
+**The hazard.** `Action.run` is declared
+(`node_modules/@effected/github-actions/index.d.ts:803`):
+
+```typescript
+static readonly run: <E, R = never>(
+ program: Effect.Effect<void, E, ActionServices | R>,
+ options?: ActionRunOptions<R>,
+) => Promise<void>;
+```
+
+`options` is **optional**, so `R` infers to whatever the program still requires
+and *nothing forces a layer to be passed for it*. `main.ts`'s bare
+`Action.run(program)` therefore typechecks at any `R` whatsoever. There is no
+"you forgot to provide this" error, at any call site, ever.
+
+This is a general hole, not a one-off: **any** domain layer that resolves a
+service `makeAppLayer` does not provide ships exactly the same way — clean
+`tsc`, green suite, dead on the runner. It has fired once, at v4.6.0
+(`PackageJsonFile`, above), and the failure is maximally unhelpful: a defect,
+~30ms in, before the check run is created, so there is no check run in the
+GitHub UI and the message names a service rather than a wiring site.
+
+**The guard** (`__test__/unit/layers/app.test.ts`): a type-level assertion that
+`Exclude<AppLayerRequirements, ActionServices>` is `never`, where
+`AppLayerRequirements` is read off `ReturnType<typeof makeAppLayer>`. The teeth
+are the type annotation; the runtime `expect` only proves the module was
+evaluated, and the file says so about itself. Tests are inside the tsc project
+(`__test__/**/*.ts` is in the resolved `include`), so it blocks at pre-commit and
+in CI, not merely in a test run.
+
+**Mutation-verified in both directions,** which is the standard this record
+holds a guard to: reinstating the bug produces
+`error TS2322: Type 'boolean' is not assignable to type 'PackageJsonFile'` —
+naming the missing service — and with the fix in place `tsc --noEmit` is clean.
+
+**What would falsify it / make it stop discriminating** — three things, and all
+three are silent:
+
+1. **`ActionServices` widening upstream.** The guard subtracts whatever that
+   alias currently names (today:
+   `ActionEnvironment | ActionLogger | ActionOutputs | ActionState | NodeServices | HttpClient`).
+   If the kit ever adds a service to it that `Action.run` does not actually
+   construct, the guard subtracts a lie and passes.
+2. **An `any`/`unknown` leaking into `makeAppLayer`'s inferred `In`.**
+   `Exclude<any, …>` is `any`, and `[any] extends [never]` is false — but
+   `Exclude<unknown, …>` is `unknown` and a stray `as` anywhere in the wiring can
+   collapse the channel. The guard reads the *inferred* type; it cannot tell an
+   honestly-empty channel from an erased one.
+3. **A service resolved outside a layer body** — e.g. yielded inside a *method*
+   rather than in `Layer.effect`. That leaves the requirement on the method, not
+   on the layer, so it never reaches `makeAppLayer`'s channel at all. Every
+   domain service here deliberately resolves its dependencies in the layer so
+   each member's `R` is `never` (see @./06-effect-patterns.md); that convention
+   is what makes this guard total, and abandoning it for one service silently
+   reopens the hole for that service.
+
+The runtime counterpart nobody has built: nothing currently *builds* the layer
+graph in a test, so a service that is provided but whose own layer fails to
+construct would still get through. The guard covers missing wiring, not broken
+wiring.
 
 ### `@effected/git` — adopted for `status`, declined for the mutating tier (upstream #279)
 
@@ -363,8 +556,57 @@ pattern is worth naming because it recurs:
   differently.
 - "`Range.parse` is tree-shaken out of the bundled dist" — true once, fixed
   upstream, and left asserting a hazard that no longer existed.
+- **"`@effected/package-json` was evaluated and DECLINED — do not re-propose
+  it"** — the same shape, at the largest scale yet. Asserted in `01`, `05` and
+  twice in `09` (a loose-end bullet *and* a settled-decisions entry), plus
+  `CLAUDE.md`, complete with a four-row table of helpers that "therefore stay".
+  Upstream then shipped **exactly the two things the ruling named as its own
+  falsification condition** (`PackageManifest` and `modify`, in `0.9.0`); the
+  package was adopted in `f55fab6` and wired into two services, and **every one
+  of those claims was left standing.** The adoption's own changeset states the
+  rationale in full, so the record was not missing — it was in a different file
+  nobody reconciled against.
+  - Note the precise verdict the correction had to make, because the obvious one
+    is wrong: the ruling was **narrowed, not refuted.** Its central objection —
+    `Package.decode` rejects the private workspace root — is still true and still
+    operative, which is why only the decode-free `modify` was adopted. "This doc
+    is stale" would have been the easy correction and would have thrown away the
+    reasoning that is still load-bearing.
+  - Two lessons, and the second is the load-bearing one. A ruling that names its
+    falsification condition is doing the right thing, but **naming a condition
+    creates no obligation for anyone to notice it was met** — the doc cannot
+    watch upstream on your behalf. And a "do not re-propose" instruction is
+    precisely the sentence that stops the next reader checking, which is the
+    same defect as a false justification (below) wearing a stronger uniform.
+  - *Re-derive with* `git log -S'@effected/package-json' -- package.json src/`,
+    which lands on the adopting commit and its changesets — the durable habit is
+    to check the **code** for a package a document says is unadopted, not the
+    document.
+- **A PARTIAL reconciliation is more dangerous than none, and this commit is the
+  worked example.** `f55fab6` did not ignore the docs. It edited `08-testing.md`
+  and `CLAUDE.md` in the same commit that made the change — and left standing, in
+  `09`, the settled-decisions entry that the change directly contradicted, plus
+  the supporting claims in `01` and `05`. The freshly-touched neighbours are
+  exactly what made the untouched ones look current: a reader who checks *whether
+  the docs were updated for this change* gets "yes".
+  - The same commit also moved this file's test count 580 → **581** when the tree
+    it shipped stood at **588** (see @./08-testing.md). So the reconciliation was
+    not merely partial across files, it was wrong within the file it did touch —
+    and being touched is what lent the number credibility.
+  - **Make it checkable rather than resolving to be careful.** The question is
+    not "were the docs updated" but "were *these* docs updated": for a change
+    that touches a package or a decision, `git log --stat <commit>` against
+    `git grep -l '<the package or claim>' -- '.claude/design/**'` names every
+    document that mentions it, and the difference between those two lists is the
+    unreconciled set. Both times this failed here, that difference was non-empty
+    and nobody computed it.
 - The raw-`node:` enumeration claimed 14 modules, listed 12, and the true count
-  was 13 — the number, the list, and each other all disagreed.
+  was 13 — the number, the list, and each other all disagreed. **It has since
+  drifted again in the other direction:** the loose-end bullet's list still names
+  `format.ts`, which no longer imports `node:` at all (its own module doc records
+  the removal). `grep -rl 'from "node:' src/` returns 13 files today. Corrected
+  in place above; noted here because the enumeration has now been wrong twice,
+  which suggests recounting rather than editing it next time.
 - **A control proves the wrong half.** Three tests were written for the peer-glob
   rejection, one of them deliberately a control — and all three asserted only
   `Exit.isFailure`, which the bug they were meant to catch *also* satisfies (it

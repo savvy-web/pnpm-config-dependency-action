@@ -8,70 +8,21 @@
  */
 
 // ══════════════════════════════════════════════════════════════════════════════
-// Types
-// ══════════════════════════════════════════════════════════════════════════════
-
-/**
- * Parsed pnpm version info.
- */
-export interface ParsedPnpmVersion {
-	readonly version: string;
-	readonly hasCaret: boolean;
-	readonly hasSha: boolean;
-}
-
-// ══════════════════════════════════════════════════════════════════════════════
 // Functions
 // ══════════════════════════════════════════════════════════════════════════════
 
-/**
- * Parse a pnpm version string from `packageManager` or `devEngines.packageManager.version`.
- *
- * Handles formats:
- * - `pnpm@10.28.2` (packageManager field, exact)
- * - `pnpm@10.28.2+sha512...` (packageManager field, with integrity hash)
- * - `pnpm@^10.28.2` (packageManager field, with caret)
- * - `10.28.2` (devEngines version field, exact)
- * - `^10.28.2` (devEngines version field, with caret)
- *
- * @param raw - The raw version string
- * @param stripPnpmPrefix - Whether to strip the `pnpm@` prefix (true for packageManager field)
- */
-export const parsePnpmVersion = (raw: string, stripPnpmPrefix = false): ParsedPnpmVersion | null => {
-	if (!raw) return null;
-
-	let value = raw.trim();
-
-	// Strip `pnpm@` prefix if present
-	if (stripPnpmPrefix) {
-		if (!value.startsWith("pnpm@")) return null;
-		value = value.slice(5); // Remove "pnpm@"
-	}
-
-	// Detect and strip sha suffix
-	const hasSha = value.includes("+");
-	if (hasSha) {
-		value = value.split("+")[0];
-	}
-
-	// Detect and strip caret
-	const hasCaret = value.startsWith("^");
-	if (hasCaret) {
-		value = value.slice(1);
-	}
-
-	// Validate as semver
-	if (!/^\d+\.\d+\.\d+/.test(value)) return null;
-
-	return { version: value, hasCaret, hasSha };
-};
-
-/**
- * Format a pnpm version with optional caret prefix.
- */
-export const formatPnpmVersion = (version: string, hasCaret: boolean): string => {
-	return hasCaret ? `^${version}` : version;
-};
+// `parsePnpmVersion` / `formatPnpmVersion` / `ParsedPnpmVersion` were DELETED
+// here, and the deletion is the same argument that removed four error classes
+// from `errors/errors.ts`: an export with no caller is a claim the type system
+// carries indefinitely and no test can falsify. They had zero callers in `src/`
+// and zero in `__test__/` — `PackageManagerUpgrade` parses with a local
+// `parsePmVersion` generalized over all three managers, which is what the
+// multi-package-manager work replaced them with.
+//
+// Their recorded justification for staying had also stopped being true
+// independently: it was that `@effected/package-json` rejected a caret pin
+// (`pnpm@^11.20.0`), which `PackageManagerRange` has accepted since 0.9.0. A
+// dead export kept alive by a reason that had itself expired.
 
 /**
  * Detect indentation used in a JSON file (tab or N spaces).
