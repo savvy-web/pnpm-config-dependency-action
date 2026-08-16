@@ -39,13 +39,15 @@
  * @module services/package-manager-upgrade
  */
 
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import type { NpmRegistryShape } from "@effected/npm";
 import { NpmRegistry } from "@effected/npm";
+import type { PackageJsonFileShape } from "@effected/package-json";
+import { PackageJsonFile } from "@effected/package-json";
 import { Context, Effect, Layer, Option } from "effect";
 
 import { FileSystemError } from "../errors/errors.js";
-import { corepackHashFromIntegrity, detectIndent } from "../utils/pnpm.js";
+import { corepackHashFromIntegrity } from "../utils/pnpm.js";
 import { resolveLatestSatisfying } from "../utils/semver.js";
 import type { SupportedPm } from "./package-manager.js";
 
@@ -146,8 +148,11 @@ export class PackageManagerUpgrade extends Context.Service<
 		this,
 		Effect.gen(function* () {
 			const registry = yield* NpmRegistry;
+			// Resolved in the layer so `upgrade`'s requirement channel stays `never`.
+			const packageJsonFile = yield* PackageJsonFile;
 			return {
-				upgrade: (mode, pm, workspaceRoot) => upgradePackageManagerImpl(registry, mode, pm, workspaceRoot),
+				upgrade: (mode, pm, workspaceRoot) =>
+					upgradePackageManagerImpl(registry, mode, pm, workspaceRoot, packageJsonFile),
 			};
 		}),
 	);
@@ -227,6 +232,7 @@ const upgradePackageManagerImpl = (
 	mode: string,
 	pm: SupportedPm,
 	workspaceRoot: string,
+	packageJsonFile: PackageJsonFileShape,
 ): Effect.Effect<PackageManagerUpgradeOutcome, FileSystemError> =>
 	Effect.gen(function* () {
 		if (mode === "false") {
@@ -250,7 +256,6 @@ const upgradePackageManagerImpl = (
 			try: () => JSON.parse(packageJsonRaw) as Record<string, unknown>,
 			catch: (e) => fsReadError(packageJsonPath, `Invalid JSON: ${e}`),
 		});
-		const indent = detectIndent(packageJsonRaw);
 
 		// Detect package-manager version fields, ignoring any that name a
 		// different package manager than `pm`.
@@ -338,24 +343,33 @@ const upgradePackageManagerImpl = (
 		const hasDevEngines = deParsed !== null;
 		const shouldWritePackageManager = hasPackageManager || (!hasPackageManager && !hasDevEngines);
 
+		// Collected as surgical field edits rather than applied to the parsed tree:
+		// the write goes through `PackageJsonFile.modify`, which rewrites only the
+		// edited spans and leaves key order, indentation and line endings exactly as
+		// the consumer had them. This manifest is committed to someone else's
+		// repository, so a whole-file re-serialize would make the diff unreviewable.
+		const edits: Array<{ readonly path: ReadonlyArray<string | number>; readonly value: unknown }> = [];
+
 		let packageManagerUpdated = false;
 		let added = false;
 		if (shouldWritePackageManager) {
-			packageJson.packageManager = packageManagerSpec;
+			edits.push({ path: ["packageManager"], value: packageManagerSpec });
 			packageManagerUpdated = true;
 			added = !hasPackageManager;
 		}
 
 		let devEnginesUpdated = false;
 		if (hasDevEngines) {
-			(packageJson.devEngines as { packageManager: { version?: string } }).packageManager.version = devEnginesSpec;
+			edits.push({ path: ["devEngines", "packageManager", "version"], value: devEnginesSpec });
 			devEnginesUpdated = true;
 		}
 
-		yield* Effect.try({
-			try: () => writeFileSync(packageJsonPath, `${JSON.stringify(packageJson, null, indent)}\n`, "utf-8"),
-			catch: (e) => fsWriteError(packageJsonPath, e),
-		});
+		yield* packageJsonFile
+			.modify(
+				packageJsonPath,
+				edits.map((e) => ({ path: [...e.path], value: e.value })),
+			)
+			.pipe(Effect.mapError((e) => fsWriteError(packageJsonPath, e)));
 
 		yield* Effect.logInfo(`Updated ${pm}: ${reference ?? "added"} -> ${resolved}`);
 		return {

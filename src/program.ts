@@ -221,7 +221,7 @@ export const innerProgram = (
 					yield* configureStatusStep(detected.root);
 
 					// ── branch ────────────────────────────────────────────────────
-					yield* branchStep(inputs.branch, inputs.sourceBranch, inputs.targetBranch);
+					yield* branchStep(inputs.branch, inputs.sourceBranch, inputs.targetBranch, detected.root);
 
 					// ── lockfile snapshot (before) ──────────────────────────────────
 					// Every step below reads and writes at `detected.root` — the resolved

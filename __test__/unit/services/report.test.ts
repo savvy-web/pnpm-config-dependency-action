@@ -123,6 +123,93 @@ describe("createOrUpdatePR", () => {
 		}),
 	);
 
+	// ── The carry-through contract (#240) ──────────────────────────────────────
+	//
+	// These are the point of adopting ManagedPrBody. The mechanism is easy to wire
+	// up and have do nothing: if the prior body were never read, every one of the
+	// tests above would still pass while a human's notes were destroyed on every
+	// run. So the capability is asserted directly.
+
+	const prWithBody = (body: string | undefined) => {
+		const state = emptyPullRequestState();
+		state.prs.push({
+			number: 7,
+			url: "https://github.com/test/pull/7",
+			nodeId: "PR_kwDOTest7",
+			title: "old title",
+			state: "open",
+			head: "pnpm/config",
+			headSha: fakeSha("head", 7),
+			base: "main",
+			baseSha: fakeSha("base", 7),
+			draft: false,
+			merged: false,
+			autoMerge: undefined,
+			body,
+		});
+		return state;
+	};
+
+	it.effect("PRESERVES human prose written outside the managed markers", () =>
+		Effect.gen(function* () {
+			const humanNote = "Reviewer note: hold this until the release freeze lifts.";
+			const state = prWithBody(
+				`${humanNote}\n\n<!-- silk-release:start -->\nstale generated content\n<!-- silk-release:end -->`,
+			);
+			const layer = makeReportLayer(state);
+
+			yield* Effect.gen(function* () {
+				const report = yield* Report;
+				return yield* report.createOrUpdatePR("pnpm/config", "main", [], []);
+			}).pipe(Effect.provide(layer), Effect.provideService(References.MinimumLogLevel, "None"));
+
+			const written = state.prs[0].body;
+			// The capability #240 adds: the note survives a regeneration.
+			expect(written).toContain(humanNote);
+			// And the previous generated content does NOT — it is regenerated, not
+			// carried, because the dependency tables describe THIS run.
+			expect(written).not.toContain("stale generated content");
+		}),
+	);
+
+	it.effect("puts this run's generated content inside the managed region", () =>
+		Effect.gen(function* () {
+			const state = prWithBody("");
+			const layer = makeReportLayer(state);
+
+			yield* Effect.gen(function* () {
+				const report = yield* Report;
+				return yield* report.createOrUpdatePR("pnpm/config", "main", [pnpmUpgradeUpdate], []);
+			}).pipe(Effect.provide(layer), Effect.provideService(References.MinimumLogLevel, "None"));
+
+			const written = state.prs[0].body;
+			expect(written).toContain("<!-- silk-release:start -->");
+			expect(written).toContain("<!-- silk-release:end -->");
+			// The dependency the run updated is reported inside it.
+			expect(written).toContain("pnpm");
+		}),
+	);
+
+	it.effect("handles an ABSENT body, which is how GitHub reports an empty description", () =>
+		Effect.gen(function* () {
+			// PullRequestInfo.body is optional-ABSENT, not "" — GitHub sends
+			// `body: null` and the projection drops the key. ReleaseInfo and
+			// CommentRecord coalesce null to "" on a REQUIRED body; PullRequestInfo
+			// is the odd one out, so a test asserting "" here would pin the wrong
+			// convention and still look correct.
+			const state = prWithBody(undefined);
+			const layer = makeReportLayer(state);
+
+			const result = yield* Effect.gen(function* () {
+				const report = yield* Report;
+				return yield* report.createOrUpdatePR("pnpm/config", "main", [pnpmUpgradeUpdate], []);
+			}).pipe(Effect.provide(layer), Effect.provideService(References.MinimumLogLevel, "None"));
+
+			expect(result.number).toBe(7);
+			expect(state.prs[0].body).toContain("<!-- silk-release:start -->");
+		}),
+	);
+
 	it.effect("returns nodeId from created PR", () =>
 		Effect.gen(function* () {
 			const state = emptyPullRequestState();
@@ -207,6 +294,7 @@ describe("createOrUpdatePR", () => {
 			// Only `upsert` needs stubbing: every other member of the double dies
 			// naming itself, which proves createOrUpdatePR touches nothing else.
 			const failingPrLayer = PullRequest.layerTest({
+				list: () => Effect.succeed([]),
 				upsert: () =>
 					Effect.fail(
 						new GitHubError({
