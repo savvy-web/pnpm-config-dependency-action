@@ -16,9 +16,11 @@ in its own module under `src/steps/`, input reading in `src/schema/inputs.ts`
 (`readInputs`), log rendering in `src/format.ts`. Cross-phase state in
 `src/state.ts`.
 
-It runs on **Effect v4** (`effect@4.0.0-beta.107` via `catalog:effect`, injected
-by the `@effected/pnpm-plugin-effect` config dependency) and the **`@effected/*`
-kit**; the former all-in-one `@savvy-web/github-action-effects` is **deleted**,
+It runs on **Effect v4** (via `catalog:effect`, injected by the
+`@effected/pnpm-plugin-effect` config dependency — the line has crossed from
+`beta` into `rc`, so **read the version off the tree**
+(`node -p "require('./node_modules/effect/package.json').version"`) rather than
+off any doc, this one included) and the **`@effected/*` kit**; the former all-in-one `@savvy-web/github-action-effects` is **deleted**,
 its surface split across the kit packages. Domain logic is wrapped as Effect
 services (`Context.Service` + `Layer`) in `src/services/`, wired by
 `makeAppLayer(dryRun, { runtimeLive })` in `src/layers/app.ts`.
@@ -57,13 +59,13 @@ pnpm vitest run --testNamePattern="buildUpdateSubject"        # by name
   imports everywhere
 - **Entry points**: `src/pre.ts`, `src/main.ts`, `src/post.ts` (derived from
   `action.config.ts` by the builder); composition in `src/program.ts`
-- **Steps**: `src/steps/` — one module per orchestration unit (14: `branch`,
-  `changesets`, `commit-and-pr`, `config-dependencies`, `custom-commands`,
-  `detect-changes`, `detect-package-manager`, `format-workspace`, `install`,
-  `lockfile-snapshot`, `peer-sync`, `regular-dependencies`,
-  `upgrade-package-manager`, `upgrade-runtimes`). Each declares its own result
-  type, an explicit requirement channel, and a tagged error **only if it can
-  actually fail** — four carry `never`
+- **Steps**: `src/steps/` — one module per orchestration unit (15: `branch`,
+  `changesets`, `commit-and-pr`, `config-dependencies`, `configure-status`,
+  `custom-commands`, `detect-changes`, `detect-package-manager`,
+  `format-workspace`, `install`, `lockfile-snapshot`, `peer-sync`,
+  `regular-dependencies`, `upgrade-package-manager`, `upgrade-runtimes`). Each
+  declares its own result type, an explicit requirement channel, and a tagged
+  error **only if it can actually fail** — four carry `never`
 - **Services**: `src/services/` — `Context.Service` + `Layer`, plus stateless
   helper modules; **Layers**: `src/layers/app.ts`; **Schema**: `src/schema/`
   (singular — `domain.ts`, `inputs.ts`, `outputs.ts`); **Rendering**:
@@ -98,9 +100,9 @@ and do not need the pointer.
 ## Testing
 
 - **Framework**: Vitest with v8 coverage, forks pool (Effect compatibility).
-  Current suite: **589 tests across 41 files**, measured, not carried forward.
-  **Treat a test count here as evidence and re-derive it** (`pnpm vitest run`) —
-  the **581** this line used to state was never a real count, edited by a
+  Current suite: **599 tests across 42 files**, measured, not carried forward.
+  **Treat a test count here as evidence and re-derive it** (`pnpm vitest run`) — a
+  figure this line once carried was never a real count, having been edited by a
   plausible `+1` in the very commit that invalidated it, which is what made it
   credible. Per-commit accounting in
   `@./.claude/design/silk-update-action/08-testing.md`.
@@ -176,7 +178,7 @@ and do not need the pointer.
   emitted **on every exit path** as an empty-run document — never an empty
   string, so a consumer parses unconditionally. Its JSON Schema is **generated**
   into `docs/schema/run-result.schema.json` by `lib/scripts/generate-schema.ts`
-  (via `@effected/schemastore` at `^0.3.0`, run under `tsx` — a declared
+  (via `@effected/schemastore`, run under `tsx` — a declared
   devDependency, previously transitive-only); change it by editing the domain
   types and running `pnpm generate-schema`. The four scalar outputs are
   unchanged.
@@ -212,7 +214,7 @@ and do not need the pointer.
   semver range) defaulting to **`"false"`** (opt-in, matching `upgrade-runtime-*`).
   It upgrades the **detected** manager via `PackageManagerUpgrade`. corepack-managed
   managers (pnpm, npm) are written hash-pinned (`+sha512.<hex>`, via
-  `corepackHashFromIntegrity`) into both `packageManager` and
+  `@effected/npm`'s `CorepackIntegrityHash.fromSri`) into both `packageManager` and
   `devEngines.packageManager.version`; **bun is written bare** (corepack does not
   manage it). `upgrade()` never returns `null` — it returns an outcome whose `kind`
   explains the skip, and `unsatisfiable` (a range typed for a different manager)
@@ -265,7 +267,7 @@ and do not need the pointer.
 - Auto-merge requires GraphQL (no REST endpoint) and is a **separate**
   `setAutoMerge` call whose failure degrades to a warning
 - **`@effected/package-json` is adopted for `PackageJsonFile.modify` ONLY** —
-  `^0.9.0`, a declared runtime dependency wired as `PackageJsonFile.layer` and
+  a declared runtime dependency wired as `PackageJsonFile.layer` and
   consumed by both `RuntimeUpgrade` and `PackageManagerUpgrade`. This line used to
   read "evaluated and DECLINED — do not re-propose it"; that ruling was
   **narrowed, not overturned**, and the distinction is the content. Its central
@@ -282,14 +284,38 @@ and do not need the pointer.
   reader checking. **Re-checking the ruling's four "therefore staying" helpers by
   call site deleted two of them**: `parsePnpmVersion` / `formatPnpmVersion` (and
   `ParsedPnpmVersion`) had no caller anywhere and the reason recorded for keeping
-  them had independently expired, so they are **gone** from `src/utils/pnpm.ts`,
-  which now exports only `detectIndent` and `corepackHashFromIntegrity`. That is
-  the sequence worth copying — a doc pass that checks call sites is how dead
-  exports get found, the same argument that removed four error classes. The
+  them had independently expired, so they are **gone** from `src/utils/pnpm.ts`.
+  That is the sequence worth copying — a doc pass that checks call sites is how
+  dead exports get found, the same argument that removed four error classes. The
   per-helper verdicts (including why `detectIndent` stays but *not* for its
   recorded reason) are in
   `@./.claude/design/silk-update-action/09-project-status.md`; re-derive by grep
   rather than re-reading either list
+- **`src/utils/pnpm.ts` is down to `detectIndent` alone**, and the two deletions
+  happened for *different* reasons — do not collapse them. `parsePnpmVersion` /
+  `formatPnpmVersion` went for having **no caller** (above).
+  `corepackHashFromIntegrity` had a caller and worked; it went because the
+  capability **moved upstream** (`@effected/npm`'s `CorepackIntegrityHash.fromSri`,
+  issue #290 — effected#281 cites this repo's copy as the consumer evidence). The
+  kit is not a like-for-like port: the local version base64-decoded whatever
+  followed `sha512-`, so a wrong-length digest or non-canonical base64 became a
+  pin that *looked* well-formed and that corepack rejects at install, in the
+  consumer's repo, after a successful run. Those fail typed now and degrade to
+  the bare-version write. **`PackageManagerUpgrade`'s module-private
+  `parsePmVersion` went the same way**, onto `PackageManagerPin` — with one local
+  concession: a leading `^`/`~` is stripped before parsing
+  `devEngines.packageManager.version`, because devEngines legally carries a range
+  and a corepack pin never does
+- **The DCO sign-off comes from the persisted token, not a literal.**
+  `src/utils/commit-signoff.ts`' `resolveSignoff()` reads
+  `GitHubToken.botIdentity()` and renders through `BotIdentity.signoff`, falling
+  back to `BotIdentity.githubActions`; `Report.layer` resolves it **once in the
+  layer body** so the commit trailer and the PR body's proposed-squash fence
+  cannot disagree, and so neither member gains an `ActionState` requirement. It
+  replaced a `signoffLine(appSlug?)` whose slug branch **nothing ever passed** —
+  reachable only from a test — so every real run signed as `github-actions[bot]`
+  while the App bot authored the commit. Same shape as the sister
+  `silk-release-action`'s `resolveSignoff`, deliberately
 - **`@effected/git` is adopted for `status` only.** The mutating tier is still
   declined — it covers 2 of the 9 local git operations `services/branch.ts`
   performs, so seven stay on `Run` (spencerbeggs/effected#279). The earlier
@@ -304,9 +330,26 @@ and do not need the pointer.
   leaves a `0.x` kit package on the old minor while code calls the new surface —
   the install succeeds and the failure shows up later. Bump the declared range
   explicitly when a `0.x` kit package releases a minor. This is not theoretical:
-  `@effected/workspaces` and `@effected/commands` both crossed a `0.x` minor
-  during this branch and needed exactly that hand-edit (now at `^0.10.0` /
-  `^0.3.0`)
+  `@effected/workspaces` and `@effected/commands` both crossed a `0.x` minor and
+  needed exactly that hand-edit; check the declared ranges rather than trusting
+  the versions this line used to name.
+  - **The trap has a second half — a range that is *satisfied* is a range pnpm
+    never revisits**, so a lockfile can hold a version for months while its peers
+    move. At `@effected/npm@0.11.0` that left `@effected/github` on `0.6.0` while
+    `github-actions@0.9.1` pulled `0.7.0`, and
+    `__test__/unit/layers/app.test.ts` failed with `Type 'boolean' is not
+    assignable to type 'GitHubClient'`. **The duplicate was NOT the cause** — a
+    `0.6.1`+`0.7.0` pair typechecks fine; `0.6.0` embeds `@octokit/types@16`
+    where its peers were built against `@17`, and `GitHubClient`'s type embeds
+    octokit's. So a duplicate is harmless while the copies' shapes agree, and it
+    is a **stale transitive** that makes them disagree. Evidence table and the
+    full write-up (including that the correct explanation was already on the page
+    when the wrong one was added) in
+    `@./.claude/design/silk-update-action/01-dependencies.md`. After any kit
+    bump: `pnpm why` on **every** kit package, not just the one you bumped — and
+    read a leftover requirement in the guard as *one of three* possible causes
+    (missing `Layer.provide`, duplicate, drifted shape), since the message names
+    the type and never the reason
 - **`src/services/lockfile.ts` once held a raw NUL byte** (the `depKey`
   separator, since replaced by the `\0` escape). `file(1)` reported it as `data`
   and **grep silently skipped all 531 lines**, returning something

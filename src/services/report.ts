@@ -17,6 +17,7 @@ import { PrBody } from "@savvy-web/silk-effects";
 import { Context, Effect, Layer } from "effect";
 
 import type { CatalogDelta, ChangesetFile, DependencyUpdateResult, PullRequestResult } from "../schema/domain.js";
+import { resolveSignoff } from "../utils/commit-signoff.js";
 import { buildUpdateSubject } from "../utils/commit-subject.js";
 import { bold, rule } from "../utils/markdown.js";
 
@@ -47,7 +48,7 @@ export class Report extends Context.Service<
 			dryRun: boolean,
 			deltas?: ReadonlyArray<CatalogDelta>,
 		) => string;
-		readonly generateCommitMessage: (updates: ReadonlyArray<DependencyUpdateResult>, appSlug?: string) => string;
+		readonly generateCommitMessage: (updates: ReadonlyArray<DependencyUpdateResult>) => string;
 	}
 >()("Report") {
 	/**
@@ -56,17 +57,29 @@ export class Report extends Context.Service<
 	 * Declared IN the class body, which is load-bearing rather than stylistic: a
 	 * member attached by post-class assignment is tree-shaken out of the bundled
 	 * `dist`, and that fails only in production because vitest runs the source.
+	 *
+	 * The DCO sign-off is resolved **once, here**, and closed over by both
+	 * renderings. `resolveSignoff` is an Effect over `ActionState` while the two
+	 * consumers are a sync string builder and a method whose `R` must stay
+	 * `Repo`-only, so the layer body is the one place it can be read without
+	 * pushing `ActionState` into a member's requirement channel — the same
+	 * "resolve dependencies in the layer" convention every other service here
+	 * follows, and the convention the app-layer requirement guard depends on.
+	 * It is also one state read per run rather than one per rendering, and it
+	 * makes drift between the commit trailer and the PR body's proposed-squash
+	 * fence structurally impossible rather than merely intended.
 	 */
 	static readonly layer = Layer.effect(
 		this,
 		Effect.gen(function* () {
 			const pullRequest = yield* PullRequestTag;
+			const signoff = yield* resolveSignoff();
 			return {
 				createOrUpdatePR: (branch, base, updates, changesets, autoMerge, deltas) =>
-					createOrUpdatePRImpl(pullRequest, branch, base, updates, changesets, autoMerge, deltas),
+					createOrUpdatePRImpl(pullRequest, signoff, branch, base, updates, changesets, autoMerge, deltas),
 				generatePRBody: generatePRBodyImpl,
 				generateSummary: generateSummaryImpl,
-				generateCommitMessage: generateCommitMessageImpl,
+				generateCommitMessage: (updates) => generateCommitMessageImpl(updates, signoff),
 			};
 		}),
 	);
@@ -92,6 +105,7 @@ export class Report extends Context.Service<
  */
 const createOrUpdatePRImpl = (
 	pr: PullRequestShape,
+	signoff: string,
 	branch: string,
 	base: string,
 	updates: ReadonlyArray<DependencyUpdateResult>,
@@ -125,9 +139,10 @@ const createOrUpdatePRImpl = (
 		const managed = PrBody.ManagedPrBody.build({
 			subject: title,
 			linkedIssues: [],
-			// No slug: `generateCommitMessage` is called without one too, so both
-			// renderings carry the same identity rather than disagreeing.
-			signoff: signoffLine(),
+			// The same string `generateCommitMessage` trails, resolved once in the
+			// layer — this fence is a *proposal* for the squash commit, so a
+			// reviewer comparing it against the commit must not find two authors.
+			signoff,
 			summary: generatePRBodyImpl(updates, changesets, deltas),
 			priorBody,
 		});
@@ -158,27 +173,15 @@ const createOrUpdatePRImpl = (
 	});
 
 /**
- * Generate commit message for dependency updates.
+ * Generate the commit message for a dependency-update commit.
  *
- * Uses the app slug to attribute the sign-off to the correct bot.
- * When commits are created via the GitHub API without an explicit author,
- * and include a matching sign-off footer, GitHub will verify/sign the commit.
+ * The commit is created through the Git Data API with no explicit author, which
+ * is what lets GitHub attribute and verify it; the `signoff` trailer is
+ * supplied because that path bypasses `git commit -s`. It is passed in rather
+ * than built here — see `utils/commit-signoff.ts` for whose identity it names
+ * and `Report.layer` for why it is resolved once per run.
  */
-/**
- * The DCO signoff line, as one function so the commit message and the PR body's
- * proposed-squash-commit fence cannot drift apart. They are two renderings of
- * the same eventual commit; a reviewer comparing them should not find two
- * different authors.
- */
-const signoffLine = (appSlug?: string): string => {
-	const botName = appSlug ? `${appSlug}[bot]` : "github-actions[bot]";
-	const botEmail = appSlug
-		? `${appSlug}[bot]@users.noreply.github.com`
-		: "41898282+github-actions[bot]@users.noreply.github.com";
-	return `Signed-off-by: ${botName} <${botEmail}>`;
-};
-
-const generateCommitMessageImpl = (updates: ReadonlyArray<DependencyUpdateResult>, appSlug?: string): string => {
+const generateCommitMessageImpl = (updates: ReadonlyArray<DependencyUpdateResult>, signoff: string): string => {
 	const subject = buildUpdateSubject(updates);
 
 	return `${subject}
@@ -186,7 +189,7 @@ const generateCommitMessageImpl = (updates: ReadonlyArray<DependencyUpdateResult
 Updated dependencies:
 ${updates.map((u) => `- ${u.dependency}: ${u.from ?? "new"} -> ${u.to}`).join("\n")}
 
-${signoffLine(appSlug)}`;
+${signoff}`;
 };
 
 /**

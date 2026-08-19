@@ -258,7 +258,8 @@ export class PackageManagerUpgrade extends Context.Service<PackageManagerUpgrade
 **Algorithm:**
 
 1. Read root `package.json`; parse the `packageManager` field and the
-   `devEngines.packageManager` entry. An entry naming a *different* manager than
+   `devEngines.packageManager` entry through `@effected/npm`'s
+   `PackageManagerPin.parseResult`. An entry naming a *different* manager than
    the one being upgraded is not a reference for this run and is ignored.
 2. Pick a reference version favoring `devEngines.packageManager`.
 3. Choose the target range: `true`/`auto` → `^reference` (latest within the
@@ -266,7 +267,7 @@ export class PackageManagerUpgrade extends Context.Service<PackageManagerUpgrade
 4. Resolve via `NpmRegistry.versions(pm)` + `resolveLatestSatisfying`.
 5. Write. **corepack-managed managers (pnpm, npm)** get a pinned
    `version+sha512.<hex>` (derived from the registry integrity via
-   `corepackHashFromIntegrity`) in both `packageManager` and
+   `CorepackIntegrityHash.fromSri`) in both `packageManager` and
    `devEngines.packageManager.version` — no `corepack use` is invoked, because it
    errors when both fields are present; the subsequent install performs the
    corepack switch. **bun is not corepack-managed** — it never consults
@@ -282,7 +283,35 @@ manifest is committed to someone else's repository, so a whole-file
 `JSON.stringify` — the previous approach, formatting guessed by `detectIndent` —
 made the diff unreviewable whenever the guess was wrong.
 
-The **read** is still `readFileSync` + `JSON.parse`, deliberately: the kit's
+**Both halves of the pin grammar are `@effected/npm`'s now (issue #290), and
+the two swaps are not the same trade.**
+
+- **`CorepackIntegrityHash.fromSri`** replaced a local converter that this
+  repo's copy had motivated upstream (effected#281 cites it as the consumer
+  evidence). It is **stricter, on purpose**: the local one base64-decoded
+  whatever followed `sha512-` and emitted the hex, so non-canonical base64 and a
+  wrong-length digest both produced a pin that *looked* well-formed and that
+  corepack rejects at install time — in the consumer's repository, after this
+  action reported success. Those fail typed now and take the same
+  bare-version write an absent integrity already took. Pinned by a test that
+  fails against the old converter with `pnpm@11.13.0+sha512.deadbeef`.
+- **`PackageManagerPin.parseResult`** replaced the module-private
+  `parsePmVersion`, whose version check was `/^\d+\.\d+\.\d+/` against the tail
+  — a *prefix* match, so `pnpm@11.12.0garbage` was accepted as a reference and
+  the synthesized `^11.12.0garbage` range then reported `unsatisfiable`, which is
+  this service's diagnosis for "the range names a different package manager".
+  A parse failure now reports `no-reference`, which is what actually happened.
+
+  The **one** local concession is a leading `^`/`~` stripped from
+  `devEngines.packageManager.version` before parsing. A range is illegal in a
+  corepack pin and `PackageManagerPin` says so correctly; `devEngines` is
+  specified to accept one and repos write `^11.0.0` there. Handing that straight
+  to the pin grammar would report "no reference" and silently stop upgrading a
+  manager the repo plainly declares. It is dropped rather than resolved because
+  the reference is only ever the anchor for a synthesized range.
+
+The **read** of the manifest is still `readFileSync` + `JSON.parse`,
+deliberately: the kit's
 `Package.decode` rejects a private workspace root, and the lenient
 `PackageManifest` that `0.9.0` added is unadopted because the parse only feeds a
 decision. **Only `modify` was adopted** — the prior ruling against this package
@@ -658,12 +687,29 @@ export class Report extends Context.Service<Report, {
   Effect.Effect<PullRequestResult, GitHubError, Repo>;
  readonly generatePRBody: (updates, changesets, deltas?) => string;
  readonly generateSummary: (updates, changesets, pr, dryRun, deltas?) => string;
- readonly generateCommitMessage: (updates, appSlug?) => string;
+ readonly generateCommitMessage: (updates) => string;
 }>()("Report") {}
 ```
 
 - `base` is the resolved `target-branch`. Creation/update goes through
   `PullRequest.upsert`.
+- **The DCO sign-off is resolved once, in the layer body**, via
+  `resolveSignoff()` (see `utils/commit-signoff.ts` below), and closed over by
+  both `generateCommitMessage` and the PR body's proposed-squash-commit fence.
+  That placement is the usual "resolve dependencies in the layer" convention
+  doing real work here: `resolveSignoff` is an `Effect` over `ActionState` while
+  the two consumers are a sync string builder and a method whose `R` must stay
+  `Repo`-only, so the layer is the one place it can be read without pushing
+  `ActionState` into a member's requirement channel and out of reach of the
+  app-layer guard. It also makes drift between the two renderings structurally
+  impossible rather than merely intended.
+  - It replaced a `generateCommitMessage(updates, appSlug?)` parameter. The
+    parameter is gone rather than defaulted, because **nothing ever passed it**:
+    `steps/commit-and-pr.ts` calls with updates only, so the App-bot branch was
+    reachable from the test suite and from nowhere else, and every real run
+    signed as `github-actions[bot]` while the App bot authored the commit. An
+    optional parameter with one caller that never supplies it is a capability
+    the type system advertises and the program does not have.
 - **Auto-merge is a separate call** in the kit (`setAutoMerge`, a GraphQL
   mutation) rather than a field on create. Its failure is deliberately swallowed
   to a warning: the repository may simply not have auto-merge enabled, and that
@@ -913,6 +959,41 @@ Pure catalog-map helpers behind `CatalogConfigDeps`:
   (migrating a nested copy), which is where bun reads them.
 - `threeWayMergeCatalogs(base, disk, next)` — see `CatalogConfigDeps` above.
 
+### src/utils/commit-signoff.ts
+
+- `resolveSignoff()` — `Effect<string, never, ActionState>`. The DCO
+  `Signed-off-by` trailer for a commit this action creates, read from the token
+  `GitHubToken.provision` persisted in `pre` and rendered by
+  `BotIdentity.signoff`. Deliberately the same module, name and shape as
+  `silk-release-action`'s: both actions commit through the Git Data API, which is
+  what makes GitHub verify the commit and also what bypasses `git commit -s`, so
+  both must supply their own trailer.
+
+  What is **local** is the policy — which identity to sign as, and that an
+  unreadable token degrades to `BotIdentity.githubActions` rather than failing a
+  run whose dependency work is already done. What is **not** local is the trailer
+  text: `Signed-off-by:` is DCO 1.1, with fixed casing, spacing and angle
+  brackets, and since nothing validates it at commit time a subtly malformed one
+  surfaces as a red DCO check on someone else's pull request, in another
+  repository, after the run reported success.
+
+  Two fallbacks at different depths, both load-bearing:
+  `GitHubToken.botIdentity()` already answers `BotIdentity.githubActions` when the
+  persisted token carries no `appSlug` (`provision`'s `GET /app` lookup failed);
+  the `Effect.catch` here covers the state read failing outright, which is every
+  unit test that does not stand up a `pre` phase. The declared error channel is
+  `never` because of the second one.
+
+  **The `ActionState` double had to be corrected for this to be testable**, and
+  the correction is the more general finding: `__test__/utils/action-doubles.ts`
+  used to `Effect.die` on a missing key while the real `ActionState.get` fails
+  *typed* with `reason: "missing"`. A defect is uncatchable, so code whose
+  contract is to degrade when nothing was persisted read as broken under the
+  double while being correct against the real store — a double stricter than the
+  thing it stands in for does not catch bugs, it invents them, and the standing
+  temptation is then to weaken the production code to satisfy the fake. Pinned by
+  `__test__/unit/doubles.test.ts`.
+
 ### src/utils/commit-subject.ts
 
 - `buildUpdateSubject(updates)` — derive the full conventional PR title / commit
@@ -996,19 +1077,26 @@ grammar itself is still pinned locally by `INPUT_*`-keyed tests, now in
   `RuntimeUpgrade` or `PackageManagerUpgrade` — those write through
   `PackageJsonFile.modify`, which preserves the existing indentation exactly
   rather than guessing it.
-- `corepackHashFromIntegrity(integrity)` — convert an npm registry integrity
-  (`sha512-<base64>`) to corepack's `packageManager` hash form (`sha512.<hex>`) —
-  the exact string `corepack use` would write. Tolerates a JSON-quoted value;
-  returns `null` when missing or not a sha512 integrity. Still the only such
-  converter anywhere in the graph (upstream #281).
-Those two are the **whole** of this module's exports. `parsePnpmVersion`,
-`formatPnpmVersion` and the `ParsedPnpmVersion` interface were **deleted** — they
-had no caller in `src/` or `__test__/`, `PackageManagerUpgrade` having moved to a
-module-private `parsePmVersion` generalized over all three package managers
-during the multi-package-manager work. The module keeps a comment block where
-they were, recording both that argument and the fact that their stated
-justification (the kit rejecting a caret `packageManager` pin) had expired
-independently. Detail in @./09-project-status.md and @./03-type-definitions.md.
+That is now the **whole** of this module's exports, and the three deletions that
+got it there happened for **two different reasons** — worth keeping distinct,
+because collapsing them into "dead code was removed" loses the useful half.
+
+- `parsePnpmVersion` / `formatPnpmVersion` / `ParsedPnpmVersion` were deleted for
+  having **no caller** in `src/` or `__test__/`, `PackageManagerUpgrade` having
+  moved to a module-private `parsePmVersion` during the multi-package-manager
+  work. Their stated justification (the kit rejecting a caret `packageManager`
+  pin) had also expired independently. Detail in @./09-project-status.md and
+  @./03-type-definitions.md.
+- `corepackHashFromIntegrity` was deleted for the **opposite** reason: it had a
+  caller, it worked, and the capability moved upstream. `@effected/npm@0.11.0`
+  ships `CorepackIntegrityHash.fromSri` / `.FromSri` — the swap this repo's own
+  copy motivated (effected#281 cited it as the consumer evidence; issue #290
+  tracked it here). Not a like-for-like port: see the `PackageManagerUpgrade`
+  section above for the malformed-base64 and wrong-digest-length cases the local
+  version converted into a pin corepack rejects at install.
+
+The module keeps a comment block where each deleted export was, so the reasoning
+is discoverable from the source and not only from here.
 
 ### src/utils/runtime.ts
 

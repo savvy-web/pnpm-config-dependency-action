@@ -363,16 +363,14 @@ step modules rather than called directly.
 
 ## src/steps/ - One Module Per Orchestration Unit
 
-Each step module owns one unit of the workflow and declares three things for
-itself: its **result type**, its **requirement channel**, and a **tagged error
-only if it can actually fail**. Exactly **four carry `never`** in the error
-channel — `custom-commands`, `regular-dependencies`, `upgrade-package-manager`
-and `upgrade-runtimes` — which is a claim the compiler checks rather than a
-convention, and is verifiable by reading the four signatures.
+Each step module owns one unit of the workflow and declares three things for itself: its **result type**, its **requirement channel**, and a **tagged error only if it can actually fail**. Exactly **four carry `never`** in the error channel — `custom-commands`, `regular-dependencies`, `upgrade-package-manager` and `upgrade-runtimes` — which is a claim the compiler checks rather than a convention, and is verifiable by reading the four signatures. **Re-verified against all fifteen signatures** when the `configure-status` row below was added, which is the moment a count like this silently stops matching: the new step is not one of the four.
+
+**"git errors" below abbreviates the three `@effected/git` failures** — `GitCommandError`, `NotARepositoryError`, `UnknownRefError` — which every caller of `Git.status` / `Git.configSet` carries as a set. Abbreviated here rather than repeated across four cells; `src/services/branch.ts` already names the same union `GitServiceError`, so read that or the step's own signature for the authoritative channel.
 
 | step | error channel | note |
 | --- | --- | --- |
 | `detect-package-manager` | `InvalidInputError` | resolves root + manager once; everything downstream reads it |
+| `configure-status` | git errors | pins `core.fileMode=false` on the checkout, once, before any status read. **Failure propagates deliberately** — a write that did not take makes every later status read count exec-bit flips as changes, and the run's whole change verdict is then wrong in a way nothing downstream can detect |
 | `branch` | `BranchStepError` | validates both refs *before* `GitBranch.upsert` force-resets anything |
 | `lockfile-snapshot` | `LockfileError` | runs twice (`"before"` / `"after"`); a missing lockfile is a skip, not a failure |
 | `upgrade-package-manager` | `never` | a read/write failure folds into an `error`-kind outcome instead |
@@ -383,9 +381,9 @@ convention, and is verifiable by reading the four signatures.
 | `install` | `CommandFailedError` \| `CommandOutputError` | `runInstall` lives here |
 | `format-workspace` | `FileSystemError` | pnpm-only; logs the reason when it does not apply |
 | `custom-commands` | `never` | `runCommands` lives here; returns failures, does **not** conclude |
-| `detect-changes` | `CommandFailedError` \| `CommandOutputError` | the `git status` call; extracted to get the last I/O primitive out of `program.ts` |
-| `changesets` | `ChangesetError` (+ command errors) | delegates wholly to silk's `DepsRegen` |
-| `commit-and-pr` | `GitHubError` (+ command errors) | one module: the PR must describe a commit that exists |
+| `detect-changes` | git errors | the `git status` call; extracted to get the last I/O primitive out of `program.ts`. This cell read `CommandFailedError` \| `CommandOutputError` until now, and **it never drifted — it was wrong in the commit that wrote it** (`5c92284` created the module with the git channel and the row with the command channel, in one change). Same shape as the test count in @./08-testing.md: an edit made *alongside* the change it describes is the one nobody re-checks |
+| `changesets` | `ChangesetError` (+ git errors) | delegates wholly to silk's `DepsRegen`; the git errors come from `ensureBaseHistory` |
+| `commit-and-pr` | `GitHubError` (+ command and git errors) | one module: the PR must describe a commit that exists |
 
 Two boundaries in that table are deliberate and worth stating, because both look
 like candidates for "simplification":

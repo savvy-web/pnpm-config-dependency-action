@@ -3,6 +3,7 @@ import { GitHubError, PullRequest, Repo, RepoRef } from "@effected/github";
 import { Cause, Effect, Layer, References } from "effect";
 import type { CatalogDelta } from "../../../src/schema/domain.js";
 import { Report } from "../../../src/services/report.js";
+import { actionStateTestLayer, emptyActionState } from "../../utils/action-doubles.js";
 import type { PullRequestTestState } from "../../utils/fixtures.js";
 import { emptyPullRequestState, fakeSha, pnpmUpgradeUpdate, pullRequestTestLayer } from "../../utils/fixtures.js";
 
@@ -13,8 +14,21 @@ const repoLayer = Repo.layer(RepoRef.make({ owner: "test", repo: "repo" }));
 // Test Helpers
 // ══════════════════════════════════════════════════════════════════════════════
 
+/**
+ * `Report.layer` resolves the DCO sign-off in its layer body, so it needs an
+ * `ActionState` to read the persisted token from. The double holds no token, so
+ * `resolveSignoff` takes its documented outer fallback and every assertion below
+ * sees `BotIdentity.githubActions` — byte-identical to what the hand-rolled
+ * `signoffLine()` this replaced produced with no slug, which is why the sign-off
+ * assertions in this file did not have to move.
+ */
 const makeReportLayer = (state: PullRequestTestState) =>
-	Layer.merge(Report.layer.pipe(Layer.provide(pullRequestTestLayer(state))), repoLayer);
+	Layer.merge(
+		Report.layer.pipe(
+			Layer.provide(Layer.merge(pullRequestTestLayer(state), actionStateTestLayer(emptyActionState()))),
+		),
+		repoLayer,
+	);
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Tests
@@ -304,7 +318,10 @@ describe("createOrUpdatePR", () => {
 						}),
 					),
 			});
-			const layer = Layer.merge(Report.layer.pipe(Layer.provide(failingPrLayer)), repoLayer);
+			const layer = Layer.merge(
+				Report.layer.pipe(Layer.provide(Layer.merge(failingPrLayer, actionStateTestLayer(emptyActionState())))),
+				repoLayer,
+			);
 
 			const exit = yield* Effect.exit(
 				Effect.gen(function* () {

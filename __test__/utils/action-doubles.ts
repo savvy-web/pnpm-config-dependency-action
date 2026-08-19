@@ -11,7 +11,7 @@
 
 import type { InstallationToken } from "@effected/github";
 import { AppIdentity, GitHubApp } from "@effected/github";
-import { ActionOutputs, ActionState } from "@effected/github-actions";
+import { ActionOutputs, ActionState, ActionStateError } from "@effected/github-actions";
 import type { Layer } from "effect";
 import { DateTime, Effect, Option, Redacted, Schema } from "effect";
 
@@ -31,6 +31,20 @@ export const emptyActionState = (): ActionStateRecording => ({ entries: new Map(
  * An `ActionState` backed by an in-memory map, encoding through each caller's
  * schema exactly as the real store does — so a round trip proves the schema is
  * usable across the phase boundary rather than asserting on the double.
+ *
+ * **A missing key FAILS typed, it does not die**, because that is what the real
+ * store does: `ActionState.get` is declared `Effect<A, ActionStateError>` and
+ * answers `reason: "missing"` for a key no earlier phase saved — which is the
+ * whole reason `getOptional` exists beside it.
+ *
+ * This double used to `Effect.die` there, on the reading that an unexpected
+ * `get` means a misconfigured test. That reading is wrong in the way that
+ * matters: a defect is uncatchable, so any production code whose *contract* is
+ * to degrade when nothing was persisted — `resolveSignoff` falling back to the
+ * well-known bot is exactly that — reads as broken under this double while
+ * being correct against the real store. A double that is stricter than the
+ * thing it stands in for does not catch bugs, it invents them, and the
+ * temptation is then to weaken the production code to satisfy the fake.
  */
 export const actionStateTestLayer = (recording: ActionStateRecording): Layer.Layer<ActionState> =>
 	ActionState.layerTest({
@@ -43,7 +57,7 @@ export const actionStateTestLayer = (recording: ActionStateRecording): Layer.Lay
 			Effect.gen(function* () {
 				const raw = recording.entries.get(key);
 				if (raw === undefined) {
-					return yield* Effect.die(`ActionState double: no entry for "${key}"`);
+					return yield* Effect.fail(new ActionStateError({ reason: "missing", key }));
 				}
 				return yield* Schema.decodeUnknownEffect(schema)(JSON.parse(raw)).pipe(Effect.orDie);
 			}),

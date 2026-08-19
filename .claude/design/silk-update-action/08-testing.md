@@ -17,7 +17,7 @@ implementation-plans: []
 [Back to index](./_index.md)
 
 **Framework:** Vitest with v8 coverage, forks pool for Effect-TS compatibility.
-Current suite: **589 tests across 41 files, all passing** (verified by
+Current suite: **599 tests across 42 files, all passing** (verified by
 `pnpm vitest run`, not carried forward from this document's previous figure).
 
 **Accounting for the delta from the 581 this document used to state** — and the
@@ -28,7 +28,8 @@ answer is not "it drifted", which is what it looks like:
 | 580 | this file at `5c97829` | — |
 | **581** | this file at `f55fab6` | **never measured — this figure was wrong when it was written** |
 | 588 | the tree at `f55fab6`, and at the 4.6.0 release commit | `pnpm vitest run`, 40 files |
-| 589 | now, with `unit/layers/app.test.ts` | `pnpm vitest run`, 41 files |
+| 589 | with `unit/layers/app.test.ts` added | `pnpm vitest run`, 41 files |
+| 599 | now: +5 `unit/utilities/commit-signoff.test.ts`, +4 in `services/package-manager-upgrade.test.ts`, +1 in `doubles.test.ts` (two sign-off cases in `main.test.ts` were rewritten, not added) | `pnpm vitest run`, 42 files |
 
 **The 581 was never a real count.** `f55fab6` — the kit-wave and
 `@effected/package-json` adoption — added 8 tests and edited this file's figure
@@ -102,9 +103,12 @@ Shared helpers currently in that directory:
 ## Test framework posture
 
 - `@effect/vitest` reads **`catalog:effect`** — the same catalog entry as `effect`
-  itself, currently `4.0.0-beta.107`. The lockstep it must keep is now enforced by
-  the catalog rather than by an exact literal someone has to remember to bump
-  alongside every advance.
+  itself, so the two resolve to the same prerelease by construction. The lockstep it
+  must keep is now enforced by the catalog rather than by an exact literal someone has
+  to remember to bump alongside every advance. **No version literal here on purpose:**
+  this line used to carry "currently `4.0.0-beta.107`" while the tree had moved on to an
+  `rc` — a literal in the very sentence explaining why literals were made unnecessary,
+  which is the trap wearing its own uniform. Re-derive with `pnpm why effect`.
 - Three suites are converted to `it.effect` — `services/report.test.ts`,
   `services/workspace-yaml.test.ts`, `utils/semver.test.ts`. The rest, including
   every real-IO suite, deliberately stay on plain `vitest`: `it.effect` buys
@@ -177,6 +181,21 @@ Shared helpers currently in that directory:
 - **Install dispatch** (`unit/steps/install.test.ts`) — `runInstall` per package
   manager over a `ScriptedSpawner`, asserting the command lines and their order,
   and that the npm path unlinks `package-lock.json` through `node:fs`.
+- **DCO sign-off** (`unit/utilities/commit-signoff.test.ts`) — five tests over
+  `resolveSignoff`, covering **both** fallbacks (a persisted token with no
+  `appSlug`, and no persisted token at all) because they produce the same string
+  for different reasons, and asserting the exact trailer for an App identity with
+  and without an `appUserId`. Ported from `silk-release-action`'s suite of the
+  same name, deliberately: the two actions run the same resolver and a divergence
+  should show up as a diff between the files. Token fixtures are real
+  `InstallationToken.make(...)` values, because `botIdentity()` is a *method* —
+  a structurally-correct literal typechecks through the double and dies at
+  runtime.
+  - Mutation-verified from the consumer side: hard-coding the fallback trailer in
+    `Report.layer` turns `main.test.ts`'s "signs off as the App bot named by the
+    persisted token" red. Worth noting *which* test that is — the sign-off tests
+    that already existed asserted the fallback string, which the mutant also
+    produces, so they never discriminated on identity at all.
 - **Layer requirement channel** (`unit/layers/app.test.ts`) — **the only suite
   here whose assertion is not a runtime assertion.** It declares
   `type UnsatisfiedRequirements = Exclude<AppLayerRequirements, ActionServices>`
@@ -211,7 +230,15 @@ Shared helpers currently in that directory:
   `required` scopes or `provision` fails with `TokenPermissionError`), start-time
   persistence, duration reporting and unconditional revocation.
 - **Doubles self-tests** (`unit/doubles.test.ts`) — see the reserved-directory note
-  above.
+  above. It also pins that the `ActionState` double **fails typed** on a missing
+  key rather than dying, which is what the real store does. The double used to
+  die there, and the cost was not hypothetical: code whose contract is to degrade
+  when nothing was persisted (`resolveSignoff`) read as broken under the double
+  while being correct against the real store. A double stricter than the thing it
+  stands in for does not catch bugs, it invents them — and the standing
+  temptation is to weaken the production code until the fake is satisfied. The
+  assertion uses `Effect.flip`, so a defect would still reject and the test
+  discriminates between "failed typed" and "died".
 - **Schemas and errors** (`unit/schema/domain.test.ts`, `unit/errors/errors.test.ts`).
 - **Dependency services** (`unit/services/config-deps.test.ts`,
   `regular-deps.test.ts`, `catalog-config-deps.test.ts`, `module-catalogs.test.ts`,
@@ -226,6 +253,18 @@ Shared helpers currently in that directory:
   write-back, `auto` no-op on static pins, per-runtime resolver-failure
   resilience). `config-deps` and `regular-deps` default their fixtures to
   `ReleaseAge.layerNoop` and each pin one hold-back case through a fake `ReleaseAge`.
+  - `package-manager-upgrade.test.ts` carries a labelled block for the
+    `@effected/npm` adoption (#290), and it is a worked example of **which** of a
+    batch of new tests actually discriminate. Two assert behaviour that *changed*
+    and go red against the restored helpers — a malformed registry integrity must
+    produce a bare version rather than `pnpm@11.13.0+sha512.deadbeef`, and
+    `pnpm@11.12.0garbage` must report `no-reference` rather than
+    `unsatisfiable`. The other two are **controls**: a sha256 integrity and a
+    `devEngines` caret range pass against both implementations, and are named as
+    controls in the file so a later reader does not mistake four passing tests for
+    four pieces of evidence. Note the input choice in the second: a *partial*
+    version like `pnpm@11.12` would have passed against both and proved nothing,
+    since the old regex rejected partials too — it only accepted trailing garbage.
 - **Release-age gate** (`unit/services/release-age.test.ts`) — inline
   `pnpm-workspace.yaml` discovery, the subprocess hook replay (argv passing,
   `pnpmfile.mjs`/`.cjs` order, best-effort degradation with a warning), publish-time

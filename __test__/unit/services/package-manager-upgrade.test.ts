@@ -9,7 +9,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { PackageManagerUpgrade } from "../../../src/services/package-manager-upgrade.js";
 import { seededRegistry } from "../../utils/fixtures.js";
 
-// A real sha512 integrity so corepackHashFromIntegrity produces a hash.
+// A canonical sha512 SRI hash — 88 base64 characters, so a 64-byte digest — which
+// is what `CorepackIntegrityHash.fromSri` requires to convert. The malformed and
+// wrong-length cases are exercised deliberately at the bottom of this file.
 const FAKE_INTEGRITY =
 	"sha512-Iv0lXkpG6NXcNu/khNeaNfpcI8KMnyOnmiB+BbwCw1t0csCZPzLf7EJ4zCuvD/yg1oyHquMXzBQHAzyGq+CnZw==";
 
@@ -480,6 +482,103 @@ describe("PackageManagerUpgrade", () => {
 		expect(result._tag).toBe("Failure");
 		if (result._tag === "Failure") {
 			expect(result.failure._tag).toBe("FileSystemError");
+		}
+	});
+
+	// ══════════════════════════════════════════════════════════════════════════
+	// The @effected/npm adoption (issue #290)
+	// ══════════════════════════════════════════════════════════════════════════
+
+	// These three pin the behaviour that CHANGED when the local
+	// `corepackHashFromIntegrity` and `parsePmVersion` were replaced by
+	// `CorepackIntegrityHash.fromSri` and `PackageManagerPin`. All three would
+	// have passed against the old helpers by writing something wrong rather than
+	// by failing, which is why they assert on the file's contents.
+
+	it("writes bare version rather than a bogus pin when the registry integrity is malformed", async () => {
+		writePkg({ name: "root", packageManager: "pnpm@11.12.0" });
+
+		// Valid base64, valid `sha512-` prefix, but a 4-byte digest. The deleted
+		// local converter base64-decoded whatever followed the prefix and emitted
+		// the hex, so this produced `pnpm@11.13.0+sha512.deadbeef` — a pin that
+		// looks well-formed, passes every assertion this suite used to make, and
+		// is rejected by corepack at install time in the CONSUMER's repository,
+		// after this action has already reported success.
+		const shortDigestRegistry = seededRegistry({
+			pnpm: { version: "11.13.0", versions: ["11.12.0", "11.13.0"], integrity: "sha512-3q2+7w==" },
+		});
+
+		const result = await runWith((s) => s.upgrade("true", "pnpm", root), shortDigestRegistry);
+		const pkg = readPkg();
+
+		expect(result.applied).toBe(true);
+		expect(pkg.packageManager).toBe("pnpm@11.13.0");
+		expect(pkg.packageManager).not.toContain("+");
+	});
+
+	it("writes bare version when the registry reports a non-sha512 integrity", async () => {
+		writePkg({ name: "root", packageManager: "pnpm@11.12.0" });
+
+		// corepack pins accept nothing weaker than sha512, so converting a sha256
+		// SRI hash would mint a pin corepack refuses. Both the old helper and the
+		// kit decline this one — it is here as the CONTROL for the case above,
+		// which is the one that used to convert.
+		const sha256Registry = seededRegistry({
+			pnpm: {
+				version: "11.13.0",
+				versions: ["11.12.0", "11.13.0"],
+				integrity: "sha256-Iv0lXkpG6NXcNu/khNeaNfpcI8KMnyOnmiB+BbwCw1s=",
+			},
+		});
+
+		const result = await runWith((s) => s.upgrade("true", "pnpm", root), sha256Registry);
+
+		expect(result.applied).toBe(true);
+		expect(readPkg().packageManager).toBe("pnpm@11.13.0");
+	});
+
+	it("ignores a packageManager pin whose version is not exact semver", async () => {
+		// The deleted parser tested `/^\d+\.\d+\.\d+/` against the tail, so it
+		// matched the PREFIX and handed back the whole trailing string as the
+		// reference — anchoring the synthesized `^<reference>` range on a version
+		// that does not exist, and reporting the result as `unsatisfiable` (i.e.
+		// "no pnpm release satisfies the range"), which is the diagnosis for a
+		// range typed for the wrong package manager. The pin grammar rejects the
+		// value outright, so `auto` correctly reports having nothing to anchor on.
+		//
+		// The input is deliberately `11.12.0garbage` and not a partial like
+		// `11.12`: the old parser rejected partials too, so a partial would pass
+		// against both implementations and prove nothing.
+		writePkg({ name: "root", packageManager: "pnpm@11.12.0garbage" });
+
+		const result = await run((s) => s.upgrade("auto", "pnpm", root));
+
+		expect(result.applied).toBe(false);
+		if (!result.applied) {
+			expect(result.kind).toBe("no-reference");
+		}
+		expect(readPkg().packageManager).toBe("pnpm@11.12.0garbage");
+	});
+
+	it("still reads a RANGE in devEngines.packageManager.version, which the pin grammar alone rejects", async () => {
+		// devEngines is specified to accept a range and repos write one; a corepack
+		// pin is exact by definition and `PackageManagerPin` says so. Handing the
+		// raw value to the pin grammar would report "no reference" and silently
+		// stop upgrading a manager the repo plainly declares, so the leading
+		// operator is stripped before parsing. This is the one place the two
+		// fields' grammars genuinely differ.
+		writePkg({
+			name: "root",
+			devEngines: { packageManager: { name: "pnpm", version: "^11.12.0", onFail: "ignore" } },
+		});
+
+		const result = await run((s) => s.upgrade("auto", "pnpm", root));
+
+		expect(result.applied).toBe(true);
+		if (result.applied) {
+			expect(result.referenceSource).toBe("devEngines");
+			expect(result.from).toBe("11.12.0");
+			expect(result.to).toBe("11.13.0");
 		}
 	});
 });

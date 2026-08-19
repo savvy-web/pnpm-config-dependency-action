@@ -163,7 +163,7 @@ production because vitest runs the source.
   `ChildProcessSpawner`
 - `RegularDeps.layer` — `NpmRegistry`, `WorkspaceDiscovery`, `ReleaseAge`
 - `Changesets.layer` — `Changesets.DepsRegen`
-- `Report.layer` — `PullRequest`
+- `Report.layer` — `PullRequest`, **`ActionState`**. The second is newer and is the interesting entry in this list: `Report` resolves the DCO sign-off once in its layer body (`resolveSignoff()`, over the token `pre` persisted), so `ActionState` rises into the layer's requirement channel. It is **not** provided in `makeAppLayer` — it is an `ActionServices` member, so it is left in the channel for `Action.run`'s runtime to satisfy at the boundary, exactly like `ChildProcessSpawner` under `BranchManager`. That is the intended shape, and `__test__/unit/layers/app.test.ts` is what distinguishes it from the *unintended* shape (a leftover requirement nothing supplies), which is not otherwise a type error
 - `Lockfile.layer` — no requirements
 
 `PreLive` / `PostLive` in the entry points are **not** part of this: they are

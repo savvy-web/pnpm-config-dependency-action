@@ -21,6 +21,8 @@ The action authenticates as a GitHub App rather than with a personal access toke
 - **Verified commits**: commits made through the GitHub API with an App token are signed and show the "Verified" badge
 - **No user dependency**: the App is not tied to any individual user account, and the commits are attributed to the App in the audit trail
 
+The DCO `Signed-off-by` trailer on those commits names the same bot identity (`<your-app>[bot]`), so the author and the sign-off agree. Repositories that enforce a DCO check comparing the two will see the trailer change from `github-actions[bot]` to the App's own bot on the first run after upgrading.
+
 ## Step 1: Create the App
 
 1. Go to **Settings > Developer settings > GitHub Apps**

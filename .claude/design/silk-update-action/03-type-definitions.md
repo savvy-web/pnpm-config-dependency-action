@@ -140,9 +140,8 @@ gate forced this and was right — `Schema.Number` renders as an `anyOf` modelli
 ### The generated JSON Schema
 
 `lib/scripts/generate-schema.ts` serializes `RunResultDocument` to
-`docs/schema/run-result.schema.json` via `@effected/schemastore` (a devDependency
-at `^0.3.0`), using its
-`SchemaPipeline.run` (structural lint + ajv strict gate + content-compare write).
+`docs/schema/run-result.schema.json` via `@effected/schemastore` (a devDependency),
+using its `SchemaPipeline.run` (structural lint + ajv strict gate + content-compare write).
 It lives in `lib/scripts/` rather than `scripts/` because that path is
 cache-invalidating for turbo. Run with `pnpm generate-schema`.
 
@@ -324,7 +323,7 @@ the entry and the path together; two walkers would drift.
 
 **`src/utils/pnpm.ts` no longer contributes a type here.** It exported
 `ParsedPnpmVersion` alongside `parsePnpmVersion` / `formatPnpmVersion`; all three
-are **deleted**. `PackageManagerUpgrade` parses with a module-private
+are **deleted**. `PackageManagerUpgrade` parsed with a module-private
 `ParsedPmVersion` of the same shape, generalized over all three package managers,
 which superseded the pnpm-only original during the multi-package-manager work —
 the exports simply outlived their last caller.
@@ -340,10 +339,21 @@ that these two had no callers *and* that the justification for keeping them
 (the kit rejecting a caret `packageManager` pin) had independently expired. The
 source deletion followed from the doc work rather than the other way round.
 
-`utils/pnpm.ts` now exports only `detectIndent` and `corepackHashFromIntegrity`,
-neither of which carries a type. The module retains a comment block where the
-deleted exports were, so the reasoning is discoverable from the source and not
-only from here.
+`utils/pnpm.ts` now exports only `detectIndent`, which carries no type. The
+module retains a comment block where each deleted export was, so the reasoning
+is discoverable from the source and not only from here.
+
+**`ParsedPmVersion` is gone too, and it is worth reading as a coda to the
+paragraph above rather than as a second instance of it.** It had a caller and
+was doing work — but `hasCaret` and `hasSha`, two of its three fields, had **no
+reader anywhere**: `PackageManagerUpgrade` consumed `.version` and null-ness and
+nothing else. So the interface was two-thirds dead while the export around it
+looked live, which is the variant a grep for unused *exports* does not find. The
+whole shape collapsed to `string | null` when the parse moved onto
+`@effected/npm`'s `PackageManagerPin` (issue #290); the pin's own
+`InvalidPackageManagerPinError` carries a `reason` discriminant (`format` /
+`name` / `version` / `integrity`) that the local parser could not, and this
+repo's caller still reads it as "reference or not".
 
 ## Effect Error Types (src/errors/errors.ts)
 

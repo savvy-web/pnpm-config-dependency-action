@@ -41,13 +41,12 @@
 
 import { readFileSync } from "node:fs";
 import type { NpmRegistryShape } from "@effected/npm";
-import { NpmRegistry } from "@effected/npm";
+import { CorepackIntegrityHash, NpmRegistry, PackageManagerPin } from "@effected/npm";
 import type { PackageJsonFileShape } from "@effected/package-json";
 import { PackageJsonFile } from "@effected/package-json";
-import { Context, Effect, Layer, Option } from "effect";
+import { Context, Effect, Layer, Option, Result } from "effect";
 
 import { FileSystemError } from "../errors/errors.js";
-import { corepackHashFromIntegrity } from "../utils/pnpm.js";
 import { resolveLatestSatisfying } from "../utils/semver.js";
 import type { SupportedPm } from "./package-manager.js";
 
@@ -116,19 +115,6 @@ export interface PackageManagerUpgradeSkipped {
 
 export type PackageManagerUpgradeOutcome = PackageManagerUpgradeApplied | PackageManagerUpgradeSkipped;
 
-/**
- * Parsed package-manager version info.
- *
- * Generalized over all three managers. It superseded a pnpm-only
- * `ParsedPnpmVersion` in `utils/pnpm.ts`, which was left exported with no
- * callers until it was deleted.
- */
-interface ParsedPmVersion {
-	readonly version: string;
-	readonly hasCaret: boolean;
-	readonly hasSha: boolean;
-}
-
 // ══════════════════════════════════════════════════════════════════════════════
 // Service Interface
 // ══════════════════════════════════════════════════════════════════════════════
@@ -182,38 +168,49 @@ const skip = (
 ): PackageManagerUpgradeSkipped => ({ applied: false, pm, reference, referenceSource, targetRange, kind, reason });
 
 /**
- * Parse a package-manager version string from `packageManager`
- * (`stripPrefix: true`, expects `` `${pm}@version` ``) or from
- * `devEngines.packageManager.version` (`stripPrefix: false`, a bare
- * version). Parameterized by `pm` so a field naming a *different* package
- * manager (e.g. `packageManager: "npm@10.0.0"` while upgrading bun) is not
- * misparsed as a reference — it simply fails the prefix check and returns
- * null, same as an absent field.
+ * The exact version a package-manager reference names, or `null` when the
+ * field is absent, unparseable, or names a *different* manager than the one
+ * being upgraded (e.g. `packageManager: "npm@10.0.0"` while upgrading bun) —
+ * all of which mean the same thing here: no reference for this run.
+ *
+ * `bare` is how the two fields differ. `packageManager` carries the whole
+ * corepack pin (`` `${pm}@<version>[+<integrity>]` ``); `devEngines.packageManager.version`
+ * carries only the version tail, so the manager name is prepended to give the
+ * one grammar the whole pin it parses.
+ *
+ * **The grammar is `@effected/npm`'s `PackageManagerPin`, not a local regex.**
+ * The predecessor tested `/^\d+\.\d+\.\d+/` against the tail — a *prefix* match
+ * — and returned the whole trailing string, so `pnpm@11.12.0garbage` became a
+ * reference and the synthesized `^11.12.0garbage` range then reported
+ * `unsatisfiable`, which is this service's diagnosis for a range typed for a
+ * *different* package manager. A malformed integrity tail was likewise split off
+ * and discarded in silence. It also returned `hasCaret` and `hasSha` alongside
+ * the version, neither of which had a reader anywhere: the same
+ * declared-never-consumed shape that deleted four error classes and the pnpm
+ * version helpers.
+ *
+ * **A leading range operator is still stripped, deliberately, and only for
+ * `devEngines`.** A range is illegal in a corepack pin — the pin grammar
+ * rejects it, and so does corepack — but `devEngines.packageManager.version` is
+ * specified to accept one, and repos write `^11.0.0` there. Handing that
+ * straight to the pin grammar would report "no reference" and silently stop
+ * upgrading a manager the repo plainly declares. The operator is dropped rather
+ * than resolved because the reference is only ever used as the anchor a target
+ * range is synthesized from.
  */
-const parsePmVersion = (raw: string, pm: SupportedPm, stripPrefix = false): ParsedPmVersion | null => {
-	if (!raw) return null;
+const referenceVersion = (raw: string, pm: SupportedPm, bare = false): string | null => {
+	const trimmed = raw.trim();
+	if (trimmed === "") return null;
 
-	let value = raw.trim();
+	const spec = bare ? `${pm}@${trimmed.replace(/^[\^~]/, "")}` : trimmed;
+	const parsed = PackageManagerPin.parseResult(spec);
+	if (Result.isFailure(parsed)) return null;
+	// A pin naming another manager is not this run's reference. The pin grammar
+	// admits all four kit-supported names, so the check is here rather than
+	// implied by parsing.
+	if (parsed.success.name !== pm) return null;
 
-	if (stripPrefix) {
-		const prefix = `${pm}@`;
-		if (!value.startsWith(prefix)) return null;
-		value = value.slice(prefix.length);
-	}
-
-	const hasSha = value.includes("+");
-	if (hasSha) {
-		value = value.split("+")[0];
-	}
-
-	const hasCaret = value.startsWith("^");
-	if (hasCaret) {
-		value = value.slice(1);
-	}
-
-	if (!/^\d+\.\d+\.\d+/.test(value)) return null;
-
-	return { version: value, hasCaret, hasSha };
+	return parsed.success.version.toString();
 };
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -266,17 +263,21 @@ const upgradePackageManagerImpl = (
 		// Detect package-manager version fields, ignoring any that name a
 		// different package manager than `pm`.
 		const packageManagerRaw = typeof packageJson.packageManager === "string" ? packageJson.packageManager : null;
-		const pmParsed = packageManagerRaw ? parsePmVersion(packageManagerRaw, pm, true) : null;
+		const pmVersion = packageManagerRaw ? referenceVersion(packageManagerRaw, pm) : null;
 
 		const devEngines = packageJson.devEngines as { packageManager?: { name?: string; version?: string } } | undefined;
 		const devEnginesPm = devEngines?.packageManager;
 		const devEnginesVersionRaw =
 			devEnginesPm?.name === pm && typeof devEnginesPm.version === "string" ? devEnginesPm.version : null;
-		const deParsed = devEnginesVersionRaw ? parsePmVersion(devEnginesVersionRaw, pm) : null;
+		const deVersion = devEnginesVersionRaw ? referenceVersion(devEnginesVersionRaw, pm, true) : null;
 
 		// Reference version favors devEngines, then packageManager.
-		const reference = deParsed?.version ?? pmParsed?.version ?? null;
-		const referenceSource: PackageManagerReferenceSource = deParsed ? "devEngines" : pmParsed ? "packageManager" : null;
+		const reference = deVersion ?? pmVersion ?? null;
+		const referenceSource: PackageManagerReferenceSource = deVersion
+			? "devEngines"
+			: pmVersion
+				? "packageManager"
+				: null;
 		const isAuto = mode === "true" || mode === "auto";
 
 		let targetRange: string;
@@ -333,7 +334,17 @@ const upgradePackageManagerImpl = (
 				Effect.map((info) => (Option.isSome(info) ? (info.value.integrity ?? "") : "")),
 				Effect.catch(() => Effect.succeed("")),
 			);
-			hash = corepackHashFromIntegrity(integrity);
+			// `CorepackIntegrityHash.fromSri`, not a local converter. The SRI →
+			// corepack conversion this module used to hand-roll is the kit's now
+			// (issue #290; effected#281 cites this repo as the consumer evidence),
+			// and the kit is STRICTER in the direction that matters: the local
+			// version base64-decoded whatever followed `sha512-` and emitted the
+			// hex, so non-canonical base64 or a wrong-length digest became a pin
+			// that looked well-formed and that corepack rejects at install time, in
+			// the consumer's repository, after this action has reported success.
+			// Those now fail typed here and degrade to the bare-version write that
+			// an absent integrity already took.
+			hash = yield* CorepackIntegrityHash.fromSri(integrity).pipe(Effect.catch(() => Effect.succeed(null)));
 			if (hash === null) {
 				yield* Effect.logWarning(`Could not derive integrity hash for ${pm}@${resolved}; writing version without hash`);
 			}
@@ -345,8 +356,8 @@ const upgradePackageManagerImpl = (
 		// Write fields directly. Write packageManager when one exists for `pm`, or
 		// (range mode only — auto returns early on a null reference) when NO
 		// field for `pm` exists at all, creating it.
-		const hasPackageManager = pmParsed !== null;
-		const hasDevEngines = deParsed !== null;
+		const hasPackageManager = pmVersion !== null;
+		const hasDevEngines = deVersion !== null;
 		const shouldWritePackageManager = hasPackageManager || (!hasPackageManager && !hasDevEngines);
 
 		// Collected as surgical field edits rather than applied to the parsed tree:
