@@ -12,7 +12,7 @@ A GitHub Action that updates pnpm config dependencies, workspace dependencies an
 - Updates workspace dependencies (across `dependencies`, `devDependencies`, and `optionalDependencies`) within the semver ranges declared in `package.json`, with glob pattern support
 - Honors pnpm's [`minimumReleaseAge`](https://pnpm.io/settings#minimumreleaseage) gate at resolution time, holding back versions published inside the age window instead of proposing an update the install step would reject
 - Syncs peer dependency ranges with configurable lock/minor strategies
-- Creates verified, signed commits through GitHub App authentication
+- Creates verified, signed commits through GitHub App authentication, signed off as the App's own bot identity
 - Integrates with Changesets for automated versioning of affected packages
 - Runs custom post-update commands (linting, testing, building)
 - Produces detailed per-package PR summaries with dependency change tables

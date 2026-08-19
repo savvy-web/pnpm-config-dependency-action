@@ -124,15 +124,13 @@ rather than silently performing a package-manager-only run.
   which came in transitively through the deleted `github-action-effects` and no
   longer appears in the lockfile at all. Harmless, but the comment there still
   describes the old provenance.
-- **Duplicate resolutions: closed.** `@effected/workspaces`, `@effected/npm` and
-  `@effected/commands` each resolve exactly one copy, and `effect` resolves one
-  copy at `4.0.0-beta.107` tree-wide. The duplicate that mattered — a second
+- **Duplicate resolutions: recurring, not closed.** Every `@effected/*` package this action depends on resolves exactly one copy today, as does `effect` — but read that as a measurement with a date on it, not a settled state. **This bullet said "closed" for a release and was wrong within one dependency bump:** moving `@effected/npm` pulled a second `@effected/github` in behind it (detail in @./01-dependencies.md). No version literal here any more, for the reason the companion section gives — the numbers were refreshed once while the claim they supported was not re-checked. The duplicate that mattered — a second
   `@effected/workspaces` reaching `dist/main.js` through `@savvy-web/silk-effects`
   — closed when silk-effects moved onto the same wave. Re-verify with
   `pnpm why <pkg>`, never a lockfile grep: the grep reports which versions exist,
   only `pnpm why` reports who pulls each one.
 - **`@effected/package-json` is adopted for `PackageJsonFile.modify` only** —
-  `^0.9.0`, a declared runtime dependency, wired as `PackageJsonFile.layer` in
+  a declared runtime dependency, wired as `PackageJsonFile.layer` in
   `makeAppLayer` and consumed by both `RuntimeUpgrade` and
   `PackageManagerUpgrade`, landing in `f55fab6` (the commit immediately before
   the 4.6.0 release).
@@ -153,7 +151,7 @@ rather than silently performing a package-manager-only run.
 
   | helper | status now |
   | --- | --- |
-  | `corepackHashFromIntegrity` | **stays, still the only reason given that holds.** One call site (`package-manager-upgrade.ts:330`); the kit still ships no SRI (`sha512-<base64>`) → corepack (`sha512.<hex>`) converter — upstream #281 |
+  | `corepackHashFromIntegrity` | **DELETED — the row below it is now the only "stays".** It stayed on one condition, stated in this table: *"the kit still ships no SRI → corepack converter — upstream #281."* The kit shipped it (`@effected/npm@0.11.0`, `CorepackIntegrityHash.fromSri`, tracked here as #290), citing this very call site as its consumer evidence, and the helper went. See the note below on why this row aged well while the one under it did not |
   | `detectIndent` | **stays, but not for the recorded reason.** Its three call sites are `peer-sync`, `regular-deps` and `catalog-config-deps`, none of which went through `PackageJsonFile`. The two services the decline was *about* no longer call it at all: `modify` preserves indentation exactly, where `detectIndent` could only guess right |
   | `findRuntimeEntry` | **replaced** by `locateRuntimeEntry`, which returns the entry **and the JSONC path to its `version`**. The decline's stated virtue — returning the live object so `.version =` rewrites in place — is now the thing being avoided: nothing is mutated, the path is handed to `modify` |
   | `parsePnpmVersion` / `formatPnpmVersion` | **DELETED**, along with the `ParsedPnpmVersion` interface. Zero callers, and the recorded reason for keeping them had independently expired. See below |
@@ -170,14 +168,38 @@ rather than silently performing a package-manager-only run.
   - The helpers had **no callers at all**. `package-manager-upgrade.ts` parses
     with a module-private `ParsedPmVersion` / `parsePmVersion` generalized over
     all three managers — which superseded the pnpm-only pair during the
-    multi-package-manager work without removing them.
+    multi-package-manager work without removing them. (That private parser has
+    since been retired too, onto `@effected/npm`'s `PackageManagerPin`; two of
+    its three fields turned out to have no reader either. See
+    @./03-type-definitions.md.)
 
   So this was the "exported, never constructed" shape that got four error classes
   deleted (@./03-type-definitions.md) — a dead export kept alive by a
   justification that had itself stopped being true. `src/utils/pnpm.ts` now
-  exports only `detectIndent` and `corepackHashFromIntegrity`, and keeps a
-  comment block where the deleted exports were so the reasoning is discoverable
-  from the source rather than only from here.
+  exports only `detectIndent`, and keeps a comment block where each deleted
+  export was so the reasoning is discoverable from the source rather than only
+  from here.
+
+  **A row that named its own expiry condition, and what happened when the
+  condition was met.** The `corepackHashFromIntegrity` row above is the one
+  entry in this table that aged *well*, and the contrast with the pair below it
+  is the reusable part. Both rows were justified by a claim about upstream. The
+  pair's claim ("the kit rejects the caret pin") was **already false when
+  written** and nothing in the row said how to tell. The converter's claim ("the
+  kit ships no SRI → corepack converter — upstream #281") was true, *named the
+  issue that would falsify it*, and was falsified on schedule by
+  `@effected/npm@0.11.0` — at which point the row was actionable rather than
+  merely wrong, and the deletion followed in an hour.
+
+  The difference is not diligence, it is **whether the justification points at
+  something checkable**. "The kit still ships no X — upstream #N" can be
+  resolved with one `npm view`; "the kit rejects Y" is a claim about a behaviour
+  nobody re-runs. Prefer the first form. And note what it does *not* buy, which
+  is the same limit recorded for the `@effected/package-json` decline: naming a
+  falsification condition creates **no obligation for anyone to notice it was
+  met**. #290 was filed explicitly as "tracking, no action required yet" and sat
+  until this repo touched the area — which is the intended lifecycle, not a
+  failure, provided the row is read when the area is next opened.
 
   **The loop is worth recording, because it ran in the unusual direction.** The
   doc pass found the orphan; the doc pass established that the justification was
@@ -248,6 +270,8 @@ rather than silently performing a package-manager-only run.
     comparison, so a wrong separator would still compare equal to itself.
 
 ## The `effect@4.0.0-beta.107` advance
+
+**This section is history, not current state — the heading names the advance it describes, and the catalog has since moved past it, into `4.0.0-rc`.** Kept at its own version rather than retitled, because everything below is a claim *about that specific advance*; renumbering the heading would silently restate all of it as current, which is precisely the failure this document catalogues elsewhere. The `beta.107` literals further down are load-bearing history and stay. `beta.107` claims about **now** were removed — from the loose-ends bullet above, from @./01-dependencies.md, from @./08-testing.md and from the two root context files. Re-derive the current pin from the tree, never from this heading.
 
 Moved with the `@effected` kit's coordinated wave (upstream
 spencerbeggs/effected#322): `catalog:effect` to `beta.107` via
@@ -491,6 +515,114 @@ survive a content-based API commit regardless, but not nothing.
 **What would change the remaining answer:** refspec support on `fetch`,
 `-B`/force on `checkout`, `reset`, `--unshallow`, `branch -f`, and the boolean
 `rev-parse` queries. A per-command config override is **no longer on that list**.
+
+### `@effected/npm`'s pin vocabulary — adopted for the hash AND the parse (#290)
+
+Two helpers retired onto `@effected/npm@0.11.0` in one pass, because they are
+two halves of the same grammar and splitting the swap would have left the module
+parsing a pin with a regex while formatting one with the kit.
+
+- **`CorepackIntegrityHash.fromSri`** replaced `utils/pnpm.ts`'
+  `corepackHashFromIntegrity` — a swap this repo's copy motivated upstream
+  (effected#281 cites it as consumer evidence). **Not a like-for-like port, and
+  the difference is the reason to want it:** the local version base64-decoded
+  whatever followed `sha512-` and emitted the hex, so non-canonical base64 and a
+  wrong-length digest both minted a pin that looks well-formed and that corepack
+  rejects **at install time, in the consumer's repository, after this action
+  reported success**. Both fail typed now and take the bare-version path an
+  absent integrity already took.
+- **`PackageManagerPin.parseResult`** replaced the module-private
+  `parsePmVersion`. Its version check was `/^\d+\.\d+\.\d+/` against the tail —
+  a *prefix* match — so `pnpm@11.12.0garbage` parsed as a reference and the
+  synthesized `^11.12.0garbage` range then reported **`unsatisfiable`**, this
+  service's diagnosis for "the range names a different package manager". A
+  malformed pin now reports `no-reference`, which is what happened.
+
+**What was NOT adopted, and why the line is there.** The **write** still
+interpolates `` `${pm}@${resolved}${suffix}` `` rather than constructing a
+`PackageManagerPin` and calling `.toString()`. `resolved` comes from
+`resolveLatestSatisfying` over the registry's own version list and the integrity
+is now a validated `CorepackIntegrityHash`, so both components are already
+checked; round-tripping through a `SemVer` decode to re-derive a string this
+module can concatenate correctly would buy nothing. *What would change the
+answer:* a second write format, or a caller that needs to compare pins rather
+than emit one.
+
+**One local concession, deliberately kept:** a leading `^`/`~` is stripped from
+`devEngines.packageManager.version` before parsing. `PackageManagerPin` rejects
+a range, correctly — a corepack pin is exact by definition — but
+`devEngines.packageManager.version` is *specified* to accept one and repos write
+`^11.0.0` there. Adopting the pin grammar unconditionally would have reported
+"no reference" and silently stopped upgrading a manager the repo plainly
+declares, which is precisely the class of quiet wrong answer this record keeps
+cataloguing. Pinned by a test.
+
+**Mutation-verified**, since two of the four new tests assert on behaviour that
+*changed* rather than behaviour that is merely present: restoring each old
+helper turns exactly those two red, with
+`expected 'pnpm@11.13.0+sha512.deadbeef' to be 'pnpm@11.13.0'` and
+`expected 'unsatisfiable' to be 'no-reference'`. The other two (a sha256
+integrity, a `devEngines` caret) pass against both implementations and are
+labelled in the suite as the controls they are.
+
+### The DCO sign-off comes from the token, not a literal
+
+`Report` used a local `signoffLine(appSlug?)`. **The slug branch had no
+production caller** — `steps/commit-and-pr.ts` calls `generateCommitMessage`
+with updates only — so it was reachable from the test suite and nowhere else,
+and every real run signed as `github-actions[bot]` while the commit it signed
+was authored by the installation's own App bot. Nothing failed: the trailer is
+well-formed, DCO checks pass, and the only symptom is a commit whose author and
+sign-off name two different identities, in a consumer's repository, on a run
+already reported as successful.
+
+It is now `utils/commit-signoff.ts`' `resolveSignoff()` over
+`GitHubToken.botIdentity()` + `BotIdentity.signoff`, resolved **once in
+`Report.layer`'s body** and closed over by both renderings — the same module,
+name and shape as `silk-release-action`'s, deliberately, since both actions
+commit through the Git Data API and therefore both have to supply a trailer no
+porcelain adds.
+
+**The interesting part is what it cost in the test doubles.**
+`__test__/utils/action-doubles.ts` answered a missing `ActionState` key with
+`Effect.die`, while the real `ActionState.get` fails **typed** with
+`reason: "missing"` — which is why `getOptional` exists beside it. A defect is
+uncatchable, so `resolveSignoff` — whose declared error channel is `never`
+*because* it catches that failure — read as broken under the double while being
+correct against the real store. **A double stricter than the thing it stands in
+for does not catch bugs, it invents them**, and the standing temptation is then
+to weaken the production code until the fake is satisfied. The double now models
+the contract, pinned by `__test__/unit/doubles.test.ts` with an `Effect.flip`
+assertion (a defect would still reject, so the assertion discriminates between
+"failed typed" and "died").
+
+*What would change the answer:* a need to sign as a different identity than the
+committer — at which point the policy, not the rendering, is what moves.
+
+### `@effected/github-references` — no call site here, and that is the finding
+
+Considered as part of the same wave and **not adopted, because there is nothing
+to adopt it for.** The package is a *reference-parsing* grammar — harvest
+`Closes #N` from prose, read a bare-line or comma-separated closing list — and
+this action neither reads nor writes issue references: `ManagedPrBody.build` is
+called with `linkedIssues: []`, and a dependency-update run closes nothing.
+`git grep` for the shape returns one unrelated hit (the word "closes" in a doc
+comment).
+
+It arrives **transitively** twice over, which is the right amount of adoption
+here: `@savvy-web/silk-effects@6.0.0` backs `PrBody.ClosingReferences.parseBare`
+with it, and `@effected/github@0.7.0` moved the grammar into it and re-exports
+the six original names for compatibility. That re-export is documented upstream
+as droppable at a later bump — so **if a call site ever appears, import
+`@effected/github-references` directly**, not through `@effected/github`, whose
+version of the surface deliberately omits the newer closing-list dialect.
+
+*What would change the answer:* this action learning to close an issue — an
+`upgrade-package-manager` run that resolves a tracked dependency ticket is the
+plausible one — at which point `collectReferenceLists` is the entry point, and
+`silk-release-action`'s `link-issues-from-commits.ts` is the worked example
+(including why `collectReferenceLists` beats `harvestIssueReferences`: the
+latter reads `Closes #247, #248 and #251` as **only** #247).
 
 ### `format.ts` and `services/report.ts` stay separate
 

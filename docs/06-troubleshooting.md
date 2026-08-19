@@ -95,6 +95,17 @@ This also catches workflows written against an earlier version, where `upgrade-p
 - Wait for the version to mature — a later run picks it up automatically
 - Add the package to `minimumReleaseAgeExclude` if it should bypass the gate
 
+### The package manager is not upgraded
+
+**Cause**: `upgrade-package-manager` is set to `true` or `auto`, but neither `packageManager` nor `devEngines.packageManager` holds a value the action can read as a package-manager pin. The log line is `upgrade-package-manager: true/auto requested but no <pm> reference found`. A field naming a different manager than the one detected for the workspace is ignored on purpose, and so is a malformed value — a truncated version or a trailing typo is treated as no reference rather than as a version.
+
+**Solutions**:
+
+- Check that the field names the manager the run detected; the "Run context" block at the top of the log states which one that is
+- Fix a malformed `packageManager` pin so it reads `<manager>@<version>` with an optional `+sha512.<hex>` tail
+- A range in `devEngines.packageManager.version` such as `^11.0.0` is fine and anchors the upgrade; a range in `packageManager` is not, because corepack rejects one there
+- Pass an explicit semver range instead of `auto` to upgrade a workspace that declares no reference at all
+
 ### Changes exist but action reports none
 
 **Cause**: The lockfile comparison may not detect certain types of changes.

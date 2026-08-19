@@ -34,13 +34,15 @@ silk-update-action/
 │   ├── pre.ts                  # Pre phase — provision GitHub App token
 │   ├── main.ts                 # Main phase — thin Action.run(program) wrapper
 │   ├── post.ts                 # Post phase — report duration, revoke token
-│   ├── program.ts              # Effect program + runCommands/runInstall helpers
+│   ├── program.ts              # Main-phase composition — reads inputs, runs the steps
+│   ├── format.ts               # Rendering surface for the run's log output
 │   ├── state.ts                # Cross-phase state (StartTimeState, STATE_KEYS)
-│   ├── errors/                 # Schema.TaggedErrorClass definitions
-│   ├── schemas/                # Effect Schema domain definitions
+│   ├── errors/                 # Schema.TaggedError definitions
+│   ├── schema/                 # Effect Schema domain, input and output definitions
+│   ├── steps/                  # One module per orchestration unit
 │   ├── layers/                 # Layer composition (makeAppLayer)
 │   ├── services/               # Domain services (Context.Service + Layer)
-│   └── utils/                  # Pure helpers (deps, input, markdown, pnpm, runtime, semver)
+│   └── utils/                  # Pure helpers (deps, markdown, pnpm, runtime, semver)
 ├── dist/                       # Built action output (bundled)
 ├── action.yml                  # GitHub Action metadata
 └── docs/                       # User documentation
@@ -57,7 +59,7 @@ silk-update-action/
 | `pnpm run test:coverage` | Run tests with coverage report |
 | `pnpm run lint` | Check code with Biome |
 | `pnpm run lint:fix` | Auto-fix lint issues |
-| `pnpm run typecheck` | Type-check via tsgo |
+| `pnpm run typecheck` | Type-check with `tsc` |
 | `pnpm run validate` | Validate GitHub Action configuration |
 
 ## Code Quality
@@ -94,8 +96,7 @@ The following checks run automatically:
 
 ## Testing
 
-Tests use [Vitest](https://vitest.dev) with v8 coverage. Coverage thresholds
-are set at 85% per file for lines, functions, branches, and statements.
+Tests use [Vitest](https://vitest.dev) with v8 coverage. The coverage thresholds come from `@vitest-agent/plugin`'s strict preset and are enforced across the whole run rather than per file, so a green run is not evidence that any one module was exercised — see `vitest.config.ts` for the current values.
 
 ```bash
 # Run all tests

@@ -169,7 +169,8 @@ Commits are created through the GitHub Git Data API rather than a local `git com
 
 - Collects the changed files from git status
 - Builds a tree of blob entries from their contents
-- Creates a commit with a conventional commit message and DCO signoff, and no explicit author so GitHub verifies it
+- Creates a commit with a conventional commit message and no explicit author, which is what lets GitHub attribute the commit to the App and sign it
+- Adds a DCO `Signed-off-by` trailer to the commit message, because a commit created through the API bypasses `git commit -s` and nothing else would add one. The trailer names the authenticated App's bot identity (`<your-app>[bot]`), matching the account the commit is attributed to; when the installation token cannot be read it falls back to `github-actions[bot]`
 - Updates the branch ref to the new commit, then fetches and checks out the updated branch locally
 
 In dry-run mode this step is skipped entirely.
@@ -179,6 +180,7 @@ In dry-run mode this step is skipped entirely.
 - Searches for an existing open PR from the update branch to the target branch (`target-branch`, which defaults to following `source-branch`)
 - Updates the title and body of an existing PR, or creates a new one
 - The PR body includes per-package tables with dependency, type, action, from and to columns, plus changeset details in expandable sections
+- The body also carries a proposed squash-commit block, whose `Signed-off-by` trailer is the same one the commit above carries, so a reviewer comparing the two does not find two different authors
 - If `auto-merge` is set, enables auto-merge on the PR via the GitHub GraphQL API; failures are logged as warnings without failing the action
 - Sets the `pr-number`, `pr-url`, `updates-count` and `has-changes` outputs
 - Writes a GitHub Actions job summary with the same information

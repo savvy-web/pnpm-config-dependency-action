@@ -221,8 +221,13 @@ just-committed working-copy state.
 scopes a single-workspace dependency batch (with the typed noun when the batch is
 one section, e.g. `chore(deps): update devDependencies in @scope/pkg`) and composes
 mixed runs, degrading progressively to fit a 72-char header. The commit body adds
-one bullet per update and a `Signed-off-by` footer attributed to the app slug's bot
-identity (or `github-actions[bot]`), which is what makes the API commit verify.
+one bullet per update and a `Signed-off-by` trailer naming the **App bot identity read from the persisted token** (`utils/commit-signoff.ts`' `resolveSignoff()` over `GitHubToken.botIdentity()`), falling back to `github-actions[bot]` when no token can be read. `Report` resolves it once in its layer body, so the trailer and the PR body's proposed-squash fence cannot name two different authors.
+
+> **Two corrections in one sentence, both worth keeping.** This previously read "attributed to the app slug's bot identity (or `github-actions[bot]`), which is what makes the API commit verify."
+>
+> *On the identity:* the old `signoffLine(appSlug?)` took a slug and **nothing ever passed one**, so the parenthetical was not the fallback — it was the only branch that ran. The doc described a capability the type signature advertised and the program did not have, which is why every run signed as `github-actions[bot]` while the App bot authored the commit.
+>
+> *On verification:* the sign-off does **not** make the commit verify. Omitting the author does — which this very document already says, correctly, 40-odd lines above ("No author is passed, which is what lets GitHub attribute and verify"). The two halves of one file disagreed, and the wrong half is the one a reader reaches last. Worth the note as a shape: **an internal contradiction needs no external evidence to detect, and nothing here was looking for one** — a doc can be checked against itself before it is checked against the code. The trailer is a DCO requirement, carried because the Git Data API path bypasses `git commit -s`; it is orthogonal to verification.
 
 **PR description template:**
 

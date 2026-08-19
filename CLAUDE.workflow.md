@@ -40,15 +40,19 @@ accepted trade-off. Commits must be GPG-signed with the verified key for
 **Currently active:** nothing is **linked** — every first-party dep is on its
 published registry version (see `package.json`). `@effect/vitest` reads
 `catalog:effect`, so the lockstep with `effect` is now **structural**: the
-`effect` catalog pins both to the same beta, and a catalog advance moves them
-together with no hand-edit. It used to be an exact literal pin that had to be
+`effect` catalog pins both to the same prerelease, and a catalog advance moves
+them together with no hand-edit. It used to be an exact literal pin that had to be
 bumped manually, which is the failure mode this removed.
 
 There are **no `overrides` entries**. The former `@effect/platform-node-shared`
 pin (held at `4.0.0-beta.101` because a caret on a prerelease admitted a
 `beta.102` whose peer range the catalog pin did not satisfy) went away with the
-`beta.107` advance — the whole graph now resolves a single
-`platform-node-shared@4.0.0-beta.107` against a single `effect@4.0.0-beta.107`.
+`beta.107` advance and has not come back: the graph resolves a single
+`platform-node-shared` against a single `effect`, at whatever the catalog
+currently pins. **What is load-bearing is "one copy of each, peers satisfied",
+which `pnpm why` answers and a version number never did** — which is why no
+current version literal appears in that sentence, and why re-adding one would be
+a regression rather than an update.
 
 The **duplicate resolutions are also gone**: `@effected/workspaces` and
 `@effected/npm` each resolve exactly one copy, so the second workspaces copy that

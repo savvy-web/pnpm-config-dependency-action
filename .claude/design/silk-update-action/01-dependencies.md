@@ -18,9 +18,13 @@ implementation-plans: []
 
 ## Runtime Dependencies (bundled into action)
 
-The authoritative dependency list and ranges live in the `dependencies` block of `package.json` — this doc does not mirror them. Every runtime dependency is inlined into `dist/{pre,main,post}.js` at build time; the packages whose behavior is load-bearing for this action are described below.
+The authoritative dependency list and ranges live in the `dependencies` block of `package.json` — this doc does not mirror them.
 
-The action runs on **Effect v4** (`effect` / `@effect/platform-node` both resolved from the `catalog:effect` catalog — a `4.0.0-beta` pin; see the lockfile for the current beta). Effect v4 renamed several APIs the code and the notes below use: services are class-based `Context.Service` (was `Context.Tag`); the Node platform bundle is `NodeServices.layer` (was `NodeContext.layer`); `FileSystem`/`Path` import from `effect` directly, `HttpClient`/`FetchHttpClient` from `effect/unstable/http` and `ChildProcess`/`ChildProcessSpawner` from `effect/unstable/process` (the old `@effect/platform` package is dissolved into core `effect`); `Config.int` (was `Config.integer` — though this action reads integers via `ActionInput.integer`, not `Config`); `Effect.catch` (was `Effect.catchAll`); `Effect.result` returning a `Result` (was `Effect.either`); `Effect.timeoutOrElse` (was `Effect.timeoutFail`); and log levels are string literals (`"Info"` / `"Debug"` / `"Warn"`), set via `References.MinimumLogLevel`.
+**It did, though, in seven places, and every single one had rotted.** Six package headings carried a declared range in parentheses (`@effected/commands`, `git`, `workspaces`, `package-json`, `schemastore`, `github-action-builder`) and one restated a transitive range; the five `0.x` kit entries were stale by one to three **minors** — breaking, on a `0.x` line, per the caret trap recorded below — and `github-action-builder` by four patches on a stable `2.x` line, which is harmless and is exactly why nobody noticed the other five. They are removed rather than refreshed — refreshing is what produced the drift, and it re-arms the same trap for the next reader. A version literal that must agree with a file two directories away has no mechanism keeping it honest, which is the same argument the duplicate-resolutions section below reaches on its own evidence. **Where a version *is* load-bearing it is stated as history** ("`0.9.0` shipped `PackageManifest`", "adopted at `0.11.0`") — a claim about what a release contained, which does not go stale, rather than a claim about what is installed, which does.
+
+Every runtime dependency is inlined into `dist/{pre,main,post}.js` at build time; the packages whose behavior is load-bearing for this action are described below.
+
+The action runs on **Effect v4** (`effect` / `@effect/platform-node` both resolved from the `catalog:effect` catalog; **read the pinned version off the lockfile or the installed tree, never off a doc** — the line has already crossed from `4.0.0-beta` into `4.0.0-rc`, so even the *shape* of the version string in a prose claim goes stale). Effect v4 renamed several APIs the code and the notes below use: services are class-based `Context.Service` (was `Context.Tag`); the Node platform bundle is `NodeServices.layer` (was `NodeContext.layer`); `FileSystem`/`Path` import from `effect` directly, `HttpClient`/`FetchHttpClient` from `effect/unstable/http` and `ChildProcess`/`ChildProcessSpawner` from `effect/unstable/process` (the old `@effect/platform` package is dissolved into core `effect`); `Config.int` (was `Config.integer` — though this action reads integers via `ActionInput.integer`, not `Config`); `Effect.catch` (was `Effect.catchAll`); `Effect.result` returning a `Result` (was `Effect.either`); `Effect.timeoutOrElse` (was `Effect.timeoutFail`); and log levels are string literals (`"Info"` / `"Debug"` / `"Warn"`), set via `References.MinimumLogLevel`.
 
 ### The github-action-effects split (what replaced what)
 
@@ -78,7 +82,7 @@ The action runs on **Effect v4** (`effect` / `@effect/platform-node` both resolv
   - GraphQL is a member of the client, not a separate `GitHubGraphQL` service.
 - `@effected/github-actions` + `@effected/github` together replace the whole
   `github-action-effects` layer stack; nothing in `src/` imports the old package.
-- `@effected/commands` (`^0.4.0`) — subprocess execution as **free functions** over core
+- `@effected/commands` — subprocess execution as **free functions** over core
   `ChildProcessSpawner`, not a service: `Run.collect` (exit code as a *result*, so a
   non-zero exit is a value rather than an error), `Run.text` / `Run.lines` / `Run.json`
   (typed failure on a non-zero exit) and `Run.succeeds` (boolean probe). Also ships
@@ -91,7 +95,7 @@ The action runs on **Effect v4** (`effect` / `@effect/platform-node` both resolv
     no code here parses column-aligned text any more. The trimming is still true of
     `Run.text` and still worth knowing before reading a fixed-width format with it;
     it is no longer a property this action depends on.
-- **`@effected/git` (`^0.7.0`) — adopted for `status` only.** `Git.status(cwd)` runs
+- **`@effected/git` — adopted for `status` only.** `Git.status(cwd)` runs
   `git status --porcelain -z` and returns typed `StatusEntry` values (`x`, `y`, `path`,
   `origPath`), and `Git.configSet(cwd, key, value)` writes the checkout's local config.
   Both status readers use it — `services/branch.ts` for the commit file list and
@@ -134,7 +138,24 @@ The action runs on **Effect v4** (`effect` / `@effect/platform-node` both resolv
     caller supplies the clock and missing timestamps drop the version) and
     `PartialReleaseAgeGate` (the permissive per-source contribution type, re-exported by
     `src/services/release-age.ts`).
-- `@effected/workspaces` (`^0.11.1`) — Effect-native workspace layer, consumed by `RegularDeps`,
+  - **The corepack pin vocabulary, adopted at `0.11.0` (issue #290).**
+    `CorepackIntegrityHash.fromSri` converts npm's `sha512-<base64>` to corepack's
+    `sha512.<hex>`, failing typed with `InvalidSriIntegrityHashError` on a non-sha512
+    algorithm, non-canonical base64, a digest that is not 64 bytes, and
+    already-corepack input (one-way by design); one layer of JSON quotes is
+    tolerated. `PackageManagerPin` (`.parseResult` / `.parse` / `.FromString`) is
+    the `<name>@<version>[+<integrity>]` grammar, where the first `+` after the
+    version always begins the integrity — so a pin's version can never carry
+    semver build metadata. Both replaced local implementations in
+    `PackageManagerUpgrade`; the SRI converter's replacement was **motivated by
+    this repo's copy** (effected#281 cites it as the consumer evidence).
+    - Note the deliberate split with `@effected/package-json`'s `PackageManager`,
+      which parses the identical grammar but accepts any `[a-z]+` name because a
+      *field model* reads manifests it did not write. `PackageManagerPin`'s name
+      set is closed to the four the kit provisions. This action upgrades a
+      manager it has already detected, so the closed set is the right one and the
+      `pin.name !== pm` check is explicit rather than implied by parsing.
+- `@effected/workspaces` — Effect-native workspace layer, consumed by `RegularDeps`,
   `PeerSync`, `Lockfile`, `CatalogConfigDeps` and `detectPackageManager`. **Root-bound at
   layer build:** the layers are static factories on the service classes
   (`WorkspaceRoot.layer`, `WorkspaceDiscovery.layer(opts?)`, `PackageManagerDetector.layer`,
@@ -209,9 +230,11 @@ The action runs on **Effect v4** (`effect` / `@effect/platform-node` both resolv
   only the fail-open wrapper and the filtering. The layer **must** be
   `layerWithConfigDependenciesSubprocess` — the in-process variant's computed
   dynamic `import()` is what rspack miscompiles into a context module, and that
-  is the sole reason this adoption waited on a release. `workspaces@0.11.1`
-  itself declares `@effected/commands: ^0.4.0`, so `Run.jsonLine` (the framing
-  its replay child uses) arrives with it and needs no manual alignment.
+  is the sole reason this adoption waited on a release. `@effected/workspaces`
+  itself depends on `@effected/commands`, so `Run.jsonLine` (the framing its replay
+  child uses) arrives with it and needs no manual alignment — a standing property of
+  the dependency, not of the version pair that happened to be installed when this was
+  written.
   - **`Run.jsonLine` was evaluated and is SUBSUMED, not skipped.** It was the
     intended replacement for this repo's local `REPLAY_SENTINEL` framing — but
     `releaseAgeGate()` combines the inline keys *and* the hook replay, so
@@ -229,7 +252,7 @@ The action runs on **Effect v4** (`effect` / `@effect/platform-node` both resolv
 - `@effected/yaml` — parse and stringify `pnpm-workspace.yaml` with consistent formatting.
   `Yaml.parse` / `Yaml.stringify` return Effects (rather than throwing like the `yaml` npm
   package), so `workspace-yaml.ts` yields them and maps failures into `FileSystemError`.
-- **`@effected/package-json` (`^0.9.0`) — adopted for `PackageJsonFile.modify`, and
+- **`@effected/package-json` — adopted for `PackageJsonFile.modify`, and
   for nothing else.** `modify(path, edits)` applies a list of `PackageFieldEdit`s
   (a JSONC `path` plus a `value`; `value: undefined` deletes) to a manifest on disk in
   one read/edit/write pass, preserving **every byte outside the edited span** — key
@@ -253,19 +276,67 @@ The action runs on **Effect v4** (`effect` / `@effect/platform-node` both resolv
     hole in @./06-effect-patterns.md — and shipped as a total production outage in
     v4.6.0.
 
-### Duplicate resolutions — RESOLVED by the beta.107 wave
+### Duplicate resolutions — recurring, caught each time by `pnpm why`
 
-**Current state, verified rather than assumed:** `@effected/workspaces` (`0.11.1`),
-`@effected/npm` (`0.9.0`) and `@effected/commands` (`0.4.0`) each resolve **exactly one
-copy**, and `effect` resolves one copy at `4.0.0-beta.107` tree-wide.
+**Current state, verified rather than assumed:** `@effected/workspaces`,
+`@effected/npm`, `@effected/package-json`, `@effected/lockfiles`,
+`@effected/github`, `@effected/github-actions` and `@effected/commands` each
+resolve **exactly one copy**, as does `effect`.
+
+Deliberately no version numbers in that sentence. The previous version of this
+section named them, and naming them is how the section went stale: the numbers
+were refreshed on a later pass while the single-copy claim they were supposed to
+support was not re-checked. **The claim is only as good as the last `pnpm why`
+run against the current lockfile** — re-derive rather than read.
 
 ```text
 $ pnpm why @effected/workspaces
-@effected/workspaces@0.11.1
 Found 1 version of @effected/workspaces
 ```
 
-**What this closed.** The duplicate this section used to document was real and *was* being
+**This recurs at every kit bump; it is not a closed issue.** The most recent
+instance is worth the detail because the obvious reading of it was **wrong**, and
+the wrong reading survived a full documentation pass before an experiment killed
+it.
+
+Moving `@effected/npm` to `^0.11.0` also required `@effected/github-actions@0.9.1`,
+which depends on `@effected/github@0.7.0`. This repo's own `^0.6.0` was still
+**satisfiable**, so `pnpm` had no reason to move it — and two copies of
+`@effected/github` resolved, while `__test__/unit/layers/app.test.ts` reported
+`Type 'boolean' is not assignable to type 'GitHubClient'`. Duplicate present,
+type error present, one obviously explaining the other. **It did not.**
+
+The isolating experiment — revert the range, install, typecheck, twice:
+
+| `@effected/github` | copies | `tsc` |
+| --- | --- | --- |
+| `0.6.0` + `0.7.0` (via `github-actions`) | 2 | **fails** on `GitHubClient` |
+| `0.6.1` + `0.7.0` | 2 | **clean** |
+
+Same duplication, opposite results, so duplication is not the variable. What
+changed in `0.6.1` was `@octokit/types` `^16` → `^17` and
+`@octokit/plugin-paginate-rest` `^14` → `^15`. `GitHubClient`'s type **embeds
+octokit's types**, so at `0.6.0` the client `GitHubToken.clientLayer()` produced
+was structurally incompatible with the one the resource layers required —
+`0.7.0` being a pure refactor, it agrees with `0.6.1`. The lockfile was holding
+`0.6.0` because a caret range that is already satisfied is a range `pnpm` never
+revisits.
+
+So the actual rule is narrower and more useful than "duplicates break the
+build": **a duplicate is harmless while the copies' shapes agree, and a stale
+transitive dependency inside one copy is what makes them disagree.** The fix was
+therefore *getting off `0.6.0`*, which `^0.6.1` would also have done; moving to
+`^0.7.0` was the right call anyway, because this repo keeps one copy of each kit
+package for the bundling reason below.
+
+Two things worth carrying forward. **After any kit bump, run `pnpm why` on every
+kit package rather than only the one named in the changeset** — the range that
+needs moving is frequently not the one you bumped. And **a leftover requirement
+in the guard is a symptom with more than one cause**: a missing `Layer.provide`,
+a duplicate, or — as here — a single copy whose shape has drifted from what its
+peers were built against. The guard names the *type*, never the reason.
+
+**What the beta.107 wave closed.** An earlier duplicate was real and *was* being
 bundled: `@savvy-web/silk-effects@5.3.0` declared `^0.9.5` while this action had moved to
 `^0.10.0`, and caret pins the minor on `0.x`, so the two ranges could not dedupe and two
 copies of the workspaces kit were inlined into `dist/main.js`. `silk-effects@5.5.2` moved
@@ -279,6 +350,21 @@ the shapes agree*, but not safe by construction, since a version-gated member (a
 in a shared tag's shape would typecheck against one copy and fail at runtime against the
 other.
 
+**That limit-statement predicted the `@effected/github` incident exactly, and is
+the sentence a correction had to be built back toward.** "Safe *while the shapes
+agree*" is the whole of it: two copies at `0.6.1` and `0.7.0` agree and
+typecheck; `0.6.0` and `0.7.0` do not, because an octokit major moved underneath
+one of them. The paragraph that briefly stood here said the opposite — that
+TypeScript types are *nominal per copy*, so any duplication meeting in one
+signature is a compile error. That is false, and the table above is what
+falsified it.
+
+Worth recording as a shape rather than an erratum: **the wrong version was
+written while the correct one was still on the page, four paragraphs up.** It
+was not contradicted by new evidence — it was contradicted by this document,
+already, and nobody read down that far before writing. Checking a claim against
+the file it is being added to costs one search and would have caught it.
+
 *Verify with* `pnpm why <pkg>` — **not** with a lockfile grep. The grep reports *which*
 versions exist; only `pnpm why` reports *who pulls each one*, and provenance is the whole
 question. An earlier version of this section was updated to new version numbers while
@@ -289,18 +375,19 @@ last `pnpm why` run against the current lockfile.
 
 ## Build tooling
 
-- `@savvy-web/github-action-builder` (dev, `^2.2.3`) — rspack-based bundler that derives the
+- `@savvy-web/github-action-builder` (dev) — rspack-based bundler that derives the
   pre/main/post entries from `action.config.ts` and inlines every runtime dependency into
   `dist/{pre,main,post}.js`. As of v2.1 it **minifies unconditionally** and folds license
   banners inline, so the committed `dist` carries attribution again. Current output:
   ~1.3 MB minified (`dist/main.js`; `pre` and `post` are ~279 KB each).
 - `@savvy-web/silk` (dev) — silk tooling (commit/changeset conventions).
 - `@effect/vitest` (dev) — reads **`catalog:effect`**, the same catalog entry as `effect`
-  itself, which pins both to `4.0.0-beta.107`. The required lockstep is therefore
+  itself, so both resolve to the same prerelease by construction. No literal here: naming
+  it is what the lockstep exists to make unnecessary. The required lockstep is therefore
   structural rather than remembered: it used to be an exact literal that had to be
   hand-bumped alongside every catalog advance, and a missed bump left the test framework a
   beta behind the runtime it was testing. See @./08-testing.md.
-- `@effected/schemastore` (dev, `^0.3.0`) — builds, lints, gates and
+- `@effected/schemastore` (dev) — builds, lints, gates and
   writes the JSON Schema for the `result` output. `lib/scripts/generate-schema.ts` hands it a
   `SchemaTarget` and `SchemaPipeline.run` does the rest: structural lint, the shipped ajv
   strict-mode gate, and a write **only when the document's content differs** — so a formatter

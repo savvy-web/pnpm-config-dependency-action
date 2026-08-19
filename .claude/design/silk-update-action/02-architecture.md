@@ -68,11 +68,13 @@ src/
 └── utils/
     ├── branch.ts          # resolveTargetBranch
     ├── catalogs.ts        # CatalogMap, normalize/read/write/threeWayMergeCatalogs
+    ├── commit-signoff.ts  # resolveSignoff (DCO trailer from the persisted App token)
     ├── commit-subject.ts  # buildUpdateSubject (PR title / commit subject)
     ├── deps.ts            # parseConfigEntry, matchesPattern, parseSpecifier
     ├── markdown.ts        # bold, rule (the 2 builders the kit lacks), npmUrl, cleanVersion
-    ├── pnpm.ts            # detectIndent, corepackHashFromIntegrity (only — the
-    │                      #   pnpm version parse/format pair was deleted, no callers)
+    ├── pnpm.ts            # detectIndent ONLY — the version parse/format pair went
+    │                      #   for having no callers, corepackHashFromIntegrity
+    │                      #   because the kit shipped it (#290)
     ├── runtime.ts         # isStaticVersion, locateRuntimeEntry (entry + JSONC versionPath)
     └── semver.ts          # resolveLatestSatisfying, configDepUpgradeRange, …
 

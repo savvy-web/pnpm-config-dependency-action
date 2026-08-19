@@ -178,9 +178,13 @@ version change is tracked as a config dependency update. Default: `false`.
 
 The upgrade is opt-in, matching the `upgrade-runtime-*` inputs: leaving this input unset means the package manager is left alone. Workflows that relied on the earlier implicit upgrade need to set `true`, `auto` or a range explicitly.
 
+The current version is read from either field as a package-manager pin. A `devEngines.packageManager.version` carrying a range (`^11.0.0`) is accepted and still anchors an `auto` upgrade, because the reference is only ever the anchor a target range is synthesized from. A value that is not a parseable pin — a truncated version, a trailing typo — is reported as no reference found, rather than being read as a version that then satisfies nothing.
+
 pnpm and npm are managed by corepack, so their resolved version is written
 hash-pinned (`pnpm@11.0.0+sha512.<hex>`). corepack does not manage bun, so bun is
 written as a bare version.
+
+The hash comes from the registry's integrity metadata and is checked before it is written. When the registry supplies no integrity, or one that does not decode to a well-formed SHA-512 digest, the action writes the bare version with a warning instead of a pin that corepack would reject at install time in your repository.
 
 An explicit range is resolved against the **detected** package manager's release
 list. A range typed for a different manager (a pnpm-shaped `^11` in a bun repo)

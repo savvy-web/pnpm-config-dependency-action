@@ -1,7 +1,10 @@
-import { Effect, Layer } from "effect";
+import { InstallationToken } from "@effected/github";
+import { ActionState } from "@effected/github-actions";
+import { DateTime, Effect, Layer, Redacted } from "effect";
 import { describe, expect, it } from "vitest";
 import { Report } from "../../src/services/report.js";
 import { cleanVersion, npmUrl } from "../../src/utils/markdown.js";
+import { actionStateTestLayer, emptyActionState } from "../utils/action-doubles.js";
 import {
 	configUpdate,
 	configUpdateNew,
@@ -18,11 +21,35 @@ import {
 } from "../utils/fixtures.js";
 
 /**
+ * An `ActionState` whose `get` answers with a real `InstallationToken`.
+ *
+ * A real `InstallationToken.make(...)` rather than a structurally-correct
+ * literal: `botIdentity()` is a method on the class, so a plain object
+ * typechecks through the double and then fails at runtime.
+ */
+const stateWithToken = (identity: { appSlug: string; appName: string }): Layer.Layer<ActionState> =>
+	ActionState.layerTest({
+		get: (() =>
+			Effect.succeed(
+				InstallationToken.make({
+					token: Redacted.make("ghs_test_token_123"),
+					expiresAt: DateTime.makeUnsafe("2030-01-01T01:00:00Z"),
+					installationId: 4242,
+					permissions: {},
+					...identity,
+				}),
+			)) as ActionState["Service"]["get"],
+	});
+
+/**
  * Helper to run a Report service method.
  */
-const withReport = <A>(fn: (report: Effect.Success<typeof Report>) => A): Promise<A> => {
+const withReport = <A>(
+	fn: (report: Effect.Success<typeof Report>) => A,
+	actionState: Layer.Layer<ActionState> = actionStateTestLayer(emptyActionState()),
+): Promise<A> => {
 	const state = emptyPullRequestState();
-	const layer = Report.layer.pipe(Layer.provide(pullRequestTestLayer(state)));
+	const layer = Report.layer.pipe(Layer.provide(Layer.merge(pullRequestTestLayer(state), actionState)));
 	return Effect.runPromise(
 		Effect.gen(function* () {
 			const report = yield* Report;
@@ -61,7 +88,7 @@ describe("npmUrl", () => {
 
 describe("generateCommitMessage", () => {
 	it("generates message for config-only updates", async () => {
-		const message = await withReport((r) => r.generateCommitMessage(configUpdates, "my-app"));
+		const message = await withReport((r) => r.generateCommitMessage(configUpdates));
 
 		expect(message).toContain("chore(deps): update 2 config dependencies");
 		expect(message).toContain("- typescript: 5.3.3 -> 5.4.0");
@@ -69,28 +96,39 @@ describe("generateCommitMessage", () => {
 	});
 
 	it("generates message for dev-only updates", async () => {
-		const message = await withReport((r) => r.generateCommitMessage(regularUpdates, "my-app"));
+		const message = await withReport((r) => r.generateCommitMessage(regularUpdates));
 
 		expect(message).toContain("chore(deps): update 2 devDependencies");
 		expect(message).toContain("- effect: 3.0.0 -> 3.1.0");
 	});
 
 	it("generates message for mixed updates", async () => {
-		const message = await withReport((r) => r.generateCommitMessage(mixedUpdates, "my-app"));
+		const message = await withReport((r) => r.generateCommitMessage(mixedUpdates));
 
 		expect(message).toContain("chore(deps): update 2 config dependencies and 2 devDependencies");
 	});
 
-	it("includes sign-off with app slug", async () => {
-		const message = await withReport((r) => r.generateCommitMessage(configUpdates, "my-app"));
+	// The sign-off used to be a `signoffLine(appSlug?)` parameter that NOTHING
+	// ever passed — `steps/commit-and-pr.ts` calls `generateCommitMessage` with
+	// updates only — so the App-bot branch was reachable from this suite and
+	// from nowhere else, and every real run signed as `github-actions[bot]`
+	// while the App bot authored the commit. It now comes from the persisted
+	// token, so these two cases assert the identity the RUN would use.
+	it("signs off as the App bot named by the persisted token", async () => {
+		const message = await withReport(
+			(r) => r.generateCommitMessage(configUpdates),
+			stateWithToken({ appSlug: "my-app", appName: "My App" }),
+		);
 
 		expect(message).toContain("Signed-off-by: my-app[bot] <my-app[bot]@users.noreply.github.com>");
 	});
 
-	it("falls back to github-actions[bot] when no app slug", async () => {
+	it("falls back to github-actions[bot] when no token is persisted", async () => {
 		const message = await withReport((r) => r.generateCommitMessage(configUpdates));
 
-		expect(message).toContain("Signed-off-by: github-actions[bot]");
+		expect(message).toContain(
+			"Signed-off-by: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>",
+		);
 	});
 });
 

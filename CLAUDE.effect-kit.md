@@ -46,6 +46,16 @@ resolve `PackageJsonFile` in their **layer bodies**, so `makeAppLayer` must
 provide it to each. See the requirement-channel gotcha in the root file — this is
 the wiring that shipped v4.6.0 dead.
 
+**`Report.layer` resolves `ActionState`** (the DCO sign-off, read once from the
+persisted token via `resolveSignoff()`), and this is the *other* outcome of the
+same pattern: `ActionState` is an `ActionServices` member, so it is **not**
+provided in `makeAppLayer` — it is left in the requirement channel for
+`Action.run` to satisfy, like `ChildProcessSpawner` under `BranchManager`. So
+"a service resolved in a layer body" splits two ways: provide it locally, or
+confirm it is an `ActionServices` member and leave it. **Only
+`__test__/unit/layers/app.test.ts` tells the two apart** — omitting a needed
+provide is not a type error at any call site.
+
 ## Changesets
 
 `services/changesets.ts` is a thin adapter over `Changesets.DepsRegen`
@@ -64,9 +74,14 @@ every member has a construction site. Kit failures arrive as `GitHubError` and
 `__test__/unit/errors/errors.test.ts` pins the exported set, so re-adding one
 fails a test.
 
-**The same argument deletes dead helpers, not just errors.** `parsePnpmVersion` /
-`formatPnpmVersion` / `ParsedPnpmVersion` were removed from `src/utils/pnpm.ts`
-on exactly this reasoning — see the root file's `@effected/package-json` gotcha.
+**The same argument deletes dead helpers, not just errors** — `parsePnpmVersion` /
+`formatPnpmVersion` / `ParsedPnpmVersion` went from `src/utils/pnpm.ts` on exactly
+this reasoning. **And a helper that is very much alive can still go, on a
+different argument: the kit shipped the capability** — which is how
+`corepackHashFromIntegrity` and `PackageManagerUpgrade`'s private `parsePmVersion`
+went. Keep the two arguments distinct: "no caller" and "the kit ships it now"
+imply different follow-ups. Both incidents in full, with the upstream issue
+numbers, are in the root file's `src/utils/pnpm.ts` gotcha — not restated here.
 
 ## Effect v4 spellings
 
