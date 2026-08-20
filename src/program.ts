@@ -433,7 +433,12 @@ export const innerProgram = (
 					// Runs against the "after" snapshot -- the lockfile this PR will
 					// carry -- and only on the path that actually opens a PR, so a
 					// no-changes run never spawns the config-dependency hook replay.
-					const peerCheckResult = yield* peerCheckStep(inputs["check-peers"], lockfileAfter, detected.root);
+					const peerCheckResult = yield* peerCheckStep(
+						inputs["check-peers"],
+						lockfileAfter,
+						detected.root,
+						inputs["auto-merge"] !== "",
+					);
 					peerIssues = peerCheckResult.issues;
 					withholdAutoMerge = peerCheckResult.decision.withhold;
 					// `null` when the check did not run, so the Result block reports it

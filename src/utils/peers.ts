@@ -33,6 +33,7 @@ export interface PeerReportSummary {
 /** Why the gate decided what it decided. Drives the log line, so it is a union rather than prose. */
 export type PeerGateReason =
 	| "disabled"
+	| "auto-merge-disabled"
 	| "report-only"
 	| "proven-clean"
 	| "unsupported"
@@ -53,9 +54,18 @@ export interface PeerGateDecision {
  * than for the boolean: an unsupported format is *why* there are no rows, so
  * reporting `unverified` there would send a reader to the wrong explanation.
  */
-export const decidePeerGate = (mode: CheckPeersMode, report: PeerReportSummary): PeerGateDecision => {
+export const decidePeerGate = (
+	mode: CheckPeersMode,
+	report: PeerReportSummary,
+	autoMergeEnabled: boolean,
+): PeerGateDecision => {
 	if (mode === "false") return { withhold: false, reason: "disabled" };
 	if (mode === "warn") return { withhold: false, reason: "report-only" };
+	// Nothing can be withheld that was never going to happen. Without this the
+	// PR body told reviewers "auto-merge was withheld" on repositories that had
+	// never enabled it — a decision reported as taken that was not available to
+	// take. Peers are still reported; only the gate is inapplicable.
+	if (!autoMergeEnabled) return { withhold: false, reason: "auto-merge-disabled" };
 
 	if (!report.supported) return { withhold: true, reason: "unsupported" };
 	if (report.unresolvedImporters.length > 0) return { withhold: true, reason: "unresolved-importers" };

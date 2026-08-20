@@ -132,13 +132,20 @@ export const readInputs = Effect.gen(function* () {
 		);
 	}
 	const autoMerge = rawAutoMerge as (typeof AUTO_MERGE_METHODS)[number];
-	const checkPeers = yield* ActionInput.string("check-peers").pipe(Config.withDefault("false"));
+	// DERIVED default, not a static one. Unset means "no-auto-merge" where there
+	// is an auto-merge to withhold, and "false" where there is not — so leaving
+	// it unset costs nothing on a repo that does not auto-merge, rather than
+	// spawning the config-dependency hook replay to compute a verdict that could
+	// not change any outcome. An explicit value always wins, including an
+	// explicit "false" on a repo that does auto-merge.
+	const rawCheckPeers = yield* ActionInput.string("check-peers").pipe(Config.withDefault(""));
+	const checkPeers = rawCheckPeers === "" ? (rawAutoMerge === "" ? "false" : "no-auto-merge") : rawCheckPeers;
 	if (!(CHECK_PEERS_MODES as ReadonlyArray<string>).includes(checkPeers)) {
 		yield* Effect.fail(
 			new InvalidInputError({
 				field: "check-peers",
 				reason: 'Expected "false", "warn" or "no-auto-merge"',
-				value: checkPeers,
+				value: rawCheckPeers,
 			}),
 		);
 	}

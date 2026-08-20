@@ -72,6 +72,7 @@ export const peerCheckStep = (
 	mode: CheckPeersMode,
 	lockfile: LockfileModel | null,
 	workspaceRoot: string,
+	autoMergeEnabled: boolean,
 ): Effect.Effect<PeerCheckStepResult, never, WorkspaceCatalogs> =>
 	Effect.gen(function* () {
 		if (mode === "false") {
@@ -80,7 +81,7 @@ export const peerCheckStep = (
 				issues: [],
 				requiredCount: 0,
 				unverifiedReasons: NOT_EXAMINED.unverified,
-				decision: decidePeerGate(mode, NOT_EXAMINED),
+				decision: decidePeerGate(mode, NOT_EXAMINED, autoMergeEnabled),
 			};
 		}
 
@@ -92,7 +93,7 @@ export const peerCheckStep = (
 				issues: [],
 				requiredCount: 0,
 				unverifiedReasons: NOT_EXAMINED.unverified,
-				decision: decidePeerGate(mode, NOT_EXAMINED),
+				decision: decidePeerGate(mode, NOT_EXAMINED, autoMergeEnabled),
 			};
 		}
 
@@ -124,12 +125,16 @@ export const peerCheckStep = (
 			parents: u.parents.map((p) => `${p.name}@${p.version}`),
 		}));
 
-		const decision = decidePeerGate(mode, {
-			supported: report.supported,
-			unresolvedImporters: report.unresolvedImporters,
-			unverified: report.unverified,
-			requiredCount: report.required.length,
-		});
+		const decision = decidePeerGate(
+			mode,
+			{
+				supported: report.supported,
+				unresolvedImporters: report.unresolvedImporters,
+				unverified: report.unverified,
+				requiredCount: report.required.length,
+			},
+			autoMergeEnabled,
+		);
 
 		// Name the reasons, not just the verdict: "(unverified)" beside "0 issue(s)"
 		// reads as a contradiction unless the reader is told what could not be

@@ -279,7 +279,15 @@ and do not need the pointer.
 - Auto-merge requires GraphQL (no REST endpoint) and is a **separate**
   `setAutoMerge` call whose failure degrades to a warning
 - **`check-peers` gates auto-merge by NOT making that separate call.** Input is
-  `false` (default, opt-in like `upgrade-package-manager`) | `warn` | `no-auto-merge`;
+  `false` | `warn` | `no-auto-merge`, and its **default is DERIVED** rather than
+  static: unset resolves to `no-auto-merge` when `auto-merge` is enabled and
+  `false` when it is not. A static `no-auto-merge` default would have been a
+  no-op for the *gate* but not for the *run* — the step still spawns the
+  config-dependency hook replay as a subprocess in the consumer's repo. Deriving
+  makes "free where there is nothing to gate" literally true. An explicit value
+  always wins. **Nothing can be withheld that was never going to happen:**
+  `decidePeerGate` takes `autoMergeEnabled`, because without it the PR body told
+  reviewers "auto-merge was withheld" on repositories that had never enabled it;
   `fail` is deliberately **rejected**, not accepted-and-ignored, because it is the
   only tier needing a second concurrent check run. The gate predicate is
   **not** `required > 0` — it is

@@ -39,7 +39,7 @@ const run = (
 	layer: Layer.Layer<WorkspaceCatalogs>,
 ) =>
 	Effect.runPromise(
-		peerCheckStep(mode, lf, "/ws").pipe(
+		peerCheckStep(mode, lf, "/ws", true).pipe(
 			Effect.provide(layer),
 			Effect.provideService(References.MinimumLogLevel, "None"),
 		),

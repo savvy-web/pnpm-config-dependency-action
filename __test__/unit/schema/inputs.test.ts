@@ -291,8 +291,24 @@ describe("check-peers", () => {
 	// Opt-in by default, matching upgrade-package-manager and upgrade-runtime-*:
 	// a `warn` default would add a peer computation and a PR-body section to
 	// every consumer run nobody asked for.
-	it('defaults to "false" when the input is absent', async () => {
+	// The default is DERIVED from auto-merge, so leaving it unset is genuinely
+	// free where there is nothing to gate, and protective where there is. A
+	// static "no-auto-merge" default would still spawn the config-dependency
+	// hook replay in every consumer's repo on every run.
+	it("defaults to false when auto-merge is not enabled", async () => {
 		const result = await readOrThrow({ dependencies: "effect" });
+		expect(result.inputs["check-peers"]).toBe("false");
+	});
+
+	it("defaults to no-auto-merge when auto-merge is enabled", async () => {
+		const result = await readOrThrow({ dependencies: "effect", "auto-merge": "squash" });
+		expect(result.inputs["check-peers"]).toBe("no-auto-merge");
+	});
+
+	// An explicit value always wins, including opting OUT on a repo that does
+	// use auto-merge.
+	it("honours an explicit false even when auto-merge is enabled", async () => {
+		const result = await readOrThrow({ dependencies: "effect", "auto-merge": "squash", "check-peers": "false" });
 		expect(result.inputs["check-peers"]).toBe("false");
 	});
 

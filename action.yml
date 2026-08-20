@@ -145,16 +145,16 @@ inputs:
     description: |
       Check the installed dependency graph for unsatisfied peer dependencies
       after the install, and report them in the PR body and job summary.
-      Values: false (skip - the default, matching the opt-in posture of
-      upgrade-package-manager and upgrade-runtime-*), warn (report only, never
-      gate), or no-auto-merge (report, and withhold auto-merge when a required
-      peer is unsatisfied, so the PR still opens but cannot merge itself).
-      no-auto-merge has no effect when auto-merge is disabled; that combination
-      warns rather than failing, because auto-merge is legitimately dynamic in
-      a workflow expression.
+      Values: false (skip), warn (report only, never gate), or no-auto-merge
+      (report, and withhold auto-merge when a required peer is unsatisfied, so
+      the PR still opens but cannot merge itself).
+      Left unset the default is DERIVED: no-auto-merge when auto-merge is
+      enabled, false when it is not - so a repository that does not auto-merge
+      pays nothing, and one that does is protected without opting in. An
+      explicit value always wins, including an explicit false.
       Optional peers are always reported and never gate.
     required: false
-    default: "false"
+    default: ""
 outputs:
   pr-number:
     description: Pull request number (if created or updated)
