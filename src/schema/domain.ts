@@ -240,8 +240,13 @@ export type LockfileChange = typeof LockfileChange.Type;
  * rather than omitted, so a consumer can index without guarding.
  */
 export const RunResultDocument = Schema.Struct({
-	schemaVersion: Schema.Literal(1).annotate({
-		description: "Document format version. Incremented only on a breaking change to this shape.",
+	schemaVersion: Schema.Literal(2).annotate({
+		description:
+			"Document format version. Incremented only on a breaking change to this shape. " +
+			"Bumped 1 -> 2 when `peerIssues` was added: this struct lowers to " +
+			"`additionalProperties: false`, so a consumer validating a new document against " +
+			"a pinned v1 schema rejects it. Adding a field is therefore breaking HERE in a way " +
+			"it would not be for a permissive schema — the strictness is what makes it so.",
 	}),
 	hasChanges: Schema.Boolean.annotate({
 		description: "Whether the run produced any committable change.",

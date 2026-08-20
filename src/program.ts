@@ -65,7 +65,7 @@ const buildRunResult = (params: {
 	readonly peerIssues: ReadonlyArray<PeerIssue>;
 	readonly pullRequest: PullRequestResult | null;
 }): RunResultDocument => ({
-	schemaVersion: 1,
+	schemaVersion: 2,
 	hasChanges: params.hasChanges,
 	dryRun: params.dryRun,
 	packageManager: params.detected.pm,
@@ -491,7 +491,11 @@ export const innerProgram = (
 
 					// Update check run
 					const report = yield* Report;
-					const summaryText = report.generateSummary(allUpdates, changesetFiles, pr, dryRun, configDeltas);
+					const summaryText = report.generateSummary(allUpdates, changesetFiles, pr, dryRun, configDeltas, peerIssues, {
+						withheld: withholdAutoMerge,
+						reason: peerCheckResult.decision.reason,
+						unverifiedReasons: peerCheckResult.unverifiedReasons,
+					});
 					yield* conclude(
 						"success",
 						CheckRunOutput.make({

@@ -97,10 +97,11 @@ the two workflows that clobber `dev`:
 **`dev` IS the feature branch here** — feature work is committed directly to it
 with ordinary commits, because the action is bundled and a consumer pinning
 `@dev` runs the **committed `dist`**, so nothing else can be tested end to end.
-That makes **squash, force-push and PR-from-`dev` all wrong**, and
+That makes **rewriting `dev` wrong** — no squash, no force-push, no rebase — and
 `/design-docs:finalize` in particular: it soft-resets to the merge base and
 pushes, which on an in-sync `dev` means force-pushing a branch other repositories'
-CI is pinned to. The finalization is the `dev` -> `main` promotion instead.
+CI is pinned to. A **`dev` → `main` PR is the intended finalization**, not a
+prohibited one; GitHub squashes at merge without rewriting the branch first.
 
 Load before linking a dependency, cutting a release, **finalizing or promoting a
 branch**, or editing `.github/workflows/**`. **Currently nothing is linked and there are no

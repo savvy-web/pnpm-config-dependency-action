@@ -673,3 +673,58 @@ describe("generatePRBody — withheld auto-merge", () => {
 			expect(body).not.toContain("Auto-merge was withheld");
 		}));
 });
+
+describe("generateSummary — peer issues", () => {
+	const unmet = {
+		importer: ".",
+		dependency: "react",
+		wanted: "^18.3.1",
+		found: "17.0.2",
+		optional: false,
+		parents: ["react-dom@18.3.1"],
+	};
+
+	// The job summary is a THIRD sink, alongside the run log and the PR body.
+	// It had been left out: a maintainer reading only the summary saw a run that
+	// looked clean while the PR body reported unsatisfied peers.
+	it("renders unsatisfied peers in the job summary", () =>
+		Effect.runPromise(
+			Effect.gen(function* () {
+				const report = yield* Report;
+				return report.generateSummary([], [], null, false, [], [unmet], undefined);
+			}).pipe(Effect.provide(makeReportLayer(emptyPullRequestState()))),
+		).then((summary) => {
+			expect(summary).toContain("Peer Dependencies");
+			expect(summary).toContain("react");
+			expect(summary).toContain("react-dom@18.3.1");
+		}));
+
+	it("states a withheld auto-merge in the job summary", () =>
+		Effect.runPromise(
+			Effect.gen(function* () {
+				const report = yield* Report;
+				return report.generateSummary([], [], null, false, [], [], {
+					withheld: true,
+					reason: "unverified",
+					unverifiedReasons: ["unresolvedEdge"],
+				});
+			}).pipe(Effect.provide(makeReportLayer(emptyPullRequestState()))),
+		).then((summary) => {
+			expect(summary).toContain("Auto-merge was withheld");
+			expect(summary).toContain("unresolvedEdge");
+		}));
+
+	it("says nothing about peers on a clean, ungated run", () =>
+		Effect.runPromise(
+			Effect.gen(function* () {
+				const report = yield* Report;
+				return report.generateSummary([], [], null, false, [], [], {
+					withheld: false,
+					reason: "proven-clean",
+					unverifiedReasons: [],
+				});
+			}).pipe(Effect.provide(makeReportLayer(emptyPullRequestState()))),
+		).then((summary) => {
+			expect(summary).not.toContain("Peer Dependencies");
+		}));
+});

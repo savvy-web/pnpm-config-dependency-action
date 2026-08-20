@@ -57,6 +57,8 @@ export class Report extends Context.Service<
 			pr: PullRequestResult | null,
 			dryRun: boolean,
 			deltas?: ReadonlyArray<CatalogDelta>,
+			peerIssues?: ReadonlyArray<PeerIssue>,
+			peerGate?: PeerGateNote,
 		) => string;
 		readonly generateCommitMessage: (updates: ReadonlyArray<DependencyUpdateResult>) => string;
 	}
@@ -370,6 +372,8 @@ const generateSummaryImpl = (
 	pr: PullRequestResult | null,
 	dryRun: boolean,
 	deltas: ReadonlyArray<CatalogDelta> = [],
+	peerIssues: ReadonlyArray<PeerIssue> = [],
+	peerGate?: PeerGateNote,
 ): string => {
 	const { heading, table, code, details, codeBlock, list, link } = GitHubMarkdown;
 	const sections: string[] = [];
@@ -384,6 +388,37 @@ const generateSummaryImpl = (
 		stats.push(`${bold("Pull request:")} ${link(`#${pr.number}`, pr.url)}`);
 	}
 	sections.push(list(stats));
+
+	// Peer dependencies - the job summary is a THIRD sink alongside the run log
+	// and the PR body, and was initially left out of the peer work: a maintainer
+	// reading only the summary saw a run that looked clean while the pull request
+	// reported unsatisfied peers. Rendered on the same conditions as the PR body,
+	// including a withholding that has no rows behind it.
+	if (peerIssues.length > 0 || peerGate?.withheld === true) {
+		sections.push(heading("Peer Dependencies", 3));
+		if (peerGate?.withheld === true) {
+			const detail =
+				peerGate.unverifiedReasons.length > 0
+					? `${peerGate.reason} (${peerGate.unverifiedReasons.join(", ")})`
+					: peerGate.reason;
+			sections.push(`${bold("Auto-merge was withheld:")} ${detail}`);
+		}
+		if (peerIssues.length > 0) {
+			sections.push(
+				table(
+					["Package", "Importer", "Wanted", "Found", "Wanted by", "Required"],
+					peerIssues.map((issue) => [
+						issue.dependency,
+						issue.importer,
+						issue.wanted,
+						issue.found ?? "\u2014 not installed",
+						issue.parents.join(" -> "),
+						issue.optional ? "no" : "yes",
+					]),
+				),
+			);
+		}
+	}
 
 	// Updated dependencies - grouped by package
 	sections.push(heading("Updated Dependencies", 3));

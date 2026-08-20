@@ -30,6 +30,9 @@ jobs:
   gate:
     name: Open PR?
     runs-on: ubuntu-latest
+    # Least privilege: the gate only runs `gh pr list`, which needs to read the
+    # repository and its pull requests and nothing else. Deliberately narrower
+    # than the update job below, which needs write on all three.
     permissions:
       contents: read
       pull-requests: read

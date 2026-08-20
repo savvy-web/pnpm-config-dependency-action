@@ -85,13 +85,20 @@ workspace, with real config-dependency plugins, opening a real PR — is:
 A feature branch cannot be tested that way, because nothing consumes it. That is
 why the work lives on `dev` rather than arriving there finished.
 
-**Therefore: never squash, force-push, or open a PR from `dev`.** It is a shared
-branch that consumers actively run. In particular
+**Therefore: never rewrite `dev` — no squash, no force-push, no rebase.** It is
+a shared branch that other repositories' CI actively runs, so rewriting it
+changes code under a running consumer. In particular
 **`/design-docs:finalize` is the wrong workflow here** — it soft-resets to the
 merge base, recommits, and pushes, which on an in-sync `dev` requires a force
-push to a branch other people's CI is pinned to. Its own preflight refuses when
-the current branch is `dev`; if it ever does not, stop anyway. The finalization
-for this repo is the **`dev` → `main` promotion** below, not a squashed PR.
+push. Its own preflight refuses when the current branch is `dev`; if it ever
+does not, stop anyway.
+
+**A `dev` → `main` PR is the exception, and is the intended path** — it is how
+this work finalizes, whether opened by hand or by `promote-deps-to-main.yml`
+(below). What is prohibited is an *ad hoc feature* PR cut from `dev` to
+somewhere else, and any history rewrite. Squashing happens at **merge**, by
+GitHub, which collapses the branch without rewriting it first — which is why a
+finalize-style squash step is redundant here as well as unsafe.
 
 Two further consequences worth stating, because both have bitten:
 
