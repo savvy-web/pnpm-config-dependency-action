@@ -638,3 +638,38 @@ describe("generatePRBody — peer issues", () => {
 		}),
 	);
 });
+
+describe("generatePRBody — withheld auto-merge", () => {
+	// The failure this exists to prevent, observed in a real run: the gate
+	// withheld auto-merge on a report with ZERO rows, and the pull request said
+	// nothing at all. A reviewer saw a PR that had simply not auto-merged.
+	it("explains a withholding that has no peer rows to show", () =>
+		Effect.runPromise(
+			Effect.gen(function* () {
+				const report = yield* Report;
+				return report.generatePRBody([], [], [], [], {
+					withheld: true,
+					reason: "unverified",
+					unverifiedReasons: ["unresolvedEdge"],
+				});
+			}).pipe(Effect.provide(makeReportLayer(emptyPullRequestState()))),
+		).then((body) => {
+			expect(body).toContain("Auto-merge was withheld");
+			expect(body).toContain("unresolvedEdge");
+			expect(body).toContain("No unsatisfied peers were found");
+		}));
+
+	it("says nothing when the gate did not withhold", () =>
+		Effect.runPromise(
+			Effect.gen(function* () {
+				const report = yield* Report;
+				return report.generatePRBody([], [], [], [], {
+					withheld: false,
+					reason: "proven-clean",
+					unverifiedReasons: [],
+				});
+			}).pipe(Effect.provide(makeReportLayer(emptyPullRequestState()))),
+		).then((body) => {
+			expect(body).not.toContain("Auto-merge was withheld");
+		}));
+});

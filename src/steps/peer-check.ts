@@ -46,6 +46,17 @@ export interface PeerCheckStepResult {
 	 * actually used.
 	 */
 	readonly requiredCount: number;
+	/**
+	 * The specific reasons the report could not be verified, verbatim from
+	 * `PeerCheck`.
+	 *
+	 * Surfaced separately from `decision.reason` because the gate's verdict
+	 * (`"unverified"`) is not diagnosable on its own: a real run withheld
+	 * auto-merge on a report with ZERO rows, and the log said only
+	 * "(unverified)", which reads as "there are peer problems" when it means
+	 * "I could not tell". The reader needs the reason, not the verdict.
+	 */
+	readonly unverifiedReasons: ReadonlyArray<string>;
 	readonly decision: PeerGateDecision;
 }
 
@@ -65,14 +76,24 @@ export const peerCheckStep = (
 	Effect.gen(function* () {
 		if (mode === "false") {
 			yield* Effect.logInfo("Step: peer check — SKIPPED: check-peers is false");
-			return { issues: [], requiredCount: 0, decision: decidePeerGate(mode, NOT_EXAMINED) };
+			return {
+				issues: [],
+				requiredCount: 0,
+				unverifiedReasons: NOT_EXAMINED.unverified,
+				decision: decidePeerGate(mode, NOT_EXAMINED),
+			};
 		}
 
 		if (lockfile === null) {
 			yield* Effect.logWarning(
 				`Step: peer check — no lockfile snapshot at ${workspaceRoot}; nothing could be examined`,
 			);
-			return { issues: [], requiredCount: 0, decision: decidePeerGate(mode, NOT_EXAMINED) };
+			return {
+				issues: [],
+				requiredCount: 0,
+				unverifiedReasons: NOT_EXAMINED.unverified,
+				decision: decidePeerGate(mode, NOT_EXAMINED),
+			};
 		}
 
 		const catalogs = yield* WorkspaceCatalogs;
@@ -110,9 +131,14 @@ export const peerCheckStep = (
 			requiredCount: report.required.length,
 		});
 
+		// Name the reasons, not just the verdict: "(unverified)" beside "0 issue(s)"
+		// reads as a contradiction unless the reader is told what could not be
+		// checked.
+		const why =
+			decision.reason === "unverified" ? `${decision.reason}: ${report.unverified.join(", ")}` : decision.reason;
 		yield* Effect.logInfo(
 			`Step: peer check — ${issues.length} issue(s), ${report.required.length} required; ` +
-				`${decision.withhold ? "withholding auto-merge" : "not gating"} (${decision.reason})`,
+				`${decision.withhold ? "withholding auto-merge" : "not gating"} (${why})`,
 		);
 		for (const issue of issues) {
 			yield* Effect.logDebug(
@@ -120,5 +146,5 @@ export const peerCheckStep = (
 			);
 		}
 
-		return { issues, requiredCount: report.required.length, decision };
+		return { issues, requiredCount: report.required.length, unverifiedReasons: report.unverified, decision };
 	});

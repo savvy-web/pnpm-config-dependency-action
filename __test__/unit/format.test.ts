@@ -92,7 +92,7 @@ const baseResult = {
 	isPnpm: true,
 	customCommandsConfigured: true,
 	changesetsSkip: null,
-	peers: { issues: 0, required: 0, withheld: false, reason: "proven-clean" as const },
+	peers: { issues: 0, required: 0, withheld: false, reason: "proven-clean" as const, unverifiedReasons: [] },
 };
 
 describe("resultLines", () => {
@@ -194,7 +194,7 @@ describe("resultLines — peer check", () => {
 	it("names the withholding and its reason", () => {
 		const lines = resultLines({
 			...baseResult,
-			peers: { issues: 3, required: 2, withheld: true, reason: "required-unsatisfied" },
+			peers: { issues: 3, required: 2, withheld: true, reason: "required-unsatisfied", unverifiedReasons: [] },
 		});
 		const text = lines.join("\n");
 		expect(text).toContain("2 required");
@@ -207,9 +207,11 @@ describe("resultLines — peer check", () => {
 	it("explains a withholding that has zero rows", () => {
 		const lines = resultLines({
 			...baseResult,
-			peers: { issues: 0, required: 0, withheld: true, reason: "unverified" },
+			peers: { issues: 0, required: 0, withheld: true, reason: "unverified", unverifiedReasons: ["unresolvedEdge"] },
 		});
-		expect(lines.join("\n")).toContain("unverified");
+		// The reason, not just the verdict: a real run printed "(unverified)"
+		// beside "0 issue(s)" and the reader could not tell what was unchecked.
+		expect(lines.join("\n")).toContain("unresolvedEdge");
 		expect(lines.join("\n")).toContain("auto-merge withheld");
 	});
 });

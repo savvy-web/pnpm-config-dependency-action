@@ -79,6 +79,15 @@ describe("peerCheckStep", () => {
 		expect(result.decision.reason).toBe("unverified");
 	});
 
+	// A gate that withholds must say WHY in terms the reader can act on.
+	// "(unverified)" alone sent a real run's reader looking for peer problems
+	// that did not exist -- the report had zero rows and withheld anyway.
+	it("names the specific unverified reasons, not just the verdict", async () => {
+		const result = await run("no-auto-merge", lockfile, rulesFail);
+		expect(result.decision.reason).toBe("unverified");
+		expect(result.unverifiedReasons).toContain("peerRulesNotApplied");
+	});
+
 	// No lockfile means nothing was examined. Reporting that as clean would be
 	// the silent pass in its purest form.
 	it("fails closed when there is no lockfile to check", async () => {

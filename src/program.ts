@@ -446,6 +446,7 @@ export const innerProgram = (
 									required: peerCheckResult.requiredCount,
 									withheld: peerCheckResult.decision.withhold,
 									reason: peerCheckResult.decision.reason,
+									unverifiedReasons: peerCheckResult.unverifiedReasons,
 								};
 
 					// ── commit and pull request ─────────────────────────────────────
@@ -459,6 +460,11 @@ export const innerProgram = (
 						changesets: changesetFiles,
 						deltas: configDeltas,
 						peerIssues,
+						peerGate: {
+							withheld: withholdAutoMerge,
+							reason: peerCheckResult.decision.reason,
+							unverifiedReasons: peerCheckResult.unverifiedReasons,
+						},
 						changedFileCount: changedEntries.length,
 						workspaceRoot: detected.root,
 						dryRun,

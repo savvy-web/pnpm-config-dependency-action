@@ -178,6 +178,8 @@ export interface PeerRunSummary {
 	readonly required: number;
 	readonly withheld: boolean;
 	readonly reason: PeerGateReason;
+	/** The specific `unverified` reasons, when that is why the gate fired. */
+	readonly unverifiedReasons: ReadonlyArray<string>;
 }
 
 /**
@@ -207,7 +209,13 @@ export const resultLines = (result: RunResult): ReadonlyArray<string> => {
 	// the step itself; repeating it here would be a second rendering of one fact.
 	if (result.peers !== null && (result.peers.issues > 0 || result.peers.withheld)) {
 		const counts = `${result.peers.issues} issue(s), ${result.peers.required} required`;
-		const gate = result.peers.withheld ? ` — auto-merge withheld (${result.peers.reason})` : "";
+		// Name the reasons rather than the verdict: "auto-merge withheld
+		// (unverified)" beside "0 issue(s)" reads as a contradiction.
+		const why =
+			result.peers.reason === "unverified" && result.peers.unverifiedReasons.length > 0
+				? `${result.peers.reason}: ${result.peers.unverifiedReasons.join(", ")}`
+				: result.peers.reason;
+		const gate = result.peers.withheld ? ` — auto-merge withheld (${why})` : "";
 		lines.push(`  peers     ${counts}${gate}`);
 	}
 

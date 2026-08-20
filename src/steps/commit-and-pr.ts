@@ -29,6 +29,7 @@ import type {
 	PullRequestResult,
 } from "../schema/domain.js";
 import { BranchManager } from "../services/branch.js";
+import type { PeerGateNote } from "../services/report.js";
 import { Report } from "../services/report.js";
 
 /** Everything the commit-and-PR step needs, gathered rather than passed loose. */
@@ -40,6 +41,7 @@ export interface CommitAndPrParams {
 	readonly changesets: ReadonlyArray<ChangesetFile>;
 	readonly deltas: ReadonlyArray<CatalogDelta>;
 	readonly peerIssues: ReadonlyArray<PeerIssue>;
+	readonly peerGate: PeerGateNote;
 	readonly changedFileCount: number;
 	readonly workspaceRoot: string;
 	readonly dryRun: boolean;
@@ -86,6 +88,7 @@ export const commitAndPrStep = (
 				params.autoMerge || undefined,
 				params.deltas,
 				params.peerIssues,
+				params.peerGate,
 			)
 			.pipe(
 				Effect.catch((error) =>
