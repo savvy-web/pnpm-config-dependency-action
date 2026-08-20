@@ -16,7 +16,13 @@ import { GitHubMarkdown } from "@effected/github-actions";
 import { PrBody } from "@savvy-web/silk-effects";
 import { Context, Effect, Layer } from "effect";
 
-import type { CatalogDelta, ChangesetFile, DependencyUpdateResult, PullRequestResult } from "../schema/domain.js";
+import type {
+	CatalogDelta,
+	ChangesetFile,
+	DependencyUpdateResult,
+	PeerIssue,
+	PullRequestResult,
+} from "../schema/domain.js";
 import { resolveSignoff } from "../utils/commit-signoff.js";
 import { buildUpdateSubject } from "../utils/commit-subject.js";
 import { bold, rule } from "../utils/markdown.js";
@@ -35,11 +41,15 @@ export class Report extends Context.Service<
 			changesets: ReadonlyArray<ChangesetFile>,
 			autoMerge?: "merge" | "squash" | "rebase",
 			deltas?: ReadonlyArray<CatalogDelta>,
+			peerIssues?: ReadonlyArray<PeerIssue>,
+			peerGate?: PeerGateNote,
 		) => Effect.Effect<PullRequestResult, GitHubError, Repo>;
 		readonly generatePRBody: (
 			updates: ReadonlyArray<DependencyUpdateResult>,
 			changesets: ReadonlyArray<ChangesetFile>,
 			deltas?: ReadonlyArray<CatalogDelta>,
+			peerIssues?: ReadonlyArray<PeerIssue>,
+			peerGate?: PeerGateNote,
 		) => string;
 		readonly generateSummary: (
 			updates: ReadonlyArray<DependencyUpdateResult>,
@@ -47,6 +57,8 @@ export class Report extends Context.Service<
 			pr: PullRequestResult | null,
 			dryRun: boolean,
 			deltas?: ReadonlyArray<CatalogDelta>,
+			peerIssues?: ReadonlyArray<PeerIssue>,
+			peerGate?: PeerGateNote,
 		) => string;
 		readonly generateCommitMessage: (updates: ReadonlyArray<DependencyUpdateResult>) => string;
 	}
@@ -75,8 +87,19 @@ export class Report extends Context.Service<
 			const pullRequest = yield* PullRequestTag;
 			const signoff = yield* resolveSignoff();
 			return {
-				createOrUpdatePR: (branch, base, updates, changesets, autoMerge, deltas) =>
-					createOrUpdatePRImpl(pullRequest, signoff, branch, base, updates, changesets, autoMerge, deltas),
+				createOrUpdatePR: (branch, base, updates, changesets, autoMerge, deltas, peerIssues, peerGate) =>
+					createOrUpdatePRImpl(
+						pullRequest,
+						signoff,
+						branch,
+						base,
+						updates,
+						changesets,
+						autoMerge,
+						deltas,
+						peerIssues,
+						peerGate,
+					),
 				generatePRBody: generatePRBodyImpl,
 				generateSummary: generateSummaryImpl,
 				generateCommitMessage: (updates) => generateCommitMessageImpl(updates, signoff),
@@ -112,6 +135,8 @@ const createOrUpdatePRImpl = (
 	changesets: ReadonlyArray<ChangesetFile>,
 	autoMerge?: "merge" | "squash" | "rebase",
 	deltas?: ReadonlyArray<CatalogDelta>,
+	peerIssues?: ReadonlyArray<PeerIssue>,
+	peerGate?: PeerGateNote,
 ): Effect.Effect<PullRequestResult, GitHubError, Repo> =>
 	Effect.gen(function* () {
 		const title = buildUpdateSubject(updates);
@@ -143,7 +168,7 @@ const createOrUpdatePRImpl = (
 			// layer — this fence is a *proposal* for the squash commit, so a
 			// reviewer comparing it against the commit must not find two authors.
 			signoff,
-			summary: generatePRBodyImpl(updates, changesets, deltas),
+			summary: generatePRBodyImpl(updates, changesets, deltas, peerIssues, peerGate),
 			priorBody,
 		});
 		const body = PrBody.ManagedPrBody.upsert(priorBody, managed);
@@ -195,10 +220,26 @@ ${signoff}`;
 /**
  * Generate PR body with dependency changes (Dependabot-style formatting).
  */
+/**
+ * Why auto-merge was withheld, rendered into the PR body.
+ *
+ * Exists because the failure it prevents actually happened: a run withheld
+ * auto-merge on a report with **zero** peer rows, and the pull request carried
+ * no explanation at all — a reviewer saw a PR that simply had not auto-merged,
+ * with nothing in it to say why or whether that was intended.
+ */
+export interface PeerGateNote {
+	readonly withheld: boolean;
+	readonly reason: string;
+	readonly unverifiedReasons: ReadonlyArray<string>;
+}
+
 const generatePRBodyImpl = (
 	updates: ReadonlyArray<DependencyUpdateResult>,
 	changesets: ReadonlyArray<ChangesetFile>,
 	deltas: ReadonlyArray<CatalogDelta> = [],
+	peerIssues: ReadonlyArray<PeerIssue> = [],
+	peerGate?: PeerGateNote,
 ): string => {
 	// `GitHubMarkdown`'s statics are self-contained (no `this`), so destructuring
 	// is safe. `bold`/`rule` come from `utils/markdown.js` — the two builders the
@@ -229,6 +270,48 @@ const generatePRBodyImpl = (
 			u.to,
 		]);
 		sections.push(table(["Dependency", "Type", "Action", "From", "To"], rows));
+	}
+
+	// A withheld gate is reported even when there are NO rows, because that is
+	// exactly the case a reviewer cannot otherwise explain: the PR simply did
+	// not auto-merge and the body said nothing.
+	if (peerGate?.withheld === true) {
+		sections.push(heading("Peer Dependencies", 3));
+		const detail =
+			peerGate.unverifiedReasons.length > 0
+				? `${peerGate.reason} (${peerGate.unverifiedReasons.join(", ")})`
+				: peerGate.reason;
+		sections.push(
+			peerIssues.length === 0
+				? `Auto-merge was withheld: ${detail}. No unsatisfied peers were found, but the report could not be confirmed complete, so this pull request was not merged automatically.`
+				: `Auto-merge was withheld: ${detail}.`,
+		);
+	}
+
+	// Peer Dependencies - only when there is something to report. An empty
+	// "no peer issues" section on every PR trains reviewers to skim past the
+	// place the real finding will eventually appear.
+	if (peerIssues.length > 0) {
+		if (peerGate?.withheld !== true) sections.push(heading("Peer Dependencies", 3));
+		sections.push(
+			table(
+				["Package", "Importer", "Wanted", "Found", "Wanted by", "Required"],
+				// Plain cells, matching the dependency tables above rather than
+				// introducing a second linking convention in one document.
+				peerIssues.map((issue) => [
+					issue.dependency,
+					issue.importer,
+					issue.wanted,
+					// `found: null` is the MISSING case. Rendering the raw null into
+					// someone else's pull request would be this modelling decision
+					// leaking out as a defect. `\u2014` is what the tables above
+					// already use for an absent version.
+					issue.found ?? "\u2014 not installed",
+					issue.parents.join(" -> "),
+					issue.optional ? "no" : "yes",
+				]),
+			),
+		);
 	}
 
 	// Catalog Changes - on a compat-catalog plugin bump this table is the actual
@@ -289,6 +372,8 @@ const generateSummaryImpl = (
 	pr: PullRequestResult | null,
 	dryRun: boolean,
 	deltas: ReadonlyArray<CatalogDelta> = [],
+	peerIssues: ReadonlyArray<PeerIssue> = [],
+	peerGate?: PeerGateNote,
 ): string => {
 	const { heading, table, code, details, codeBlock, list, link } = GitHubMarkdown;
 	const sections: string[] = [];
@@ -303,6 +388,37 @@ const generateSummaryImpl = (
 		stats.push(`${bold("Pull request:")} ${link(`#${pr.number}`, pr.url)}`);
 	}
 	sections.push(list(stats));
+
+	// Peer dependencies - the job summary is a THIRD sink alongside the run log
+	// and the PR body, and was initially left out of the peer work: a maintainer
+	// reading only the summary saw a run that looked clean while the pull request
+	// reported unsatisfied peers. Rendered on the same conditions as the PR body,
+	// including a withholding that has no rows behind it.
+	if (peerIssues.length > 0 || peerGate?.withheld === true) {
+		sections.push(heading("Peer Dependencies", 3));
+		if (peerGate?.withheld === true) {
+			const detail =
+				peerGate.unverifiedReasons.length > 0
+					? `${peerGate.reason} (${peerGate.unverifiedReasons.join(", ")})`
+					: peerGate.reason;
+			sections.push(`${bold("Auto-merge was withheld:")} ${detail}`);
+		}
+		if (peerIssues.length > 0) {
+			sections.push(
+				table(
+					["Package", "Importer", "Wanted", "Found", "Wanted by", "Required"],
+					peerIssues.map((issue) => [
+						issue.dependency,
+						issue.importer,
+						issue.wanted,
+						issue.found ?? "\u2014 not installed",
+						issue.parents.join(" -> "),
+						issue.optional ? "no" : "yes",
+					]),
+				),
+			);
+		}
+	}
 
 	// Updated dependencies - grouped by package
 	sections.push(heading("Updated Dependencies", 3));

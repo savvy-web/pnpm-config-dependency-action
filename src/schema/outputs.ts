@@ -45,7 +45,7 @@ export type OutputsModel = Readonly<Record<OutputName, string>>;
  * than a new concept.
  */
 export const emptyRunResult: RunResultDocument = {
-	schemaVersion: 1,
+	schemaVersion: 2,
 	hasChanges: false,
 	dryRun: false,
 	packageManager: null,
@@ -54,6 +54,7 @@ export const emptyRunResult: RunResultDocument = {
 	targetBranch: "",
 	updates: [],
 	catalogDeltas: [],
+	peerIssues: [],
 	lockfileChanges: [],
 	changesets: [],
 	pullRequest: null,

@@ -17,7 +17,7 @@ implementation-plans: []
 [Back to index](./_index.md)
 
 **Framework:** Vitest with v8 coverage, forks pool for Effect-TS compatibility.
-Current suite: **599 tests across 42 files, all passing** (verified by
+Current suite: **634 tests across 44 files, all passing** (verified by
 `pnpm vitest run`, not carried forward from this document's previous figure).
 
 **Accounting for the delta from the 581 this document used to state** — and the
@@ -29,7 +29,8 @@ answer is not "it drifted", which is what it looks like:
 | **581** | this file at `f55fab6` | **never measured — this figure was wrong when it was written** |
 | 588 | the tree at `f55fab6`, and at the 4.6.0 release commit | `pnpm vitest run`, 40 files |
 | 589 | with `unit/layers/app.test.ts` added | `pnpm vitest run`, 41 files |
-| 599 | now: +5 `unit/utilities/commit-signoff.test.ts`, +4 in `services/package-manager-upgrade.test.ts`, +1 in `doubles.test.ts` (two sign-off cases in `main.test.ts` were rewritten, not added) | `pnpm vitest run`, 42 files |
+| 599 | before `check-peers`: +5 `unit/utilities/commit-signoff.test.ts`, +4 in `services/package-manager-upgrade.test.ts`, +1 in `doubles.test.ts` (two sign-off cases in `main.test.ts` were rewritten, not added) | `pnpm vitest run`, 42 files |
+| **634** | now: the `check-peers` work, itemised in the paragraph below this table | `pnpm vitest run`, 44 files |
 
 **The 581 was never a real count.** `f55fab6` — the kit-wave and
 `@effected/package-json` adoption — added 8 tests and edited this file's figure
@@ -47,6 +48,14 @@ made it credible. See the note on partial reconciliation in
 *Re-derive rather than trust this table:* `pnpm vitest run` for the total, and
 `git log -p -- .claude/design/silk-update-action/08-testing.md` for when each
 figure was claimed. If those two disagree, the document is wrong, not the runner.
+
+**Accounting for 599 -> 634 (+35, +2 files)**, so the delta is explained rather
+than merely observed: +9 `unit/schema/inputs.test.ts` (the `check-peers` value
+set), +3 `unit/schema/domain.test.ts` (`PeerIssue`), +9 **new**
+`unit/utilities/peers.test.ts` (`decidePeerGate`), +5 **new**
+`unit/steps/peer-check.test.ts`, +4 `unit/format.test.ts`, +3
+`unit/services/report.test.ts`, +2 `unit/program.inner.test.ts` (the gate and its
+control).
 
 ## Layout
 
@@ -218,6 +227,19 @@ Shared helpers currently in that directory:
     in the resolved `include`), so it blocks `pnpm typecheck` at pre-commit and in
     CI rather than only under vitest. *Falsified if* the tsconfig `include`
     narrows — the suite would keep passing while enforcing nothing.
+  - **A second assertion now covers the program side**, added after the first
+    shipped-and-died instance of the guard's own third blind spot:
+    `Exclude<RequirementsOfEffect<ReturnType<typeof innerProgram>>, ActionServices>`
+    must be `never`. A service resolved in a **step body** never enters the
+    layer's input channel, so the original assertion is structurally blind to it —
+    `WorkspaceCatalogs` was built by `makeAppLayer`, provided to `ReleaseAge`, and
+    never merged into the returned layer. Reinstating that produces
+    `Type 'boolean' is not assignable to type 'WorkspaceCatalogs'`.
+    - Worth recording why the *suite* missed it as well, because it is the
+      inverse of the `ActionState` double lesson: `program.inner.test.ts` supplies
+      its own `WorkspaceCatalogs.layerTest`, so the **double was more capable than
+      production**. A fake more complete than the real thing hides precisely the
+      wiring bug it looks like it is exercising.
   - **What it does not cover:** a *broken* provide. Nothing builds the graph, so
     a layer that is wired but fails to construct still ships. See
     @./09-project-status.md for the three ways the type assertion itself can stop

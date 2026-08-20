@@ -3,6 +3,13 @@ on:
   # schedule:
   #   - cron: 0 0,6,12,18 * * 1-5
   #   - cron: 0 0 * * 0,6
+  # The base this flow cuts from is `dev` (see `source-branch` below), NOT main.
+  # A push to dev moves that base, so an already-open update PR is now stale:
+  # re-running regenerates it against the new base. The action force-resets the
+  # branch to the source SHA every run, so this is a refresh, not a rebase --
+  # there are no carried-forward commits to conflict.
+  push:
+    branches: [dev]
   workflow_dispatch:
     inputs:
       dry-run:
@@ -17,8 +24,40 @@ concurrency:
   group: silk-update-${{ github.ref }}
   cancel-in-progress: true
 jobs:
+  # Cheap guard so a push to dev only refreshes an ALREADY-open update PR.
+  # Without it every commit on dev would pay for a full install + savvy init +
+  # build + lint. Dispatch and schedule bypass it entirely.
+  gate:
+    name: Open PR?
+    runs-on: ubuntu-latest
+    # Least privilege: the gate only runs `gh pr list`, which needs to read the
+    # repository and its pull requests and nothing else. Deliberately narrower
+    # than the update job below, which needs write on all three.
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      open: ${{ steps.q.outputs.open }}
+    steps:
+      - id: q
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_BRANCH: ${{ github.event.inputs.branch || 'pnpm/config-deps' }}
+        run: |
+          count=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$HEAD_BRANCH" \
+            --state open --json number --jq 'length')
+          if [ "$count" -gt 0 ]; then
+            echo "open=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "open=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "open PRs for $HEAD_BRANCH: $count"
+
   pnpm-update:
     name: Update Config Dependencies
+    needs: gate
+    # A push only refreshes an open PR; every other trigger always runs.
+    if: ${{ github.event_name != 'push' || needs.gate.outputs.open == 'true' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write

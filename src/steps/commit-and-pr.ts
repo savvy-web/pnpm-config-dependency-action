@@ -21,8 +21,15 @@ import type { CommandFailedError, CommandOutputError } from "@effected/commands"
 import type { GitCommandError, NotARepositoryError, UnknownRefError } from "@effected/git";
 import type { GitHubError, Repo } from "@effected/github";
 import { Effect } from "effect";
-import type { CatalogDelta, ChangesetFile, DependencyUpdateResult, PullRequestResult } from "../schema/domain.js";
+import type {
+	CatalogDelta,
+	ChangesetFile,
+	DependencyUpdateResult,
+	PeerIssue,
+	PullRequestResult,
+} from "../schema/domain.js";
 import { BranchManager } from "../services/branch.js";
+import type { PeerGateNote } from "../services/report.js";
 import { Report } from "../services/report.js";
 
 /** Everything the commit-and-PR step needs, gathered rather than passed loose. */
@@ -33,6 +40,8 @@ export interface CommitAndPrParams {
 	readonly updates: ReadonlyArray<DependencyUpdateResult>;
 	readonly changesets: ReadonlyArray<ChangesetFile>;
 	readonly deltas: ReadonlyArray<CatalogDelta>;
+	readonly peerIssues: ReadonlyArray<PeerIssue>;
+	readonly peerGate: PeerGateNote;
 	readonly changedFileCount: number;
 	readonly workspaceRoot: string;
 	readonly dryRun: boolean;
@@ -78,6 +87,8 @@ export const commitAndPrStep = (
 				params.changesets,
 				params.autoMerge || undefined,
 				params.deltas,
+				params.peerIssues,
+				params.peerGate,
 			)
 			.pipe(
 				Effect.catch((error) =>

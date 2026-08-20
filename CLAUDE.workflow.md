@@ -64,10 +64,51 @@ pulls them.
 
 ### The `dev` branch convention
 
-All in-progress work lands on the long-lived **`dev`** branch, never directly on
-`main`; `main` always reflects the last released state. The shared release
-workflow (`savvy-web/.github/.github/workflows/release.yml`) has a matching `dev`
-branch — a caller normally pins `@main`.
+**`dev` IS the feature branch for this action.** Feature work is committed
+directly to the long-lived `dev` branch with ordinary commits — not to a
+short-lived branch that is later squashed into it. `main` always reflects the
+last released state. The shared release workflow
+(`savvy-web/.github/.github/workflows/release.yml`) has a matching `dev` branch —
+a caller normally pins `@main`.
+
+**The reason is the test mechanism, and it is the whole point of the
+convention.** This action is *bundled*: a consumer pinning
+`uses: savvy-web/silk-update-action@dev` executes the **committed `dist`**, not
+`node_modules`. So the only way to exercise a change end to end — against a real
+workspace, with real config-dependency plugins, opening a real PR — is:
+
+1. `pnpm build:prod` (the committed bundle is the artifact under test)
+2. commit `src` + `dist` together
+3. push to `dev`
+4. trigger the consumer's workflow and read the run
+
+A feature branch cannot be tested that way, because nothing consumes it. That is
+why the work lives on `dev` rather than arriving there finished.
+
+**Therefore: never rewrite `dev` — no squash, no force-push, no rebase.** It is
+a shared branch that other repositories' CI actively runs, so rewriting it
+changes code under a running consumer. In particular
+**`/design-docs:finalize` is the wrong workflow here** — it soft-resets to the
+merge base, recommits, and pushes, which on an in-sync `dev` requires a force
+push. Its own preflight refuses when the current branch is `dev`; if it ever
+does not, stop anyway.
+
+**A `dev` → `main` PR is the exception, and is the intended path** — it is how
+this work finalizes, whether opened by hand or by `promote-deps-to-main.yml`
+(below). What is prohibited is an *ad hoc feature* PR cut from `dev` to
+somewhere else, and any history rewrite. Squashing happens at **merge**, by
+GitHub, which collapses the branch without rewriting it first — which is why a
+finalize-style squash step is redundant here as well as unsafe.
+
+Two further consequences worth stating, because both have bitten:
+
+- **A `dist` that is stale relative to `src` is a silently wrong test.** The
+  consumer runs the bundle, so forgetting step 1 tests the previous change.
+- **A dogfood link puts an *unreleased* dependency into that bundle.** That is
+  sanctioned on `dev` (see the dogfooding section above) and is exactly how a fix
+  gets proven before release — but the bundle must be rebuilt against the
+  registry and pushed again after `--exit`, or consumers keep running code that
+  was never published.
 
 ### Testing dev-branch builds
 
@@ -76,6 +117,15 @@ Two independent switch points: `.github/workflows/silk-update.yml` here runs
 dev-branch `dist` against this repo), and `.github/workflows/release.yml` calls
 the shared workflow at `@main` (flip to `@dev`). Trigger, `gh run watch`, then
 revert once the release is cut.
+
+**A second consumer is usually the better test**, and needs no flipping:
+`savvy-web/systems` already pins `@dev` permanently. Pushing a rebuilt `dist` to
+`dev` and dispatching its `Update Silk Dependencies` workflow exercises the
+action against a real monorepo — which is how the `check-peers` gate was proven,
+across three runs that each failed differently (a missing layer provide, a
+permanently-`unverified` peer report, then a clean `not gating (proven-clean)`
+with auto-merge actually enabled on the resulting PR). None of those three was
+reachable from this repo's own suite.
 
 ### Flow: `dev` → `main` → release
 

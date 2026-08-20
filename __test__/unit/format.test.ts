@@ -92,6 +92,7 @@ const baseResult = {
 	isPnpm: true,
 	customCommandsConfigured: true,
 	changesetsSkip: null,
+	peers: { issues: 0, required: 0, withheld: false, reason: "proven-clean" as const, unverifiedReasons: [] },
 };
 
 describe("resultLines", () => {
@@ -169,5 +170,48 @@ describe("catalog tallies", () => {
 		const zero = { added: 0, updated: 0, removed: 0, kept: 0 };
 		expect(formatCatalogCounts(zero)).toBe("no changes");
 		expect(formatCatalogCountsCompact(zero)).toBe("no changes");
+	});
+});
+
+describe("resultLines — peer check", () => {
+	// Disabled must appear in the SKIPPED summary, not vanish. A step that did
+	// not run always says so; silence reads as "ran and found nothing".
+	it("reports a disabled peer check as a skip with its reason", () => {
+		const lines = resultLines({ ...baseResult, peers: null });
+		expect(lines.join("\n")).toContain("peer check");
+	});
+
+	// A proven-clean check adds NOTHING here. The step already logged its own
+	// info line, and the Result block is a summary of what is notable -- a
+	// second "everything is fine" line is noise that trains readers to skim.
+	it("says nothing about a proven-clean check", () => {
+		expect(resultLines(baseResult)).toEqual(["Result"]);
+	});
+
+	// The load-bearing one: a withheld gate must say BOTH that it withheld and
+	// why, because "auto-merge did not happen" is otherwise indistinguishable
+	// from "auto-merge was never configured".
+	it("names the withholding and its reason", () => {
+		const lines = resultLines({
+			...baseResult,
+			peers: { issues: 3, required: 2, withheld: true, reason: "required-unsatisfied", unverifiedReasons: [] },
+		});
+		const text = lines.join("\n");
+		expect(text).toContain("2 required");
+		expect(text).toContain("auto-merge withheld");
+		expect(text).toContain("required-unsatisfied");
+	});
+
+	// Zero rows and still withheld -- the arm a reader will not expect, so the
+	// line has to explain itself rather than showing "0 issues" beside a block.
+	it("explains a withholding that has zero rows", () => {
+		const lines = resultLines({
+			...baseResult,
+			peers: { issues: 0, required: 0, withheld: true, reason: "unverified", unverifiedReasons: ["unresolvedEdge"] },
+		});
+		// The reason, not just the verdict: a real run printed "(unverified)"
+		// beside "0 issue(s)" and the reader could not tell what was unchecked.
+		expect(lines.join("\n")).toContain("unresolvedEdge");
+		expect(lines.join("\n")).toContain("auto-merge withheld");
 	});
 });

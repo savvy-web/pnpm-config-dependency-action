@@ -287,6 +287,58 @@ describe("readInputs — enumerated inputs", () => {
 	});
 });
 
+describe("check-peers", () => {
+	// Opt-in by default, matching upgrade-package-manager and upgrade-runtime-*:
+	// a `warn` default would add a peer computation and a PR-body section to
+	// every consumer run nobody asked for.
+	// The default is DERIVED from auto-merge, so leaving it unset is genuinely
+	// free where there is nothing to gate, and protective where there is. A
+	// static "no-auto-merge" default would still spawn the config-dependency
+	// hook replay in every consumer's repo on every run.
+	it("defaults to false when auto-merge is not enabled", async () => {
+		const result = await readOrThrow({ dependencies: "effect" });
+		expect(result.inputs["check-peers"]).toBe("false");
+	});
+
+	it("defaults to no-auto-merge when auto-merge is enabled", async () => {
+		const result = await readOrThrow({ dependencies: "effect", "auto-merge": "squash" });
+		expect(result.inputs["check-peers"]).toBe("no-auto-merge");
+	});
+
+	// An explicit value always wins, including opting OUT on a repo that does
+	// use auto-merge.
+	it("honours an explicit false even when auto-merge is enabled", async () => {
+		const result = await readOrThrow({ dependencies: "effect", "auto-merge": "squash", "check-peers": "false" });
+		expect(result.inputs["check-peers"]).toBe("false");
+	});
+
+	it.each(["false", "warn", "no-auto-merge"])("accepts the keyword %s", async (value) => {
+		const result = await readOrThrow({ dependencies: "effect", "check-peers": value });
+		expect(result.inputs["check-peers"]).toBe(value);
+	});
+
+	// `fail` is a DEFERRED mode, not a supported one: it is the only tier that
+	// needs a second concurrent check run. Accepting it now would silently do
+	// nothing, which is worse than rejecting it.
+	it.each(["fail", "true", "yes", "No-Auto-Merge"])("rejects %s, naming the field", async (value) => {
+		const exit = await read({ dependencies: "effect", "check-peers": value });
+		expect(failedField(exit)).toBe("check-peers");
+	});
+
+	// auto-merge is legitimately dynamic in a workflow expression, so the
+	// combination must WARN rather than fail -- failing would break a valid
+	// workflow whose auto-merge resolves to "" on some events.
+	it("accepts no-auto-merge even when auto-merge is disabled", async () => {
+		const result = await readOrThrow({
+			dependencies: "effect",
+			"check-peers": "no-auto-merge",
+			"auto-merge": "",
+		});
+		expect(result.inputs["check-peers"]).toBe("no-auto-merge");
+		expect(result.inputs["auto-merge"]).toBe("");
+	});
+});
+
 describe("INPUT_NAMES", () => {
 	/**
 	 * The input names `action.yml` declares, read straight from the manifest.

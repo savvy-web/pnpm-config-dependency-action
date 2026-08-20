@@ -141,6 +141,20 @@ inputs:
       Values: merge, squash, rebase, or empty to disable.
     required: false
     default: ""
+  check-peers:
+    description: |
+      Check the installed dependency graph for unsatisfied peer dependencies
+      after the install, and report them in the PR body and job summary.
+      Values: false (skip), warn (report only, never gate), or no-auto-merge
+      (report, and withhold auto-merge when a required peer is unsatisfied, so
+      the PR still opens but cannot merge itself).
+      Left unset the default is DERIVED: no-auto-merge when auto-merge is
+      enabled, false when it is not - so a repository that does not auto-merge
+      pays nothing, and one that does is protected without opting in. An
+      explicit value always wins, including an explicit false.
+      Optional peers are always reported and never gate.
+    required: false
+    default: ""
 outputs:
   pr-number:
     description: Pull request number (if created or updated)
@@ -152,10 +166,7 @@ outputs:
     description: Whether any dependencies were updated
   result:
     description: >-
-      The complete run as a JSON document (schema: docs/schema/run-result.schema.json).
-      Always valid JSON on every exit path, including a failure — a run that did
-      nothing emits an empty-run document rather than an empty string, so it can be
-      parsed unconditionally with fromJSON() without guarding.
+      The complete run as a JSON document (schema: docs/schema/run-result.schema.json). Always valid JSON on every exit path, including a failure — a run that did nothing emits an empty-run document rather than an empty string, so it can be parsed unconditionally with fromJSON() without guarding.
 runs:
   using: node24
   pre: dist/pre.js

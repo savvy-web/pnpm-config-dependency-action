@@ -64,7 +64,7 @@ describe("initialOutputs", () => {
 		// action promises and its own schema rejects.
 		const decoded = Schema.decodeUnknownSync(RunResultDocument)(JSON.parse(initialOutputs.result));
 		expect(decoded.hasChanges).toBe(false);
-		expect(decoded.schemaVersion).toBe(1);
+		expect(decoded.schemaVersion).toBe(2);
 		expect(decoded.pullRequest).toBeNull();
 		// Null, not a placeholder: a run that ended before detection has no package
 		// manager, and a value that decodes and is false is worse than an absent one.

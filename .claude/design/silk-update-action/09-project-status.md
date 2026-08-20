@@ -85,6 +85,14 @@ composition is centralized in `src/layers/app.ts`.
   config-dependency pnpmfile hooks, combined strictest-wins, with publish times
   from `NpmRegistry.publishTimes`. Fail-open by design.
 - Peer dependency range syncing (`peer-lock` / `peer-minor`).
+- Peer-dependency health gating (`check-peers`, `PeerCheck` from
+  `@effected/workspaces` over the regenerated lockfile plus
+  `WorkspaceCatalogs.peerDependencyRules()`): reports unsatisfied peers into the
+  PR body, job summary and `result`, and under `no-auto-merge` skips the separate
+  `setAutoMerge` call so the PR still opens but cannot merge itself. Gates only on
+  a **proven-clean** report — `supported`, no unresolved importers, nothing
+  `unverified`, no required rows — because each of the other three yields an empty
+  result meaning "not examined" rather than "nothing wrong".
 - Package-manager self-upgrade (`PackageManagerUpgrade`) for pnpm, bun and npm,
   driven by `upgrade-package-manager` (`false` — the **default** — / `true` /
   `auto` / a semver range). corepack-managed managers are written hash-pinned into
@@ -313,6 +321,38 @@ installed graph for `TaggedErrorClass` returns three `@effected` packages — **
 three hits are README prose, not shipped code.** If a future advance needs that
 apparatus, build the artifact list from the graph, and confirm each hit is a real
 call site before shimming it.
+
+## A lockfile is not a package manager's effective graph
+
+The load-bearing finding behind `check-peers`, kept here rather than in the
+dogfood mailbox because it outlives the loop that produced it.
+
+**pnpm persists resolution-affecting configuration into the lockfile and
+discards reporting-affecting configuration.** `overrides` contributed by a
+config-dependency pnpmfile **are** recorded in `pnpm-lock.yaml`;
+`peerDependencyRules` appears **zero** times. That is rational from pnpm's side —
+overrides change what gets installed, rules only change what gets *said* — and it
+is exactly why a lockfile-only peer check cannot be correct without external
+input. The artifact is complete for its own purpose and incomplete for ours.
+
+The tell is in the lockfile header: `pnpmfileChecksum`. pnpm records it precisely
+*because* the lockfile is not a complete record of the hooks' effect — if it
+were, there would be nothing to invalidate against.
+
+**Falsification, and how this was nearly mis-diagnosed twice.** The first
+hypothesis was that the lockfile carried stale *pre-hook* peer data. It does not:
+`packages:` records the genuine published range and `snapshots:` records what
+actually resolved, and an entry is byte-identical between a plugin-using
+workspace and a pnpmfile-free one. The second hypothesis was that reading
+`pnpm-workspace.yaml`'s declarative `peerDependencyRules` would be enough. It is
+not — **this repository declares none**, and its 36 effective rules are all
+injected by config-dependency plugins, so a workspace-file-only read finds
+nothing here and still produces false positives. Both hypotheses were plausible,
+both were held confidently, and only measurement separated them.
+
+*Re-derive with:* `grep -c peerDependencyRules pnpm-lock.yaml` (expect 0) against
+`grep -n peerDependencyRules pnpm-workspace.yaml` (expect none) against the
+plugin bodies under `node_modules/.pnpm-config/*/pnpmfile.cjs` (expect the rules).
 
 ## Settled decisions — do not re-propose without new evidence
 

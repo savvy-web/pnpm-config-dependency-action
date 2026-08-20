@@ -59,13 +59,15 @@ pnpm vitest run --testNamePattern="buildUpdateSubject"        # by name
   imports everywhere
 - **Entry points**: `src/pre.ts`, `src/main.ts`, `src/post.ts` (derived from
   `action.config.ts` by the builder); composition in `src/program.ts`
-- **Steps**: `src/steps/` — one module per orchestration unit (15: `branch`,
+- **Steps**: `src/steps/` — one module per orchestration unit (16: `branch`,
   `changesets`, `commit-and-pr`, `config-dependencies`, `configure-status`,
   `custom-commands`, `detect-changes`, `detect-package-manager`,
-  `format-workspace`, `install`, `lockfile-snapshot`, `peer-sync`,
+  `format-workspace`, `install`, `lockfile-snapshot`, `peer-check`, `peer-sync`,
   `regular-dependencies`, `upgrade-package-manager`, `upgrade-runtimes`). Each
   declares its own result type, an explicit requirement channel, and a tagged
-  error **only if it can actually fail** — four carry `never`
+  error **only if it can actually fail** — **five** carry `never` (`peer-check`
+  is the newest; do not carry the old count of four forward without re-reading
+  the signatures)
 - **Services**: `src/services/` — `Context.Service` + `Layer`, plus stateless
   helper modules; **Layers**: `src/layers/app.ts`; **Schema**: `src/schema/`
   (singular — `domain.ts`, `inputs.ts`, `outputs.ts`); **Rendering**:
@@ -92,15 +94,24 @@ Linking/overriding a first-party dep, the `dev` -> `main` -> release flow, and
 the two workflows that clobber `dev`:
 -> @./CLAUDE.workflow.md
 
-Load before linking a dependency, cutting a release, or editing
-`.github/workflows/**`. **Currently nothing is linked and there are no
+**`dev` IS the feature branch here** — feature work is committed directly to it
+with ordinary commits, because the action is bundled and a consumer pinning
+`@dev` runs the **committed `dist`**, so nothing else can be tested end to end.
+That makes **rewriting `dev` wrong** — no squash, no force-push, no rebase — and
+`/design-docs:finalize` in particular: it soft-resets to the merge base and
+pushes, which on an in-sync `dev` means force-pushing a branch other repositories'
+CI is pinned to. A **`dev` → `main` PR is the intended finalization**, not a
+prohibited one; GitHub squashes at merge without rewriting the branch first.
+
+Load before linking a dependency, cutting a release, **finalizing or promoting a
+branch**, or editing `.github/workflows/**`. **Currently nothing is linked and there are no
 `overrides` entries** — if you were only checking that, you now have the answer
 and do not need the pointer.
 
 ## Testing
 
 - **Framework**: Vitest with v8 coverage, forks pool (Effect compatibility).
-  Current suite: **599 tests across 42 files**, measured, not carried forward.
+  Current suite: **634 tests across 44 files**, measured, not carried forward.
   **Treat a test count here as evidence and re-derive it** (`pnpm vitest run`) — a
   figure this line once carried was never a real count, having been edited by a
   plausible `+1` in the very commit that invalidated it, which is what made it
@@ -171,7 +182,17 @@ and do not need the pointer.
   change.** Its blind spots, so it is not over-trusted: it catches *missing*
   wiring, not *broken* wiring (nothing builds the graph), and a service resolved
   in a **method** rather than a layer body never reaches the requirement channel
-  at all. Depth in
+  at all. **That third blind spot has now fired in production too**, so the guard
+  has a SECOND assertion: `Exclude<InnerProgramRequirements, ActionServices>`
+  must also be `never`. `steps/peer-check.ts` resolves `WorkspaceCatalogs` in its
+  step body, `makeAppLayer` built that layer but piped it into `ReleaseAge`
+  **without merging it into the returned layer**, and the run died with
+  `Service not found: @effected/workspaces/WorkspaceCatalogs`. The layer-side
+  assertion could not see it — it checks the layer's **input** channel, and this
+  is a missing **output**. Both halves are mutation-verified; the second names
+  `WorkspaceCatalogs` when reinstated. **A service built inside `makeAppLayer` is
+  not thereby provided — check it appears in a `mergeAll`, not merely in a
+  `Layer.provide`.** Depth in
   `@./.claude/design/silk-update-action/06-effect-patterns.md`
 - **The `result` output is the whole run as JSON** (`RunResultDocument`, composed
   from the existing domain schemas rather than a parallel reporting shape),
@@ -266,6 +287,48 @@ and do not need the pointer.
   checkout (benign, and stated in the design docs rather than assumed)
 - Auto-merge requires GraphQL (no REST endpoint) and is a **separate**
   `setAutoMerge` call whose failure degrades to a warning
+- **`check-peers` gates auto-merge by NOT making that separate call.** Input is
+  `false` | `warn` | `no-auto-merge`, and its **default is DERIVED** rather than
+  static: unset resolves to `no-auto-merge` when `auto-merge` is enabled and
+  `false` when it is not. A static `no-auto-merge` default would have been a
+  no-op for the *gate* but not for the *run* — the step still spawns the
+  config-dependency hook replay as a subprocess in the consumer's repo. Deriving
+  makes "free where there is nothing to gate" literally true. An explicit value
+  always wins. **Nothing can be withheld that was never going to happen:**
+  `decidePeerGate` takes `autoMergeEnabled`, because without it the PR body told
+  reviewers "auto-merge was withheld" on repositories that had never enabled it;
+  `fail` is deliberately **rejected**, not accepted-and-ignored, because it is the
+  only tier needing a second concurrent check run. The gate predicate is
+  **not** `required > 0` — it is
+  `supported && !unresolvedImporters.length && !unverified.length && !requiredCount`,
+  because each of the other three produces an empty result meaning *"not examined"*
+  rather than *"nothing wrong"*. A mutant reading only `requiredCount` turns five
+  tests red, which is the check that this is real rather than decorative.
+  - **A lockfile alone cannot answer the question.** pnpm persists
+    *resolution*-affecting config into the lockfile and discards
+    *reporting*-affecting config: `overrides` from a pnpmfile **are** recorded,
+    `peerDependencyRules` appears **zero** times (`pnpmfileChecksum` in the
+    lockfile header is the tell — pnpm would have nothing to invalidate against if
+    the lockfile were complete). So the rules come from
+    `WorkspaceCatalogs.peerDependencyRules()`, which also replays
+    config-dependency plugins — and **this repo declares no rules of its own**, so
+    a workspace-file-only read would find nothing here and still false-positive.
+  - **Presence of the option is the assertion, not its contents.** Omitting
+    `peerDependencyRules` means "nobody looked" and always reports
+    `peerRulesNotApplied`; passing `NoPeerDependencyRules` asserts "I looked, there
+    are none". A failed lookup therefore degrades to **omitting**, never to the
+    empty set — the empty set is a claim we would have no basis to make.
+  - Stated limits, not implied coverage: optional peers never gate;
+    a pnpm workspace package's **own** peer declarations are undetectable (absent
+    from the lockfile, and `pnpm peers check` does not report them either); and
+    `ignoreMissing`/`allowAny` are **not consumed upstream and fail closed** — a
+    non-empty either axis makes the report `unverified`, so **the gate stops
+    firing positively rather than answering wrongly**. Neither of this repo's two
+    config-dependency plugins sets either axis today (verified from
+    `peerDependencyRules()` output, not from the plugin sources:
+    `allowedVersions` 36, both axes `[]`), so the gate is unaffected — but a
+    plugin that starts setting one silently turns the gate into a permanent
+    abstain, and that is deliberate, not a regression to chase
 - **`@effected/package-json` is adopted for `PackageJsonFile.modify` ONLY** —
   a declared runtime dependency wired as `PackageJsonFile.layer` and
   consumed by both `RuntimeUpgrade` and `PackageManagerUpgrade`. This line used to

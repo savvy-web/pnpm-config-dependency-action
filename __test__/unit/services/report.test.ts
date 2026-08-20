@@ -585,3 +585,146 @@ describe("generateSummary", () => {
 		}),
 	);
 });
+
+describe("generatePRBody — peer issues", () => {
+	const unmet = {
+		importer: "packages/app",
+		dependency: "react",
+		wanted: "^18.3.1",
+		found: "17.0.2",
+		optional: false,
+		parents: ["react-dom@18.3.1"],
+	};
+
+	it.effect("renders unsatisfied peers as a table naming who wanted them", () =>
+		Effect.gen(function* () {
+			const body = yield* Effect.gen(function* () {
+				const report = yield* Report;
+				return report.generatePRBody([], [], [], [unmet]);
+			}).pipe(Effect.provide(makeReportLayer(emptyPullRequestState())));
+
+			expect(body).toContain("Peer Dependencies");
+			expect(body).toContain("react");
+			expect(body).toContain("^18.3.1");
+			expect(body).toContain("17.0.2");
+			// The parent chain is the actionable half: "react is wrong" is not a
+			// bug report, "react-dom wants a react you do not have" is.
+			expect(body).toContain("react-dom@18.3.1");
+		}),
+	);
+
+	// `found: null` IS the missing case. Rendering a raw null into someone
+	// else's pull request is the visible half of that modelling decision.
+	it.effect("renders a missing peer without printing a null", () =>
+		Effect.gen(function* () {
+			const body = yield* Effect.gen(function* () {
+				const report = yield* Report;
+				return report.generatePRBody([], [], [], [{ ...unmet, found: null }]);
+			}).pipe(Effect.provide(makeReportLayer(emptyPullRequestState())));
+
+			expect(body).toContain("react");
+			expect(body).not.toContain("null");
+		}),
+	);
+
+	it.effect("omits the section entirely when there are no peer issues", () =>
+		Effect.gen(function* () {
+			const body = yield* Effect.gen(function* () {
+				const report = yield* Report;
+				return report.generatePRBody([], [], [], []);
+			}).pipe(Effect.provide(makeReportLayer(emptyPullRequestState())));
+
+			expect(body).not.toContain("Peer Dependencies");
+		}),
+	);
+});
+
+describe("generatePRBody — withheld auto-merge", () => {
+	// The failure this exists to prevent, observed in a real run: the gate
+	// withheld auto-merge on a report with ZERO rows, and the pull request said
+	// nothing at all. A reviewer saw a PR that had simply not auto-merged.
+	it("explains a withholding that has no peer rows to show", () =>
+		Effect.runPromise(
+			Effect.gen(function* () {
+				const report = yield* Report;
+				return report.generatePRBody([], [], [], [], {
+					withheld: true,
+					reason: "unverified",
+					unverifiedReasons: ["unresolvedEdge"],
+				});
+			}).pipe(Effect.provide(makeReportLayer(emptyPullRequestState()))),
+		).then((body) => {
+			expect(body).toContain("Auto-merge was withheld");
+			expect(body).toContain("unresolvedEdge");
+			expect(body).toContain("No unsatisfied peers were found");
+		}));
+
+	it("says nothing when the gate did not withhold", () =>
+		Effect.runPromise(
+			Effect.gen(function* () {
+				const report = yield* Report;
+				return report.generatePRBody([], [], [], [], {
+					withheld: false,
+					reason: "proven-clean",
+					unverifiedReasons: [],
+				});
+			}).pipe(Effect.provide(makeReportLayer(emptyPullRequestState()))),
+		).then((body) => {
+			expect(body).not.toContain("Auto-merge was withheld");
+		}));
+});
+
+describe("generateSummary — peer issues", () => {
+	const unmet = {
+		importer: ".",
+		dependency: "react",
+		wanted: "^18.3.1",
+		found: "17.0.2",
+		optional: false,
+		parents: ["react-dom@18.3.1"],
+	};
+
+	// The job summary is a THIRD sink, alongside the run log and the PR body.
+	// It had been left out: a maintainer reading only the summary saw a run that
+	// looked clean while the PR body reported unsatisfied peers.
+	it("renders unsatisfied peers in the job summary", () =>
+		Effect.runPromise(
+			Effect.gen(function* () {
+				const report = yield* Report;
+				return report.generateSummary([], [], null, false, [], [unmet], undefined);
+			}).pipe(Effect.provide(makeReportLayer(emptyPullRequestState()))),
+		).then((summary) => {
+			expect(summary).toContain("Peer Dependencies");
+			expect(summary).toContain("react");
+			expect(summary).toContain("react-dom@18.3.1");
+		}));
+
+	it("states a withheld auto-merge in the job summary", () =>
+		Effect.runPromise(
+			Effect.gen(function* () {
+				const report = yield* Report;
+				return report.generateSummary([], [], null, false, [], [], {
+					withheld: true,
+					reason: "unverified",
+					unverifiedReasons: ["unresolvedEdge"],
+				});
+			}).pipe(Effect.provide(makeReportLayer(emptyPullRequestState()))),
+		).then((summary) => {
+			expect(summary).toContain("Auto-merge was withheld");
+			expect(summary).toContain("unresolvedEdge");
+		}));
+
+	it("says nothing about peers on a clean, ungated run", () =>
+		Effect.runPromise(
+			Effect.gen(function* () {
+				const report = yield* Report;
+				return report.generateSummary([], [], null, false, [], [], {
+					withheld: false,
+					reason: "proven-clean",
+					unverifiedReasons: [],
+				});
+			}).pipe(Effect.provide(makeReportLayer(emptyPullRequestState()))),
+		).then((summary) => {
+			expect(summary).not.toContain("Peer Dependencies");
+		}));
+});

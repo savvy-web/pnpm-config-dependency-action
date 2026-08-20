@@ -36,7 +36,7 @@ src/
 │   ├── detect-package-manager.ts   #   result type, an explicit requirement channel, and
 │   ├── configure-status.ts         #   pins core.fileMode=false on the checkout, once
 │   ├── branch.ts                   #   a tagged error ONLY if it can actually fail
-│   ├── lockfile-snapshot.ts        #   (four carry `never`)
+│   ├── lockfile-snapshot.ts        #   (five carry `never`)
 │   ├── upgrade-package-manager.ts
 │   ├── upgrade-runtimes.ts
 │   ├── config-dependencies.ts      #   owns the pnpm/bun/npm dispatch
@@ -46,6 +46,7 @@ src/
 │   ├── format-workspace.ts
 │   ├── custom-commands.ts          #   runCommands; returns failures, does NOT conclude
 │   ├── detect-changes.ts           #   Git.status; the last I/O primitive out of program.ts
+│   ├── peer-check.ts               #   PeerCheck over the "after" lockfile; gate fails CLOSED
 │   ├── changesets.ts
 │   └── commit-and-pr.ts            #   one module: the PR must describe a commit that exists
 ├── layers/
@@ -72,6 +73,7 @@ src/
     ├── commit-subject.ts  # buildUpdateSubject (PR title / commit subject)
     ├── deps.ts            # parseConfigEntry, matchesPattern, parseSpecifier
     ├── markdown.ts        # bold, rule (the 2 builders the kit lacks), npmUrl, cleanVersion
+    ├── peers.ts           # decidePeerGate — the pure auto-merge gate decision
     ├── pnpm.ts            # detectIndent ONLY — the version parse/format pair went
     │                      #   for having no callers, corepackHashFromIntegrity
     │                      #   because the kit shipped it (#290)
