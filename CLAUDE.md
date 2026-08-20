@@ -173,7 +173,17 @@ and do not need the pointer.
   change.** Its blind spots, so it is not over-trusted: it catches *missing*
   wiring, not *broken* wiring (nothing builds the graph), and a service resolved
   in a **method** rather than a layer body never reaches the requirement channel
-  at all. Depth in
+  at all. **That third blind spot has now fired in production too**, so the guard
+  has a SECOND assertion: `Exclude<InnerProgramRequirements, ActionServices>`
+  must also be `never`. `steps/peer-check.ts` resolves `WorkspaceCatalogs` in its
+  step body, `makeAppLayer` built that layer but piped it into `ReleaseAge`
+  **without merging it into the returned layer**, and the run died with
+  `Service not found: @effected/workspaces/WorkspaceCatalogs`. The layer-side
+  assertion could not see it — it checks the layer's **input** channel, and this
+  is a missing **output**. Both halves are mutation-verified; the second names
+  `WorkspaceCatalogs` when reinstated. **A service built inside `makeAppLayer` is
+  not thereby provided — check it appears in a `mergeAll`, not merely in a
+  `Layer.provide`.** Depth in
   `@./.claude/design/silk-update-action/06-effect-patterns.md`
 - **The `result` output is the whole run as JSON** (`RunResultDocument`, composed
   from the existing domain schemas rather than a parallel reporting shape),

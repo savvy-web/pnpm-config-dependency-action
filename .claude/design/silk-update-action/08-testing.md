@@ -227,6 +227,19 @@ Shared helpers currently in that directory:
     in the resolved `include`), so it blocks `pnpm typecheck` at pre-commit and in
     CI rather than only under vitest. *Falsified if* the tsconfig `include`
     narrows — the suite would keep passing while enforcing nothing.
+  - **A second assertion now covers the program side**, added after the first
+    shipped-and-died instance of the guard's own third blind spot:
+    `Exclude<RequirementsOfEffect<ReturnType<typeof innerProgram>>, ActionServices>`
+    must be `never`. A service resolved in a **step body** never enters the
+    layer's input channel, so the original assertion is structurally blind to it —
+    `WorkspaceCatalogs` was built by `makeAppLayer`, provided to `ReleaseAge`, and
+    never merged into the returned layer. Reinstating that produces
+    `Type 'boolean' is not assignable to type 'WorkspaceCatalogs'`.
+    - Worth recording why the *suite* missed it as well, because it is the
+      inverse of the `ActionState` double lesson: `program.inner.test.ts` supplies
+      its own `WorkspaceCatalogs.layerTest`, so the **double was more capable than
+      production**. A fake more complete than the real thing hides precisely the
+      wiring bug it looks like it is exercising.
   - **What it does not cover:** a *broken* provide. Nothing builds the graph, so
     a layer that is wired but fails to construct still ships. See
     @./09-project-status.md for the three ways the type assertion itself can stop

@@ -145,6 +145,14 @@ export const makeAppLayer = (dryRun: boolean, options: { runtimeLive: boolean } 
 		workspaceRoot,
 		workspaceDiscovery,
 		packageManagerDetector,
+		// EXPOSED, not merely provided inward. `steps/peer-check.ts` resolves
+		// `WorkspaceCatalogs` in its own body -- a METHOD, not a layer body -- so
+		// the requirement lands on `innerProgram` rather than on this layer's
+		// input channel, where `app.test.ts` would have seen it. Building it for
+		// `releaseAge` alone therefore typechecked, passed 634 tests, and died on
+		// the runner with `Service not found: @effected/workspaces/WorkspaceCatalogs`.
+		// That is the third blind spot the guard documents about itself.
+		workspaceCatalogs,
 		Changesets.layer.pipe(Layer.provide(depsRegen)),
 		BranchManager.layer.pipe(Layer.provide(Layer.mergeAll(gitBranch, gitCommit, Git.layer))),
 		PackageManagerUpgrade.layer.pipe(Layer.provide(Layer.merge(npmRegistry, packageJsonFile))),
