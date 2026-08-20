@@ -94,8 +94,16 @@ Linking/overriding a first-party dep, the `dev` -> `main` -> release flow, and
 the two workflows that clobber `dev`:
 -> @./CLAUDE.workflow.md
 
-Load before linking a dependency, cutting a release, or editing
-`.github/workflows/**`. **Currently nothing is linked and there are no
+**`dev` IS the feature branch here** — feature work is committed directly to it
+with ordinary commits, because the action is bundled and a consumer pinning
+`@dev` runs the **committed `dist`**, so nothing else can be tested end to end.
+That makes **squash, force-push and PR-from-`dev` all wrong**, and
+`/design-docs:finalize` in particular: it soft-resets to the merge base and
+pushes, which on an in-sync `dev` means force-pushing a branch other repositories'
+CI is pinned to. The finalization is the `dev` -> `main` promotion instead.
+
+Load before linking a dependency, cutting a release, **finalizing or promoting a
+branch**, or editing `.github/workflows/**`. **Currently nothing is linked and there are no
 `overrides` entries** — if you were only checking that, you now have the answer
 and do not need the pointer.
 
