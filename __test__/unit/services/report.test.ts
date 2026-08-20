@@ -585,3 +585,56 @@ describe("generateSummary", () => {
 		}),
 	);
 });
+
+describe("generatePRBody — peer issues", () => {
+	const unmet = {
+		importer: "packages/app",
+		dependency: "react",
+		wanted: "^18.3.1",
+		found: "17.0.2",
+		optional: false,
+		parents: ["react-dom@18.3.1"],
+	};
+
+	it.effect("renders unsatisfied peers as a table naming who wanted them", () =>
+		Effect.gen(function* () {
+			const body = yield* Effect.gen(function* () {
+				const report = yield* Report;
+				return report.generatePRBody([], [], [], [unmet]);
+			}).pipe(Effect.provide(makeReportLayer(emptyPullRequestState())));
+
+			expect(body).toContain("Peer Dependencies");
+			expect(body).toContain("react");
+			expect(body).toContain("^18.3.1");
+			expect(body).toContain("17.0.2");
+			// The parent chain is the actionable half: "react is wrong" is not a
+			// bug report, "react-dom wants a react you do not have" is.
+			expect(body).toContain("react-dom@18.3.1");
+		}),
+	);
+
+	// `found: null` IS the missing case. Rendering a raw null into someone
+	// else's pull request is the visible half of that modelling decision.
+	it.effect("renders a missing peer without printing a null", () =>
+		Effect.gen(function* () {
+			const body = yield* Effect.gen(function* () {
+				const report = yield* Report;
+				return report.generatePRBody([], [], [], [{ ...unmet, found: null }]);
+			}).pipe(Effect.provide(makeReportLayer(emptyPullRequestState())));
+
+			expect(body).toContain("react");
+			expect(body).not.toContain("null");
+		}),
+	);
+
+	it.effect("omits the section entirely when there are no peer issues", () =>
+		Effect.gen(function* () {
+			const body = yield* Effect.gen(function* () {
+				const report = yield* Report;
+				return report.generatePRBody([], [], [], []);
+			}).pipe(Effect.provide(makeReportLayer(emptyPullRequestState())));
+
+			expect(body).not.toContain("Peer Dependencies");
+		}),
+	);
+});

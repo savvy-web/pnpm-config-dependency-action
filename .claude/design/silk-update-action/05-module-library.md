@@ -994,6 +994,25 @@ Pure catalog-map helpers behind `CatalogConfigDeps`:
   temptation is then to weaken the production code to satisfy the fake. Pinned by
   `__test__/unit/doubles.test.ts`.
 
+### src/utils/peers.ts
+
+- `decidePeerGate(mode, report)` — the auto-merge gate decision, pure and
+  service-free. Lives here rather than inside `steps/peer-check.ts` because the
+  arms that matter have **zero** required rows and are still not a pass, and each
+  needs a table-driven test rather than a lockfile, a layer and a subprocess.
+
+  The predicate is `supported && !unresolvedImporters.length &&
+  !unverified.length && !requiredCount` — `@effected/workspaces` states that
+  *both* `unverified` reasons mean fail closed, and a gate reading
+  `required.length === 0` as "clean" is the silent pass that `supported`,
+  `unresolvedImporters` and `unverified` exist to prevent. Mutation-verified: a
+  gate reading only `requiredCount` turns five tests red.
+
+  The returned `reason` is a union rather than prose because it drives a log
+  line, and its **order** is load-bearing for that line rather than for the
+  boolean — an unsupported format is *why* there are no rows, so reporting
+  `unverified` there would send a reader to the wrong explanation.
+
 ### src/utils/commit-subject.ts
 
 - `buildUpdateSubject(updates)` — derive the full conventional PR title / commit

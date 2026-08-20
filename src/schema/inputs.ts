@@ -41,10 +41,29 @@ export const INPUT_NAMES = [
 	"changesets",
 	"timeout",
 	"auto-merge",
+	"check-peers",
 ] as const;
 
 /** A name this action is allowed to read. */
 export type InputName = (typeof INPUT_NAMES)[number];
+
+/**
+ * How the peer-dependency check behaves when the installed graph has
+ * unsatisfied peers.
+ *
+ * - `false` — do not run the check at all. The default, matching the opt-in
+ *   posture of `upgrade-package-manager` and the `upgrade-runtime-*` inputs.
+ * - `warn` — run and report, never gate.
+ * - `no-auto-merge` — run, report, and withhold the separate `setAutoMerge`
+ *   call so the PR still opens but cannot merge itself.
+ *
+ * `fail` is deliberately absent. It is the only tier needing a second,
+ * concurrent check run, so it is deferred rather than accepted-and-ignored.
+ */
+export type CheckPeersMode = "false" | "warn" | "no-auto-merge";
+
+/** Every value {@link CheckPeersMode} admits, for validation. */
+export const CHECK_PEERS_MODES = ["false", "warn", "no-auto-merge"] as const;
 
 /**
  * Inputs consumed by {@link innerProgram}, already parsed and validated by
@@ -61,6 +80,7 @@ export interface InnerProgramInputs {
 	"upgrade-package-manager": string;
 	changesets: boolean;
 	"auto-merge": "" | "merge" | "squash" | "rebase";
+	"check-peers": CheckPeersMode;
 	run: ReadonlyArray<string>;
 	runtime: { node: string; deno: string; bun: string };
 	/** `"offline"` | `"live"` — reported in the Run-context log line only. */
@@ -112,6 +132,25 @@ export const readInputs = Effect.gen(function* () {
 		);
 	}
 	const autoMerge = rawAutoMerge as (typeof AUTO_MERGE_METHODS)[number];
+	const checkPeers = yield* ActionInput.string("check-peers").pipe(Config.withDefault("false"));
+	if (!(CHECK_PEERS_MODES as ReadonlyArray<string>).includes(checkPeers)) {
+		yield* Effect.fail(
+			new InvalidInputError({
+				field: "check-peers",
+				reason: 'Expected "false", "warn" or "no-auto-merge"',
+				value: checkPeers,
+			}),
+		);
+	}
+	// A gate that cannot fire. WARN rather than fail: `auto-merge` is legitimately
+	// dynamic in a workflow expression, so a run where it resolves to "" is not a
+	// misconfiguration -- failing here would break a valid workflow.
+	if (checkPeers === "no-auto-merge" && rawAutoMerge === "") {
+		yield* Effect.logWarning(
+			'check-peers: "no-auto-merge" has no effect because auto-merge is disabled; ' +
+				"peer issues will be reported but nothing is gated",
+		);
+	}
 	const dryRun = yield* ActionInput.boolean("dry-run").pipe(Config.withDefault(false));
 	const timeout = yield* ActionInput.integer("timeout").pipe(Config.withDefault(180));
 	const rawRuntimeNode = yield* ActionInput.string("upgrade-runtime-node").pipe(Config.withDefault("false"));
@@ -240,6 +279,7 @@ export const readInputs = Effect.gen(function* () {
 			"upgrade-package-manager": upgradePackageManager,
 			changesets,
 			"auto-merge": autoMerge,
+			"check-peers": checkPeers as CheckPeersMode,
 			run,
 			runtime: { node: rawRuntimeNode, deno: rawRuntimeDeno, bun: rawRuntimeBun },
 			runtimeData,

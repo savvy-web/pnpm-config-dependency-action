@@ -18,6 +18,7 @@ import type {
 	ChangesetFile,
 	DependencyUpdateResult,
 	LockfileChange,
+	PeerIssue,
 	PullRequestResult,
 	RunResultDocument,
 } from "./schema/domain.js";
@@ -38,6 +39,7 @@ import { detectPackageManagerStep } from "./steps/detect-package-manager.js";
 import { formatWorkspaceStep } from "./steps/format-workspace.js";
 import { installStep } from "./steps/install.js";
 import { lockfileSnapshotStep } from "./steps/lockfile-snapshot.js";
+import { peerCheckStep } from "./steps/peer-check.js";
 import { peerSyncStep } from "./steps/peer-sync.js";
 import { regularDependenciesStep } from "./steps/regular-dependencies.js";
 import { upgradePackageManagerStep } from "./steps/upgrade-package-manager.js";
@@ -60,6 +62,7 @@ const buildRunResult = (params: {
 	readonly deltas: ReadonlyArray<CatalogDelta>;
 	readonly lockfileChanges: ReadonlyArray<LockfileChange>;
 	readonly changesets: ReadonlyArray<ChangesetFile>;
+	readonly peerIssues: ReadonlyArray<PeerIssue>;
 	readonly pullRequest: PullRequestResult | null;
 }): RunResultDocument => ({
 	schemaVersion: 1,
@@ -71,6 +74,7 @@ const buildRunResult = (params: {
 	targetBranch: params.targetBranch,
 	updates: params.updates,
 	catalogDeltas: params.deltas,
+	peerIssues: params.peerIssues,
 	lockfileChanges: params.lockfileChanges,
 	changesets: params.changesets,
 	pullRequest: params.pullRequest,
@@ -257,6 +261,16 @@ export const innerProgram = (
 						yield* Effect.logDebug(`Catalog deltas: ${JSON.stringify(configDeltas)}`);
 					}
 
+					// Assigned by the peer-check step below, which runs only once a PR
+					// is actually going to be opened. Declared here rather than inline
+					// at each exit path so all three report the SAME value -- the
+					// failure exit has already shipped a bug of exactly that shape,
+					// reporting `updates: []` for a run that really did update things.
+					// The two early exits keep `[]`, which is honest: they open no PR,
+					// so nothing was examined and nothing is gated.
+					let peerIssues: ReadonlyArray<PeerIssue> = [];
+					let withholdAutoMerge = false;
+
 					// ── regular dependencies ────────────────────────────────────────
 					const regularUpdates = (yield* regularDependenciesStep(
 						inputs.dependencies,
@@ -336,6 +350,7 @@ export const innerProgram = (
 									targetBranch: inputs.targetBranch,
 									updates: allUpdates,
 									deltas: configDeltas,
+									peerIssues,
 									// The "after" lockfile snapshot and its comparison run
 									// below this exit, so there is genuinely nothing to
 									// report here — empty because it was never computed,
@@ -398,6 +413,7 @@ export const innerProgram = (
 									targetBranch: inputs.targetBranch,
 									updates: allUpdates,
 									deltas: configDeltas,
+									peerIssues,
 									lockfileChanges: changes,
 									changesets: [],
 									pullRequest: null,
@@ -413,14 +429,36 @@ export const innerProgram = (
 					const changesetFiles = changesetsResult.files;
 					const changesetsSkipReason = changesetsResult.skipReason;
 
+					// ── peer check ───────────────────────────────────────────────────
+					// Runs against the "after" snapshot -- the lockfile this PR will
+					// carry -- and only on the path that actually opens a PR, so a
+					// no-changes run never spawns the config-dependency hook replay.
+					const peerCheckResult = yield* peerCheckStep(inputs["check-peers"], lockfileAfter, detected.root);
+					peerIssues = peerCheckResult.issues;
+					withholdAutoMerge = peerCheckResult.decision.withhold;
+					// `null` when the check did not run, so the Result block reports it
+					// as a skip rather than as a clean pass.
+					const peerSummary =
+						inputs["check-peers"] === "false"
+							? null
+							: {
+									issues: peerCheckResult.issues.length,
+									required: peerCheckResult.requiredCount,
+									withheld: peerCheckResult.decision.withhold,
+									reason: peerCheckResult.decision.reason,
+								};
+
 					// ── commit and pull request ─────────────────────────────────────
 					const { pullRequest: pr } = yield* commitAndPrStep({
 						branch: inputs.branch,
 						targetBranch: inputs.targetBranch,
-						autoMerge: inputs["auto-merge"],
+						// Withholding is a SEPARATE call being skipped, not a different
+						// merge method: the PR still opens, it just cannot merge itself.
+						autoMerge: withholdAutoMerge ? "" : inputs["auto-merge"],
 						updates: allUpdates,
 						changesets: changesetFiles,
 						deltas: configDeltas,
+						peerIssues,
 						changedFileCount: changedEntries.length,
 						workspaceRoot: detected.root,
 						dryRun,
@@ -434,6 +472,7 @@ export const innerProgram = (
 						peerConfigured,
 						isPnpm: detected.pm === "pnpm",
 						customCommandsConfigured: inputs.run.length > 0,
+						peers: peerSummary,
 						changesetsSkip: changesetsSkipReason,
 					})) {
 						yield* Effect.logInfo(line);
@@ -468,6 +507,7 @@ export const innerProgram = (
 								targetBranch: inputs.targetBranch,
 								updates: allUpdates,
 								deltas: configDeltas,
+								peerIssues,
 								lockfileChanges: changes,
 								changesets: changesetFiles,
 								pullRequest: pr,

@@ -36,6 +36,7 @@
 import type { PackageManagerEvidence } from "@effected/workspaces";
 import type { CatalogDelta, DependencyUpdateResult } from "./schema/domain.js";
 import type { DetectedPm, SupportedPm } from "./services/package-manager.js";
+import type { PeerGateReason } from "./utils/peers.js";
 
 // `describePmEvidence` lived here and is deleted. It re-read the manifest and
 // re-implemented `PackageManagerDetector`'s priority order to guess which signal
@@ -161,6 +162,22 @@ export interface RunResult {
 	readonly isPnpm: boolean;
 	readonly customCommandsConfigured: boolean;
 	readonly changesetsSkip: string | null;
+	/**
+	 * The peer check's outcome, or `null` when it did not run.
+	 *
+	 * `null` lands in the skipped-summary rather than being omitted: a check
+	 * that did not run must say so, because silence reads as "ran and found
+	 * nothing" — which is the opposite of what a disabled gate means.
+	 */
+	readonly peers: PeerRunSummary | null;
+}
+
+/** What the closing block says about the peer check, when it ran. */
+export interface PeerRunSummary {
+	readonly issues: number;
+	readonly required: number;
+	readonly withheld: boolean;
+	readonly reason: PeerGateReason;
 }
 
 /**
@@ -186,12 +203,21 @@ export const resultLines = (result: RunResult): ReadonlyArray<string> => {
 		lines.push(`  catalogs  ${catalogLines.join(", ")}`);
 	}
 
+	// Only when notable. A proven-clean check is already on the info stream from
+	// the step itself; repeating it here would be a second rendering of one fact.
+	if (result.peers !== null && (result.peers.issues > 0 || result.peers.withheld)) {
+		const counts = `${result.peers.issues} issue(s), ${result.peers.required} required`;
+		const gate = result.peers.withheld ? ` — auto-merge withheld (${result.peers.reason})` : "";
+		lines.push(`  peers     ${counts}${gate}`);
+	}
+
 	const skipped: string[] = [];
 	if (result.packageManagerSkip !== null) skipped.push(`package-manager upgrade (${result.packageManagerSkip})`);
 	if (!result.peerConfigured) skipped.push("peer sync (not configured)");
 	if (!result.isPnpm) skipped.push("workspace formatting (not pnpm)");
 	if (!result.customCommandsConfigured) skipped.push("custom commands (not configured)");
 	if (result.changesetsSkip !== null) skipped.push(`changesets (${result.changesetsSkip})`);
+	if (result.peers === null) skipped.push("peer check (check-peers: false)");
 	if (skipped.length > 0) {
 		lines.push(`  skipped   ${skipped.join(" · ")}`);
 	}

@@ -103,6 +103,52 @@
 			"additionalProperties": false,
 			"title": "Catalog Delta"
 		},
+		"PeerIssue": {
+			"type": "object",
+			"properties": {
+				"importer": {
+					"type": "string"
+				},
+				"dependency": {
+					"type": "string",
+					"allOf": [
+						{
+							"minLength": 1
+						}
+					]
+				},
+				"wanted": {
+					"type": "string",
+					"allOf": [
+						{
+							"minLength": 1
+						}
+					]
+				},
+				"found": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"optional": {
+					"type": "boolean"
+				},
+				"parents": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					}
+				}
+			},
+			"required": ["importer", "dependency", "wanted", "found", "optional", "parents"],
+			"additionalProperties": false,
+			"title": "Peer Issue"
+		},
 		"LockfileChange": {
 			"type": "object",
 			"properties": {
@@ -267,6 +313,13 @@
 						"$ref": "#/$defs/CatalogDelta"
 					}
 				},
+				"peerIssues": {
+					"type": "array",
+					"description": "Unsatisfied peer dependencies found after the install, one entry per (importer, dependency). Always an empty array when check-peers is false, which is indistinguishable from a clean graph by design: the mode is reported separately rather than encoded as an absent field.",
+					"items": {
+						"$ref": "#/$defs/PeerIssue"
+					}
+				},
 				"lockfileChanges": {
 					"type": "array",
 					"description": "Resolved-version movements observed between the before and after lockfile snapshots.",
@@ -303,6 +356,7 @@
 				"targetBranch",
 				"updates",
 				"catalogDeltas",
+				"peerIssues",
 				"lockfileChanges",
 				"changesets",
 				"pullRequest"

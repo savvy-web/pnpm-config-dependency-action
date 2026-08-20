@@ -7,6 +7,7 @@ import {
 	DependencyUpdateResult,
 	LockfileChange,
 	NonEmptyString,
+	PeerIssue,
 	PullRequestResult,
 } from "../../../src/schema/domain.js";
 
@@ -166,5 +167,42 @@ describe("LockfileChange", () => {
 			affectedPackages: ["@savvy-web/core", "@savvy-web/utils"],
 		});
 		expect(result.affectedPackages).toHaveLength(2);
+	});
+});
+
+describe("PeerIssue", () => {
+	const decode = Schema.decodeUnknownSync(PeerIssue);
+
+	it("decodes an unmet peer, carrying the version that was actually resolved", () => {
+		const issue = decode({
+			importer: ".",
+			dependency: "react",
+			wanted: "^18.3.1",
+			found: "17.0.2",
+			optional: false,
+			parents: ["react-dom@18.3.1"],
+		});
+		expect(issue.found).toBe("17.0.2");
+		expect(issue.optional).toBe(false);
+	});
+
+	// `found: null` IS the missing case. A separate discriminant would be a
+	// second source of truth for the same fact and could contradict this one.
+	it("decodes a missing peer as a null found", () => {
+		const issue = decode({
+			importer: "packages/app",
+			dependency: "react",
+			wanted: "^18.3.1",
+			found: null,
+			optional: false,
+			parents: ["react-dom@18.3.1"],
+		});
+		expect(issue.found).toBeNull();
+	});
+
+	it("rejects an empty dependency name", () => {
+		expect(() =>
+			decode({ importer: ".", dependency: "", wanted: "^1", found: null, optional: false, parents: [] }),
+		).toThrow();
 	});
 });

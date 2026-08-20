@@ -16,7 +16,13 @@ import { GitHubMarkdown } from "@effected/github-actions";
 import { PrBody } from "@savvy-web/silk-effects";
 import { Context, Effect, Layer } from "effect";
 
-import type { CatalogDelta, ChangesetFile, DependencyUpdateResult, PullRequestResult } from "../schema/domain.js";
+import type {
+	CatalogDelta,
+	ChangesetFile,
+	DependencyUpdateResult,
+	PeerIssue,
+	PullRequestResult,
+} from "../schema/domain.js";
 import { resolveSignoff } from "../utils/commit-signoff.js";
 import { buildUpdateSubject } from "../utils/commit-subject.js";
 import { bold, rule } from "../utils/markdown.js";
@@ -35,11 +41,13 @@ export class Report extends Context.Service<
 			changesets: ReadonlyArray<ChangesetFile>,
 			autoMerge?: "merge" | "squash" | "rebase",
 			deltas?: ReadonlyArray<CatalogDelta>,
+			peerIssues?: ReadonlyArray<PeerIssue>,
 		) => Effect.Effect<PullRequestResult, GitHubError, Repo>;
 		readonly generatePRBody: (
 			updates: ReadonlyArray<DependencyUpdateResult>,
 			changesets: ReadonlyArray<ChangesetFile>,
 			deltas?: ReadonlyArray<CatalogDelta>,
+			peerIssues?: ReadonlyArray<PeerIssue>,
 		) => string;
 		readonly generateSummary: (
 			updates: ReadonlyArray<DependencyUpdateResult>,
@@ -75,8 +83,8 @@ export class Report extends Context.Service<
 			const pullRequest = yield* PullRequestTag;
 			const signoff = yield* resolveSignoff();
 			return {
-				createOrUpdatePR: (branch, base, updates, changesets, autoMerge, deltas) =>
-					createOrUpdatePRImpl(pullRequest, signoff, branch, base, updates, changesets, autoMerge, deltas),
+				createOrUpdatePR: (branch, base, updates, changesets, autoMerge, deltas, peerIssues) =>
+					createOrUpdatePRImpl(pullRequest, signoff, branch, base, updates, changesets, autoMerge, deltas, peerIssues),
 				generatePRBody: generatePRBodyImpl,
 				generateSummary: generateSummaryImpl,
 				generateCommitMessage: (updates) => generateCommitMessageImpl(updates, signoff),
@@ -112,6 +120,7 @@ const createOrUpdatePRImpl = (
 	changesets: ReadonlyArray<ChangesetFile>,
 	autoMerge?: "merge" | "squash" | "rebase",
 	deltas?: ReadonlyArray<CatalogDelta>,
+	peerIssues?: ReadonlyArray<PeerIssue>,
 ): Effect.Effect<PullRequestResult, GitHubError, Repo> =>
 	Effect.gen(function* () {
 		const title = buildUpdateSubject(updates);
@@ -143,7 +152,7 @@ const createOrUpdatePRImpl = (
 			// layer — this fence is a *proposal* for the squash commit, so a
 			// reviewer comparing it against the commit must not find two authors.
 			signoff,
-			summary: generatePRBodyImpl(updates, changesets, deltas),
+			summary: generatePRBodyImpl(updates, changesets, deltas, peerIssues),
 			priorBody,
 		});
 		const body = PrBody.ManagedPrBody.upsert(priorBody, managed);
@@ -199,6 +208,7 @@ const generatePRBodyImpl = (
 	updates: ReadonlyArray<DependencyUpdateResult>,
 	changesets: ReadonlyArray<ChangesetFile>,
 	deltas: ReadonlyArray<CatalogDelta> = [],
+	peerIssues: ReadonlyArray<PeerIssue> = [],
 ): string => {
 	// `GitHubMarkdown`'s statics are self-contained (no `this`), so destructuring
 	// is safe. `bold`/`rule` come from `utils/markdown.js` — the two builders the
@@ -229,6 +239,32 @@ const generatePRBodyImpl = (
 			u.to,
 		]);
 		sections.push(table(["Dependency", "Type", "Action", "From", "To"], rows));
+	}
+
+	// Peer Dependencies - only when there is something to report. An empty
+	// "no peer issues" section on every PR trains reviewers to skim past the
+	// place the real finding will eventually appear.
+	if (peerIssues.length > 0) {
+		sections.push(heading("Peer Dependencies", 3));
+		sections.push(
+			table(
+				["Package", "Importer", "Wanted", "Found", "Wanted by", "Required"],
+				// Plain cells, matching the dependency tables above rather than
+				// introducing a second linking convention in one document.
+				peerIssues.map((issue) => [
+					issue.dependency,
+					issue.importer,
+					issue.wanted,
+					// `found: null` is the MISSING case. Rendering the raw null into
+					// someone else's pull request would be this modelling decision
+					// leaking out as a defect. `\u2014` is what the tables above
+					// already use for an absent version.
+					issue.found ?? "\u2014 not installed",
+					issue.parents.join(" -> "),
+					issue.optional ? "no" : "yes",
+				]),
+			),
+		);
 	}
 
 	// Catalog Changes - on a compat-catalog plugin bump this table is the actual

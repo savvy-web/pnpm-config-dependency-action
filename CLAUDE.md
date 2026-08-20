@@ -59,13 +59,15 @@ pnpm vitest run --testNamePattern="buildUpdateSubject"        # by name
   imports everywhere
 - **Entry points**: `src/pre.ts`, `src/main.ts`, `src/post.ts` (derived from
   `action.config.ts` by the builder); composition in `src/program.ts`
-- **Steps**: `src/steps/` — one module per orchestration unit (15: `branch`,
+- **Steps**: `src/steps/` — one module per orchestration unit (16: `branch`,
   `changesets`, `commit-and-pr`, `config-dependencies`, `configure-status`,
   `custom-commands`, `detect-changes`, `detect-package-manager`,
-  `format-workspace`, `install`, `lockfile-snapshot`, `peer-sync`,
+  `format-workspace`, `install`, `lockfile-snapshot`, `peer-check`, `peer-sync`,
   `regular-dependencies`, `upgrade-package-manager`, `upgrade-runtimes`). Each
   declares its own result type, an explicit requirement channel, and a tagged
-  error **only if it can actually fail** — four carry `never`
+  error **only if it can actually fail** — **five** carry `never` (`peer-check`
+  is the newest; do not carry the old count of four forward without re-reading
+  the signatures)
 - **Services**: `src/services/` — `Context.Service` + `Layer`, plus stateless
   helper modules; **Layers**: `src/layers/app.ts`; **Schema**: `src/schema/`
   (singular — `domain.ts`, `inputs.ts`, `outputs.ts`); **Rendering**:
@@ -100,7 +102,7 @@ and do not need the pointer.
 ## Testing
 
 - **Framework**: Vitest with v8 coverage, forks pool (Effect compatibility).
-  Current suite: **599 tests across 42 files**, measured, not carried forward.
+  Current suite: **634 tests across 44 files**, measured, not carried forward.
   **Treat a test count here as evidence and re-derive it** (`pnpm vitest run`) — a
   figure this line once carried was never a real count, having been edited by a
   plausible `+1` in the very commit that invalidated it, which is what made it
@@ -266,6 +268,40 @@ and do not need the pointer.
   checkout (benign, and stated in the design docs rather than assumed)
 - Auto-merge requires GraphQL (no REST endpoint) and is a **separate**
   `setAutoMerge` call whose failure degrades to a warning
+- **`check-peers` gates auto-merge by NOT making that separate call.** Input is
+  `false` (default, opt-in like `upgrade-package-manager`) | `warn` | `no-auto-merge`;
+  `fail` is deliberately **rejected**, not accepted-and-ignored, because it is the
+  only tier needing a second concurrent check run. The gate predicate is
+  **not** `required > 0` — it is
+  `supported && !unresolvedImporters.length && !unverified.length && !requiredCount`,
+  because each of the other three produces an empty result meaning *"not examined"*
+  rather than *"nothing wrong"*. A mutant reading only `requiredCount` turns five
+  tests red, which is the check that this is real rather than decorative.
+  - **A lockfile alone cannot answer the question.** pnpm persists
+    *resolution*-affecting config into the lockfile and discards
+    *reporting*-affecting config: `overrides` from a pnpmfile **are** recorded,
+    `peerDependencyRules` appears **zero** times (`pnpmfileChecksum` in the
+    lockfile header is the tell — pnpm would have nothing to invalidate against if
+    the lockfile were complete). So the rules come from
+    `WorkspaceCatalogs.peerDependencyRules()`, which also replays
+    config-dependency plugins — and **this repo declares no rules of its own**, so
+    a workspace-file-only read would find nothing here and still false-positive.
+  - **Presence of the option is the assertion, not its contents.** Omitting
+    `peerDependencyRules` means "nobody looked" and always reports
+    `peerRulesNotApplied`; passing `NoPeerDependencyRules` asserts "I looked, there
+    are none". A failed lookup therefore degrades to **omitting**, never to the
+    empty set — the empty set is a claim we would have no basis to make.
+  - Stated limits, not implied coverage: optional peers never gate;
+    a pnpm workspace package's **own** peer declarations are undetectable (absent
+    from the lockfile, and `pnpm peers check` does not report them either); and
+    `ignoreMissing`/`allowAny` are **not consumed upstream and fail closed** — a
+    non-empty either axis makes the report `unverified`, so **the gate stops
+    firing positively rather than answering wrongly**. Neither of this repo's two
+    config-dependency plugins sets either axis today (verified from
+    `peerDependencyRules()` output, not from the plugin sources:
+    `allowedVersions` 36, both axes `[]`), so the gate is unaffected — but a
+    plugin that starts setting one silently turns the gate into a permanent
+    abstain, and that is deliberate, not a regression to chase
 - **`@effected/package-json` is adopted for `PackageJsonFile.modify` ONLY** —
   a declared runtime dependency wired as `PackageJsonFile.layer` and
   consumed by both `RuntimeUpgrade` and `PackageManagerUpgrade`. This line used to

@@ -54,6 +54,7 @@ export const emptyRunResult: RunResultDocument = {
 	targetBranch: "",
 	updates: [],
 	catalogDeltas: [],
+	peerIssues: [],
 	lockfileChanges: [],
 	changesets: [],
 	pullRequest: null,

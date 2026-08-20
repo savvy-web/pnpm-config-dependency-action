@@ -94,6 +94,39 @@ export const CatalogDelta = Schema.Struct({
 });
 ```
 
+`PeerIssue` records one unsatisfied peer. `found` is the version actually
+resolved, or `null` when nothing resolved at all:
+
+```typescript
+export const PeerIssue = Schema.Struct({
+ importer: Schema.String,
+ dependency: NonEmptyString,
+ wanted: NonEmptyString,
+ found: Schema.NullOr(Schema.String),
+ optional: Schema.Boolean,
+ parents: Schema.Array(Schema.String),
+}).annotate({ identifier: "PeerIssue", title: "Peer Issue" });
+```
+
+**`found: null` IS the "missing" case** — there is deliberately no separate
+discriminant. A second field encoding the same fact can contradict the first, and
+a consumer would have no way to know which to trust. The visible half of that
+decision is a rendering rule: `report.ts` must never print the raw `null` into
+someone else's pull request, which is pinned by a test asserting the body
+contains no `null`.
+
+`parents` is flattened to `name@version` strings here, from the kit's structured
+`PeerParent` path. The chain is the actionable half of the report — *"react is
+wrong"* is not a bug report, *"react-dom wants a react you do not have"* is.
+
+**It is *a* route, not the set of routes.** Where an importer reaches one
+declaring package by two different chains, `pnpm peers check` reports the peer
+**once** carrying one chain, and `@effected/workspaces` matches that deliberately
+(measured against the oracle, `@effected/workspaces@0.15.0`). This matters here
+and not upstream, because this repo *renders* the chain into someone else's pull
+request: a reader must not infer the displayed path is the only one, and a second
+route existing is **not** a missing row.
+
 ## The structured `result` output (src/schema/domain.ts)
 
 `RunResultDocument` is the whole run as one machine-readable document, published

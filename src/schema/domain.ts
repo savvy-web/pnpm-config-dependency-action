@@ -170,6 +170,38 @@ export const CatalogDelta = Schema.Struct({
 export type CatalogDelta = typeof CatalogDelta.Type;
 
 /**
+ * One unsatisfied peer dependency in the installed graph.
+ *
+ * `found` is the version actually resolved for the peer, or `null` when nothing
+ * resolved at all. **That null IS the "missing" case** — there is deliberately no
+ * separate discriminant, because a second field encoding the same fact can
+ * contradict the first, and a consumer would have no way to know which to trust.
+ *
+ * `optional` distinguishes a peer declared `peerDependenciesMeta.optional` from a
+ * required one. Only required peers gate; optional ones are always reported and
+ * never withhold auto-merge.
+ *
+ * `parents` names the packages that declared the peer, formatted `name@version`,
+ * so a report can say who wants it rather than only what is missing.
+ */
+export const PeerIssue = Schema.Struct({
+	importer: Schema.String,
+	dependency: NonEmptyString,
+	wanted: NonEmptyString,
+	found: Schema.NullOr(Schema.String),
+	optional: Schema.Boolean,
+	parents: Schema.Array(Schema.String),
+}).annotate({
+	// Load-bearing: without an explicit identifier the JSON Schema lowering
+	// invents a POSITIONAL name (`Struct_`), which a later anonymous struct
+	// silently renumbers -- renaming a key consumers may $ref.
+	identifier: "PeerIssue",
+	title: "Peer Issue",
+});
+
+export type PeerIssue = typeof PeerIssue.Type;
+
+/**
  * Lockfile change detected during comparison.
  */
 export const LockfileChange = Schema.Struct({
@@ -233,6 +265,12 @@ export const RunResultDocument = Schema.Struct({
 	}),
 	catalogDeltas: Schema.Array(CatalogDelta).annotate({
 		description: "Per-catalog merge outcomes. Non-empty only under bun's compat-catalog mode.",
+	}),
+	peerIssues: Schema.Array(PeerIssue).annotate({
+		description:
+			"Unsatisfied peer dependencies found after the install, one entry per (importer, dependency). " +
+			"Always an empty array when check-peers is false, which is indistinguishable from a clean graph " +
+			"by design: the mode is reported separately rather than encoded as an absent field.",
 	}),
 	lockfileChanges: Schema.Array(LockfileChange).annotate({
 		description: "Resolved-version movements observed between the before and after lockfile snapshots.",
