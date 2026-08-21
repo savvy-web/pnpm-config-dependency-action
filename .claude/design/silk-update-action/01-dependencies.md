@@ -224,6 +224,19 @@ The action runs on **Effect v4** (`effect` / `@effect/platform-node` both resolv
   `ClassifiedSpecifier` — read `.specifier.raw`), `ResolvedPackage`, and the PM-specific
   extension union tagged via `.extension._tag`. `Lockfile.format` records which package
   manager wrote the file.
+  - **`0.6.2` shipped two edge-resolution fixes this repo's peer gate motivated**
+    (upstream effected#453, dogfooded here before release). Under ≤0.6.1 two
+    legitimate pnpm lockfile shapes landed in `ResolvedPackage.unresolvedEdges`,
+    which flipped `PeerCheck` to `unverified ("unresolvedEdge")` and withheld
+    auto-merge from clean repos (live: spencerbeggs/type-registry-effect#122):
+    **npm-alias dependencies** (pnpm records the referenced instance's key as
+    the version, so the bare `name@version` composition matched nothing) and
+    **`publishDirectory` `link:` edges in snapshot bodies** (no `workspace:`
+    specifier exists there; the fix reads the importer's own `publishDirectory`
+    declaration as exact evidence). Both shapes are pinned locally by drift
+    canaries over real pnpm 11.22.0 fixtures — see @./08-testing.md — so a kit
+    regression fails this suite rather than resurfacing as withheld auto-merge
+    in a consumer's repository.
 - **`WorkspaceCatalogs` (introduced in `@effected/workspaces@0.10.0`) now owns release-age
   discovery.** `releaseAgeGate()` combines the inline `pnpm-workspace.yaml` keys
   with the replayed config-dependency hooks; `src/services/release-age.ts` keeps
@@ -235,6 +248,14 @@ The action runs on **Effect v4** (`effect` / `@effect/platform-node` both resolv
   child uses) arrives with it and needs no manual alignment — a standing property of
   the dependency, not of the version pair that happened to be installed when this was
   written.
+  - **The assembly is memoized, and `0.17.0` added `refresh()` as the explicit
+    boundary for a tool that mutates the workspace mid-run** — which this action
+    is. Release-age discovery deliberately reads the *before*-state; the
+    post-install peer check needs the *after*-state, so `steps/peer-check.ts`
+    calls `refresh()` before its rules read (an enabled run replays the hook
+    subprocess twice, deliberately). The `^0.16.0` → `^0.17.0` range bump was a
+    **hand-edit**, per the caret trap below. Detail and the live failure that
+    forced it in @./05-module-library.md.
   - **`Run.jsonLine` was evaluated and is SUBSUMED, not skipped.** It was the
     intended replacement for this repo's local `REPLAY_SENTINEL` framing — but
     `releaseAgeGate()` combines the inline keys *and* the hook replay, so
@@ -278,20 +299,46 @@ The action runs on **Effect v4** (`effect` / `@effect/platform-node` both resolv
 
 ### Duplicate resolutions — recurring, caught each time by `pnpm why`
 
-**Current state, verified rather than assumed:** `@effected/workspaces`,
-`@effected/npm`, `@effected/package-json`, `@effected/lockfiles`,
-`@effected/github`, `@effected/github-actions` and `@effected/commands` each
-resolve **exactly one copy**, as does `effect`.
+**Current state, measured 2026-08-21:** `@effected/npm`,
+`@effected/package-json`, `@effected/lockfiles`, `@effected/github`,
+`@effected/github-actions` and `@effected/commands` each resolve **exactly one
+copy**, as does `effect`. **`@effected/workspaces` resolves two** — `0.17.0`
+pulled by this action directly, `0.16.0` pulled by `@savvy-web/silk-effects@6.0.4`
+(whose `^0.16.0` the `0.x` caret pins to the old minor) and by dev tooling
+(`@savvy-web/cli`, `@vitest-agent/*`).
 
-Deliberately no version numbers in that sentence. The previous version of this
-section named them, and naming them is how the section went stale: the numbers
-were refreshed on a later pass while the single-copy claim they were supposed to
-support was not re-checked. **The claim is only as good as the last `pnpm why`
-run against the current lockfile** — re-derive rather than read.
+The previous sentence here read "each resolve exactly one copy" with no
+exception, and it stopped being true when this repo hand-bumped to `^0.17.0`
+for the `refresh()` member (commit `a089f44`) while silk-effects stayed on
+`^0.16.0`. **That is the `silk-effects` duplicate from the beta.107 wave
+recurring in the other direction** — last time silk-effects was ahead-of or
+behind this repo's workspaces range, this time this repo moved first — and it
+confirms the paragraph below that closed it was right to keep the limit-statement
+rather than the closure.
+
+**Both copies reach `dist/main.js`.** silk-effects is a bundled runtime
+dependency (`DepsRegenDefault` is built on its own workspaces copy), and the
+probe agrees: the workspaces service-tag strings (`WorkspaceCatalogs`,
+`WorkspaceDiscovery`, `WorkspaceRoot`) each occur **twice** in the minified
+bundle where every single-copy package's tag (`@effected/npm/NpmRegistry`,
+`@effected/github/GitBranch`) occurs once. (An occurrence count over minified
+output is an inference, not a module-graph dump — but two class declarations is
+the only reading consistent with the single-copy controls.)
+
+Why this is *currently* safe, by the section's own rule below — "safe while the
+shapes agree": Effect resolves services by the tag's string id, this action's
+own imports resolve to the `0.17.0` copy (so the layer `makeAppLayer` builds
+**has** `refresh()`), silk-effects' internals resolve to theirs, and all suites
+and typecheck are green against the pair. And why it is not safe by
+construction: `refresh()` is precisely a **version-gated member that exists on
+one copy and not the other** — the hypothetical the limit-statement below names.
+It dedupes when silk-effects bumps its range; until then this is a dated
+measurement carrying a real (bundle-size) cost and a latent hazard, not a
+closed state.
 
 ```text
 $ pnpm why @effected/workspaces
-Found 1 version of @effected/workspaces
+Found 2 versions of @effected/workspaces
 ```
 
 **This recurs at every kit bump; it is not a closed issue.** The most recent
@@ -340,7 +387,12 @@ peers were built against. The guard names the *type*, never the reason.
 bundled: `@savvy-web/silk-effects@5.3.0` declared `^0.9.5` while this action had moved to
 `^0.10.0`, and caret pins the minor on `0.x`, so the two ranges could not dedupe and two
 copies of the workspaces kit were inlined into `dist/main.js`. `silk-effects@5.5.2` moved
-onto the same wave, so the ranges now agree and the second copy is gone.
+onto the same wave, so the ranges agreed and the second copy was gone — **until it
+recurred in 2026-08**, this time with this repo moving first (`^0.17.0` for
+`refresh()`) while `silk-effects@6.0.4` stays on `^0.16.0`; see the current-state
+measurement at the top of this section. The sentence is left as written because
+it was true when written; what it teaches is that "the ranges now agree" is a
+statement with a date on it.
 
 The old entry's limit-statement is worth preserving as reasoning, because it is what made
 this worth tracking rather than shrugging at: Effect resolves services by the tag's **string

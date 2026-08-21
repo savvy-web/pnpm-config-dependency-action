@@ -54,10 +54,15 @@ which `pnpm why` answers and a version number never did** — which is why no
 current version literal appears in that sentence, and why re-adding one would be
 a regression rather than an update.
 
-The **duplicate resolutions are also gone**: `@effected/workspaces` and
-`@effected/npm` each resolve exactly one copy, so the second workspaces copy that
-`@savvy-web/silk-effects` used to drag into `dist` is no longer bundled. Verify
-with `pnpm why <pkg>` — the lockfile grep reports which versions exist, never who
+The **workspaces duplicate is BACK (measured 2026-08-21)**: this repo hand-bumped
+`@effected/workspaces` to `^0.17.0` (for `WorkspaceCatalogs.refresh()`) while
+`@savvy-web/silk-effects@6.0.4` stays on `^0.16.0`, so two copies resolve and
+both reach `dist/main.js` — the same silk-effects duplicate that closed after
+the beta.107 wave, recurring with this repo moving first. Safe while the shapes
+agree (this action's own imports resolve `0.17.0`); it dedupes when silk-effects
+bumps. `@effected/npm` still resolves one copy. Detail in
+`.claude/design/silk-update-action/01-dependencies.md`. Verify with
+`pnpm why <pkg>` — the lockfile grep reports which versions exist, never who
 pulls them.
 
 ## Development & Release Cycle

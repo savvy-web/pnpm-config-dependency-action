@@ -17,7 +17,7 @@ implementation-plans: []
 [Back to index](./_index.md)
 
 **Framework:** Vitest with v8 coverage, forks pool for Effect-TS compatibility.
-Current suite: **634 tests across 44 files, all passing** (verified by
+Current suite: **648 tests across 44 files, all passing** (verified by
 `pnpm vitest run`, not carried forward from this document's previous figure).
 
 **Accounting for the delta from the 581 this document used to state** — and the
@@ -30,7 +30,9 @@ answer is not "it drifted", which is what it looks like:
 | 588 | the tree at `f55fab6`, and at the 4.6.0 release commit | `pnpm vitest run`, 40 files |
 | 589 | with `unit/layers/app.test.ts` added | `pnpm vitest run`, 41 files |
 | 599 | before `check-peers`: +5 `unit/utilities/commit-signoff.test.ts`, +4 in `services/package-manager-upgrade.test.ts`, +1 in `doubles.test.ts` (two sign-off cases in `main.test.ts` were rewritten, not added) | `pnpm vitest run`, 42 files |
-| **634** | now: the `check-peers` work, itemised in the paragraph below this table | `pnpm vitest run`, 44 files |
+| **634** | the `check-peers` work, itemised in the first paragraph below this table | `pnpm vitest run`, 44 files |
+| 645 | inferred, not measured — see the honesty note below | — |
+| **648** | now: +3 in `unit/steps/peer-check.test.ts` (the peer-gate false-positive work), itemised below | `pnpm vitest run`, 44 files |
 
 **The 581 was never a real count.** `f55fab6` — the kit-wave and
 `@effected/package-json` adoption — added 8 tests and edited this file's figure
@@ -56,6 +58,27 @@ set), +3 `unit/schema/domain.test.ts` (`PeerIssue`), +9 **new**
 `unit/steps/peer-check.test.ts`, +4 `unit/format.test.ts`, +3
 `unit/services/report.test.ts`, +2 `unit/program.inner.test.ts` (the gate and its
 control).
+
+**Accounting for 634 -> 648 (+14, +0 files) — only +3 of which are tests this
+repo added.** The three are all in `unit/steps/peer-check.test.ts`: two
+kit-drift canaries over **real pnpm 11.22.0 lockfile fixtures**
+(`__fixtures__/pnpm-lock.alias.yaml`, `pnpm-lock.publish-dir-link.yaml`)
+asserting proven-clean gating on the npm-alias and `publishDirectory` `link:`
+shapes that `@effected/lockfiles` ≤0.6.1 misclassified as `unresolvedEdge`
+(commit `2ddb105`), and one refresh-ordering test whose `WorkspaceCatalogs`
+double only answers with rules **after** `refresh()` has been called, so it
+fails on a missing *or* misordered call (commit `4b2fc5e`).
+
+The residual +11 (634 → 645) is the honesty note the middle row above points
+at: **no commit between the 634 measurement and this session touched a test
+file** (`git log --name-only 5568503..981eb29 -- __test__ vitest.config.ts`
+returns nothing), so those eleven are a change in what the runner *counts*, not
+tests anyone wrote — the interval's only relevant changes are dependency-update
+commits including a `@vitest-agent/plugin` bump. The specific counting change
+has **not** been isolated; 645 is arithmetic (648 measured, minus the three
+attributable additions), not a measurement. Recorded that way deliberately, per
+the 581 entry above: a plausible unexplained increment is exactly the figure
+this table exists to distrust.
 
 ## Layout
 
@@ -187,6 +210,30 @@ Shared helpers currently in that directory:
   path — both of which this step has actually done. Mutation-verified in both
   directions: swapping the root for `process.cwd()` fails one test, flattening
   the entries to `{ path }` fails the other.
+- **Peer-check step** (`unit/steps/peer-check.test.ts`) — drives `peerCheckStep`
+  over parsed lockfile fixtures and `WorkspaceCatalogs.layerTest` doubles. Three
+  of its tests exist because unit-green shipped consumer-red twice, and each
+  pins the failure with the artifact that actually failed:
+  - Two **kit-drift canaries** over real pnpm 11.22.0 lockfiles — an npm-alias
+    dependency (`semver-classic: npm:semver@7.6.3`, at the importer level *and*
+    inside a snapshot body) and a `publishDirectory` workspace whose satisfied
+    peer is recorded as `react: link:packages/react/dist/pkg`. Both shapes
+    landed in `ResolvedPackage.unresolvedEdges` under `@effected/lockfiles`
+    ≤0.6.1, flipping the report to `unverified ("unresolvedEdge")` and
+    withholding auto-merge from repos with zero real peer problems
+    (spencerbeggs/type-registry-effect#122 was the alias case, live). The fix is
+    upstream (`0.6.2`); the canaries assert `proven-clean` here so a kit
+    regression fails this suite rather than resurfacing as withheld auto-merge
+    in consumer repositories. They discriminate: both fixtures demonstrably
+    fail against the ≤0.6.1 parser, which is what makes them evidence rather
+    than decoration.
+  - One **refresh-ordering test**, whose double is the interesting part: its
+    `peerDependencyRules` fails typed until `refresh()` has been called, so the
+    test goes red on a step that skips the refresh *or* orders it after the
+    read. An always-succeeding double would have passed against the pre-fix
+    step — the same "double more capable than production" trap recorded under
+    the layers suite below, avoided this time by making the double model the
+    staleness being fixed.
 - **Install dispatch** (`unit/steps/install.test.ts`) — `runInstall` per package
   manager over a `ScriptedSpawner`, asserting the command lines and their order,
   and that the npm path unlinks `package-lock.json` through `node:fs`.
