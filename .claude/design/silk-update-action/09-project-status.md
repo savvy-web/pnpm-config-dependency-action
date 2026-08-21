@@ -92,7 +92,12 @@ composition is centralized in `src/layers/app.ts`.
   `setAutoMerge` call so the PR still opens but cannot merge itself. Gates only on
   a **proven-clean** report — `supported`, no unresolved importers, nothing
   `unverified`, no required rows — because each of the other three yields an empty
-  result meaning "not examined" rather than "nothing wrong".
+  result meaning "not examined" rather than "nothing wrong". The rules read is
+  preceded by `WorkspaceCatalogs.refresh()` (workspaces `0.17.0`), so the
+  after-install lockfile is judged under the after-install plugins' rules
+  rather than the assembly release-age discovery memoized before the run
+  installed — the time-skew corollary recorded at the end of the
+  lockfile-finding section below, with depth in @./05-module-library.md.
 - Package-manager self-upgrade (`PackageManagerUpgrade`) for pnpm, bun and npm,
   driven by `upgrade-package-manager` (`false` — the **default** — / `true` /
   `auto` / a semver range). corepack-managed managers are written hash-pinned into
@@ -132,11 +137,22 @@ rather than silently performing a package-manager-only run.
   which came in transitively through the deleted `github-action-effects` and no
   longer appears in the lockfile at all. Harmless, but the comment there still
   describes the old provenance.
-- **Duplicate resolutions: recurring, not closed.** Every `@effected/*` package this action depends on resolves exactly one copy today, as does `effect` — but read that as a measurement with a date on it, not a settled state. **This bullet said "closed" for a release and was wrong within one dependency bump:** moving `@effected/npm` pulled a second `@effected/github` in behind it (detail in @./01-dependencies.md). No version literal here any more, for the reason the companion section gives — the numbers were refreshed once while the claim they supported was not re-checked. The duplicate that mattered — a second
-  `@effected/workspaces` reaching `dist/main.js` through `@savvy-web/silk-effects`
-  — closed when silk-effects moved onto the same wave. Re-verify with
-  `pnpm why <pkg>`, never a lockfile grep: the grep reports which versions exist,
-  only `pnpm why` reports who pulls each one.
+- **Duplicate resolutions: recurring, not closed — and currently OPEN.** As of
+  2026-08-21, `@effected/workspaces` resolves **two copies** (`0.17.0` direct,
+  `0.16.0` through `@savvy-web/silk-effects@6.0.4` and dev tooling), and the
+  tag-string probe indicates **both reach `dist/main.js`** — the exact
+  silk-effects duplicate this bullet used to describe as closed, recurring in
+  the other direction because this repo hand-bumped to `^0.17.0` for
+  `WorkspaceCatalogs.refresh()` while silk-effects' `0.x` caret stays on
+  `^0.16.0`. Safe today by the "shapes agree" rule (this action's imports
+  resolve `0.17.0`, so its layers have `refresh()`); it dedupes when
+  silk-effects bumps. Measurement, method and the hazard statement are in
+  @./01-dependencies.md. The bullet's history stands: **it said "closed" for a
+  release and was wrong within one dependency bump** (moving `@effected/npm`
+  pulled a second `@effected/github` in behind it), then said "every package
+  resolves one copy today" and was falsified by this repo's own next kit bump.
+  Re-verify with `pnpm why <pkg>`, never a lockfile grep: the grep reports
+  which versions exist, only `pnpm why` reports who pulls each one.
 - **`@effected/package-json` is adopted for `PackageJsonFile.modify` only** —
   a declared runtime dependency, wired as `PackageJsonFile.layer` in
   `makeAppLayer` and consumed by both `RuntimeUpgrade` and
@@ -353,6 +369,36 @@ both were held confidently, and only measurement separated them.
 *Re-derive with:* `grep -c peerDependencyRules pnpm-lock.yaml` (expect 0) against
 `grep -n peerDependencyRules pnpm-workspace.yaml` (expect none) against the
 plugin bodies under `node_modules/.pnpm-config/*/pnpmfile.cjs` (expect the rules).
+
+**The corollary, found live a release later: the external input has a
+timestamp.** The rules come from a hook replay, this run *changes the hooks*
+(bumping a config-dependency plugin is the ordinary case), and
+`WorkspaceCatalogs` memoizes its assembly — first triggered by release-age
+discovery, before the install. So `check-peers` was judging the after-install
+lockfile under the pre-install plugins' rules: spencerbeggs/pnpm-module-template#84
+withheld auto-merge on a `required` row that the freshly installed
+`@effected/pnpm-plugin-effect@0.5.0`'s `allowedVersions` suppress, and #85
+auto-merged once the step called `refresh()` (workspaces `0.17.0`) before the
+rules read. The before/after split is deliberate on both sides — release-age
+gates what the run may *propose*, peer-check judges what it *produced* — so
+one memo cannot serve both and the refresh call is the explicit boundary; an
+enabled run replays the hook subprocess twice on purpose. Depth, the measured
+pnpm `allowedVersions` parent-version semantics, and the discriminating
+ordering test are in @./05-module-library.md.
+
+**And the gate's fail-closed posture has now produced its own incident class,
+worth naming so it is diagnosed quickly next time:** a report that abstains
+(`unverified`) on a *clean* repo is indistinguishable, from the consumer's
+side, from a repo with peer problems — auto-merge is simply withheld. Two
+legitimate pnpm lockfile shapes (npm-alias edges, `publishDirectory` `link:`
+edges) did exactly that under `@effected/lockfiles` ≤0.6.1
+(spencerbeggs/type-registry-effect#122, live), fixed upstream in `0.6.2` via a
+dogfood loop from this repo (effected#453) and pinned here by two real-fixture
+drift canaries (@./08-testing.md). The lesson mirrors the section above:
+fail-closed is the right posture *and* every abstention needs its reason
+surfaced — which is why `PeerCheckStepResult.unverifiedReasons` exists — because
+a gate that only says "unverified" sends the reader hunting for peer problems
+that do not exist.
 
 ## Settled decisions — do not re-propose without new evidence
 

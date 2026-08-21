@@ -111,7 +111,7 @@ and do not need the pointer.
 ## Testing
 
 - **Framework**: Vitest with v8 coverage, forks pool (Effect compatibility).
-  Current suite: **634 tests across 44 files**, measured, not carried forward.
+  Current suite: **648 tests across 44 files**, measured, not carried forward.
   **Treat a test count here as evidence and re-derive it** (`pnpm vitest run`) — a
   figure this line once carried was never a real count, having been edited by a
   plausible `+1` in the very commit that invalidated it, which is what made it
@@ -304,6 +304,14 @@ and do not need the pointer.
   because each of the other three produces an empty result meaning *"not examined"*
   rather than *"nothing wrong"*. A mutant reading only `requiredCount` turns five
   tests red, which is the check that this is real rather than decorative.
+  - **The step calls `WorkspaceCatalogs.refresh()` before the rules read**, and
+    the call is load-bearing, not hygiene: the assembly is memoized and first
+    triggered by release-age discovery *before* the run installs, so without it
+    the after-install lockfile is judged under the pre-install plugins' rules —
+    a run that bumps the very plugin supplying the rules withholds auto-merge
+    on rows the new plugin suppresses (live: pnpm-module-template#84/#85). An
+    enabled run therefore replays the hook subprocess **twice**, deliberately;
+    ordering is pinned by a test whose double only answers after `refresh()`.
   - **A lockfile alone cannot answer the question.** pnpm persists
     *resolution*-affecting config into the lockfile and discards
     *reporting*-affecting config: `overrides` from a pnpmfile **are** recorded,

@@ -178,9 +178,12 @@ longer calls them directly. `syncPeers` and `compareLockfiles` require
 ### Step modules as an error-channel discipline
 
 `src/steps/` is where this codebase's typed-error posture is most visible: each
-step declares its own error channel, and **four declare `never`**
-(`custom-commands`, `regular-dependencies`, `upgrade-package-manager`,
-`upgrade-runtimes`). That is not a comment claiming resilience — it is a
+step declares its own error channel, and **five declare `never`**
+(`custom-commands`, `peer-check`, `regular-dependencies`,
+`upgrade-package-manager`, `upgrade-runtimes` — re-derived from the signatures,
+this sentence having previously said "four" after `peer-check` landed; the
+root `CLAUDE.md` warns against carrying the old count forward and this line was
+doing exactly that). That is not a comment claiming resilience — it is a
 signature the compiler enforces, and it means the degradation happens *inside*
 the step rather than being left to a caller who might forget. Each module's doc
 comment names its **failure posture** (fail-the-job or degrade-to-warning) in

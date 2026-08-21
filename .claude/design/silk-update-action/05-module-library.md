@@ -416,6 +416,41 @@ here could only be ignored. It requires `WorkspaceCatalogs` **and**
 `RegularDeps` without threading requirements. `ReleaseAge.layerNoop` is the inert
 layer (zero gate, identity filtering) for unit tests and non-pnpm paths.
 
+### One memo, two moments — the `WorkspaceCatalogs.refresh()` boundary
+
+`WorkspaceCatalogs` memoizes its assembly (one workspace read + one hook
+replay) for the layer lifetime, and **this run mutates the workspace between
+its two readers**. Release-age discovery triggers the assembly first, *before*
+anything installs — and deliberately wants that before-state, since the gate
+governs what this run may propose. `steps/peer-check.ts` reads
+`peerDependencyRules()` *after* the install — and needs the after-state, since
+the run may have bumped the very config dependency whose hooks supply the
+rules. One infinite memo cannot serve both, so the step calls
+`catalogs.refresh()` (new in `@effected/workspaces@0.17.0`, whose TSDoc names
+exactly this tool shape as its reason to exist) before the rules read. The
+cost is explicit and accepted: an enabled `check-peers` run replays the
+config-dependency hook subprocess **twice**, once per moment.
+
+This was found live, not reasoned out: spencerbeggs/pnpm-module-template#84
+reported a `required` unsatisfied peer on a row that the freshly bumped
+`@effected/pnpm-plugin-effect@0.5.0`'s `allowedVersions` suppress — the step
+was judging the after-install lockfile under the pre-install plugins' rules —
+and #85 auto-merged after the fix. A measured fact worth keeping from that
+diagnosis: **pnpm ignores the parent *version* in an `allowedVersions` key**
+(`parent@1.0.0>peer` suppresses the mismatch under any parent version), and
+the kit replicates that deliberately (its `PeerDependencyRules` TSDoc names
+both key spellings) — it is why 0.5.0's rc.109-keyed rules suppress an
+rc.111-parented drift row rather than silently matching nothing.
+
+The ordering is pinned by a test that discriminates
+(`__test__/unit/steps/peer-check.test.ts`): its double answers the rules read
+only after `refresh()` has run, so a step that skips the call *or* orders it
+after the read goes red. *Falsified if* `refresh()` stops being called before
+`peerDependencyRules()` in `steps/peer-check.ts` — or, more quietly, if
+release-age discovery ever moves to *after* the install, at which point the
+refresh becomes a harmless no-op and the before/after split this section
+describes no longer exists.
+
 ### src/services/config-deps.ts - ConfigDeps (pnpm)
 
 Update pnpm config dependencies by querying npm and editing `pnpm-workspace.yaml`

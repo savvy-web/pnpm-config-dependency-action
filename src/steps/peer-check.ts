@@ -99,6 +99,12 @@ export const peerCheckStep = (
 
 		const catalogs = yield* WorkspaceCatalogs;
 
+		// The assembly was memoized BEFORE this run installed: release-age
+		// discovery triggered it against the pre-update plugins. This step judges
+		// the "after" lockfile, so it must read the after-state rules -- the run
+		// may have bumped the very config dependency whose hooks supply them.
+		yield* catalogs.refresh();
+
 		// A failed lookup degrades to "omit the option", which PeerCheck reports as
 		// `peerRulesNotApplied` -- so the failure lands on the fail-closed path
 		// rather than being papered over with an empty rule set, which would be an
