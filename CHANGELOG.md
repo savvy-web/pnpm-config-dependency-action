@@ -1,5 +1,19 @@
 # silk-update-action
 
+## 4.8.4
+
+### Bug Fixes
+
+* `check-peers` no longer withholds auto-merge on repositories whose lockfile carries npm-aliased dependency edges (e.g. `foo: npm:bar@^1.0.0`) or `publishDirectory` workspace links. Both edge shapes were previously misclassified as unresolved, so the peer-check gate reported `unverified (unresolvedEdge)` and disabled auto-merge even when peer dependencies were actually satisfied. These lockfiles now gate as proven-clean.
+
+  `check-peers` also no longer judges the post-update lockfile against pre-update peer suppression rules. The gate now refreshes the workspace catalog assembly before reading `peerDependencyRules`, so a run that bumps a config-dependency plugin reads the rules the freshly-installed plugin actually ships, rather than the rules in effect before this run started. Previously a plugin bump that newly allowed a peer mismatch could still report it as `required` and withhold auto-merge. [#308][#308]
+
+### Patch Changes
+
+Thanks to [@spencerbeggs](https://github.com/spencerbeggs) for their contributions!
+
+[#308]: https://github.com/savvy-web/silk-update-action/pull/308
+
 ## 4.8.3
 
 ### Dependencies
