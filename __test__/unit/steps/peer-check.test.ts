@@ -132,4 +132,29 @@ describe("peerCheckStep", () => {
 		expect(result.decision.withhold).toBe(false);
 		expect(result.decision.reason).toBe("proven-clean");
 	});
+
+	// The run mutates the workspace between the first catalogs assembly and this
+	// step: config-dependency plugins are bumped and reinstalled, so the rules
+	// that govern the "after" lockfile are the AFTER plugins' rules. A step that
+	// reads the memoized pre-install assembly judges the new lockfile under the
+	// old rules — a live run (pnpm-module-template#84) withheld auto-merge on a
+	// row the freshly-installed plugin suppresses. The double only answers with
+	// rules once refresh() has been called, so this fails if the step skips the
+	// refresh OR orders it after the read.
+	it("refreshes the catalogs assembly before reading the rules", async () => {
+		const state = { refreshed: false };
+		const staleUntilRefreshed = WorkspaceCatalogs.layerTest({
+			refresh: () =>
+				Effect.sync(() => {
+					state.refreshed = true;
+				}),
+			peerDependencyRules: () =>
+				state.refreshed
+					? Effect.succeed(NoPeerDependencyRules)
+					: Effect.fail({ _tag: "CatalogAssemblyError", source: "stale-memo" } as never),
+		});
+		const result = await run("no-auto-merge", aliasLockfile, staleUntilRefreshed);
+		expect(state.refreshed).toBe(true);
+		expect(result.decision.reason).toBe("proven-clean");
+	});
 });

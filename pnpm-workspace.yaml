@@ -6,3 +6,4 @@ configDependencies:
   "@savvy-web/pnpm-plugin-silk": 0.28.0+sha512-Kc02T+OYFDCdM62q9o2XGJivV0A+zlj1wIv+POShOH1DFpKNAsQj9W53XmrJ71FcoTR6phyin5OHd9I0BVEtWw==
 overrides:
   "@effected/lockfiles": file:../../spencerbeggs/effected/packages/lockfiles/dist/prod/npm/pkg
+  "@effected/workspaces": file:../../spencerbeggs/effected/packages/workspaces/dist/prod/npm/pkg
