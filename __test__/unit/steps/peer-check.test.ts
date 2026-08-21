@@ -17,11 +17,28 @@ import { Effect, References } from "effect";
 import { describe, expect, it } from "vitest";
 import { peerCheckStep } from "../../../src/steps/peer-check.js";
 
-const lockfile = Effect.runSync(
-	Lockfile.parse(readFileSync(new URL("./__fixtures__/pnpm-lock.unmet-peer.yaml", import.meta.url), "utf8"), {
-		format: "pnpm",
-	}),
-);
+const parseFixture = (name: string) =>
+	Effect.runSync(
+		Lockfile.parse(readFileSync(new URL(`./__fixtures__/${name}`, import.meta.url), "utf8"), {
+			format: "pnpm",
+		}),
+	);
+
+const lockfile = parseFixture("pnpm-lock.unmet-peer.yaml");
+
+/**
+ * Real pnpm 11.22.0 output: the root importer declares
+ * `semver-classic: npm:semver@7.6.3`, producing an npm-alias edge at the
+ * importer level AND in a snapshot body (via @isaacs/cliui's string-width-cjs).
+ */
+const aliasLockfile = parseFixture("pnpm-lock.alias.yaml");
+
+/**
+ * Real pnpm 11.22.0 output: packages/react publishes from `dist/pkg`
+ * (publishConfig.directory + linkDirectory), so react-dom's satisfied peer is
+ * recorded as `react: link:packages/react/dist/pkg` in a snapshot body.
+ */
+const publishDirLockfile = parseFixture("pnpm-lock.publish-dir-link.yaml");
 
 /** A catalogs double that answers with rules; unstubbed members die naming themselves. */
 const withRules = WorkspaceCatalogs.layerTest({
@@ -94,5 +111,25 @@ describe("peerCheckStep", () => {
 		const result = await run("no-auto-merge", null, withRules);
 		expect(result.decision.withhold).toBe(true);
 		expect(result.issues).toEqual([]);
+	});
+
+	// Upstream-drift canaries for @effected/lockfiles edge resolution. Both
+	// fixtures are shapes that used to land in `unresolvedEdges` and flip the
+	// report to `unverified ("unresolvedEdge")`, withholding auto-merge from
+	// repos with zero real peer problems (spencerbeggs/type-registry-effect#122
+	// was the alias case, live). A kit regression fails here rather than
+	// resurfacing as withheld auto-merge in consumer repositories.
+	it("does not withhold on an npm-alias dependency (kit drift canary)", async () => {
+		const result = await run("no-auto-merge", aliasLockfile, withRules);
+		expect(result.unverifiedReasons).not.toContain("unresolvedEdge");
+		expect(result.decision.withhold).toBe(false);
+		expect(result.decision.reason).toBe("proven-clean");
+	});
+
+	it("does not withhold on a publishDirectory link: peer edge (kit drift canary)", async () => {
+		const result = await run("no-auto-merge", publishDirLockfile, withRules);
+		expect(result.unverifiedReasons).not.toContain("unresolvedEdge");
+		expect(result.decision.withhold).toBe(false);
+		expect(result.decision.reason).toBe("proven-clean");
 	});
 });
