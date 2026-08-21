@@ -1,5 +1,17 @@
 # silk-update-action
 
+## 4.8.5
+
+### Dependencies
+
+* | Dependency          | Type       | Action  | From   | To     |                                                                              |
+  | ------------------- | ---------- | ------- | ------ | ------ | ---------------------------------------------------------------------------- |
+  | @effected/lockfiles | dependency | updated | ^0.6.1 | ^0.6.2 | [#311][#311] Thanks [@savvy-web-bot](https://github.com/apps/savvy-web-bot)! |
+
+### Patch Changes
+
+[#311]: https://github.com/savvy-web/silk-update-action/pull/311
+
 ## 4.8.4
 
 ### Bug Fixes
