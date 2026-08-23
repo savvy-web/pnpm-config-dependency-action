@@ -1,5 +1,17 @@
 # silk-update-action
 
+## 4.9.0
+
+### Features
+
+* Follow `@effected/pnpm-plugin-effect` for future updates. [#323][#323]
+
+### Minor Changes
+
+Thanks to [@spencerbeggs](https://github.com/spencerbeggs) for their contributions!
+
+[#323]: https://github.com/savvy-web/silk-update-action/pull/323
+
 ## 4.8.7
 
 ### Dependencies
