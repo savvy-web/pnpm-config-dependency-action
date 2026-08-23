@@ -5,7 +5,15 @@
 	"$defs": {
 		"DependencyType": {
 			"type": "string",
-			"enum": ["config", "dependency", "devDependency", "peerDependency", "optionalDependency", "runtime"],
+			"enum": [
+				"config",
+				"dependency",
+				"devDependency",
+				"peerDependency",
+				"optionalDependency",
+				"runtime",
+				"packageManager"
+			],
 			"title": "Dependency Type"
 		},
 		"DependencyUpdateResult": {

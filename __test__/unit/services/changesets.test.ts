@@ -47,7 +47,8 @@ const mockDepsRegen = (opts: {
 			if (opts.planError !== undefined) return Effect.fail(opts.planError as never);
 			return Effect.succeed((opts.plan ?? { toDelete: [], toWrite: [], skippedMixed: [] }) as RegenPlan);
 		},
-		execute: () => Effect.succeed((opts.result ?? { deleted: [], written: [], skippedMixed: [] }) as RegenResult),
+		execute: () =>
+			Effect.succeed((opts.result ?? { deleted: [], written: [], skippedMixed: [], coexisting: [] }) as RegenResult),
 	} as typeof SilkChangesets.DepsRegen.Service);
 
 const run = (root: string, base: string, layer: Layer.Layer<SilkChangesets.DepsRegen>) =>
@@ -90,7 +91,10 @@ describe("Changesets — DepsRegen adapter", () => {
 		const result = await run(
 			tmpDir,
 			"main",
-			mockDepsRegen({ plan, result: { deleted: [], written: [file], skippedMixed: [] } as RegenResult }),
+			mockDepsRegen({
+				plan,
+				result: { deleted: [], written: [file], skippedMixed: [], coexisting: [] } as RegenResult,
+			}),
 		);
 		expect(result).toHaveLength(1);
 		expect(result[0].id).toBe("brave-owls-soar");
@@ -113,7 +117,10 @@ describe("Changesets — DepsRegen adapter", () => {
 		const result = await run(
 			tmpDir,
 			"main",
-			mockDepsRegen({ plan, result: { deleted: [stale], written: [written], skippedMixed: [] } as RegenResult }),
+			mockDepsRegen({
+				plan,
+				result: { deleted: [stale], written: [written], skippedMixed: [], coexisting: [] } as RegenResult,
+			}),
 		);
 		expect(result.map((c) => c.id)).toEqual(["written"]);
 	});

@@ -48,11 +48,20 @@ export const silentLogger: Layer.Layer<never> = process.env.TEST_LOGS
 // DependencyUpdateResult fixtures
 // ══════════════════════════════════════════════════════════════════════════════
 
+/**
+ * The package-manager self-upgrade row, as the action actually emits it.
+ *
+ * `type` is `packageManager`, NOT `config` — `config` means pnpm's
+ * `configDependencies` and nothing else. This fixture carried `config` until
+ * #327, matching a production path that shoehorned the self-upgrade there and
+ * special-cased it by name; a double that keeps an old wire format after
+ * production moves on stops standing in for production.
+ */
 export const pnpmUpgradeUpdate: DependencyUpdateResult = {
 	dependency: "pnpm",
 	from: "10.28.2",
 	to: "10.29.0",
-	type: "config",
+	type: "packageManager",
 	package: null,
 };
 

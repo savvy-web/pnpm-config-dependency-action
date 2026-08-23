@@ -1,6 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import { GitHubError, PullRequest, Repo, RepoRef } from "@effected/github";
-import { Cause, Effect, Layer, References } from "effect";
+import { Changesets as SilkChangesets } from "@savvy-web/silk-effects";
+import { Cause, Effect, Layer, References, Schema } from "effect";
 import type { CatalogDelta } from "../../../src/schema/domain.js";
 import { Report } from "../../../src/services/report.js";
 import { actionStateTestLayer, emptyActionState } from "../../utils/action-doubles.js";
@@ -62,7 +63,7 @@ describe("createOrUpdatePR", () => {
 				return yield* report.createOrUpdatePR(
 					"pnpm/config",
 					"main",
-					[{ dependency: "pnpm", from: "11.6.0", to: "11.7.0", type: "config", package: null }],
+					[{ dependency: "pnpm", from: "11.6.0", to: "11.7.0", type: "packageManager", package: null }],
 					[],
 				);
 			}).pipe(Effect.provide(layer), Effect.provideService(References.MinimumLogLevel, "None"));
@@ -455,6 +456,52 @@ describe("generatePRBody", () => {
 
 			expect(body).toContain("### root workspace");
 			expect(body).toContain("pnpm");
+		}),
+	);
+
+	// End-to-end round trip for #327: the two types that used to be mislabelled
+	// leave the schema, survive rendering, and land in the PR body as Type cells
+	// the SHARED vocabulary accepts. Each half alone is insufficient — rendering
+	// the right string proves nothing if CSH005 rejects it, and a vocabulary the
+	// renderer never emits is untested — so the cells are read back out of the
+	// rendered body and decoded through the upstream schema the rule enforces.
+	it.effect("emits packageManager and runtime rows the shared vocabulary accepts", () =>
+		Effect.gen(function* () {
+			const state = emptyPullRequestState();
+			const layer = makeReportLayer(state);
+
+			const body = yield* Effect.gen(function* () {
+				const report = yield* Report;
+				return report.generatePRBody(
+					[
+						pnpmUpgradeUpdate,
+						{ dependency: "node", from: "25.6.0", to: "26.0.0", type: "runtime" as const, package: null },
+					],
+					[],
+				);
+			}).pipe(Effect.provide(layer));
+
+			// The row is rendered, and rendered with the ACCURATE type. `config`
+			// here would be the std-osc8#65 defect: pnpm announced as a config dep.
+			expect(body).toContain("| pnpm | packageManager |");
+			expect(body).toContain("| node | runtime |");
+			expect(body).not.toContain("| pnpm | config |");
+
+			// Read the Type cells back out of what was rendered and decode them
+			// through the schema CSH005 enforces, so a value this action emits but
+			// the rule rejects fails here rather than in a consumer's repository.
+			const decodeType = Schema.decodeUnknownSync(SilkChangesets.DependencyTableTypeSchema);
+			const typeCells = body
+				.split("\n")
+				.filter((line) => line.startsWith("| ") && !line.includes("---") && !line.includes("Dependency |"))
+				.map((line) => line.split("|")[2]?.trim())
+				.filter((cell): cell is string => cell !== undefined && cell.length > 0);
+
+			expect(typeCells).toContain("packageManager");
+			expect(typeCells).toContain("runtime");
+			for (const cell of typeCells) {
+				expect(decodeType(cell)).toBe(cell);
+			}
 		}),
 	);
 

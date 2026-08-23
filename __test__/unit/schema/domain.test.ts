@@ -1,9 +1,11 @@
+import { Changesets as SilkChangesets } from "@savvy-web/silk-effects";
 import { Schema } from "effect";
 import { describe, expect, it } from "vitest";
 
 import {
 	BranchResult,
 	ChangesetFile,
+	DependencyType,
 	DependencyUpdateResult,
 	LockfileChange,
 	NonEmptyString,
@@ -204,5 +206,40 @@ describe("PeerIssue", () => {
 		expect(() =>
 			decode({ importer: ".", dependency: "", wanted: "^1", found: null, optional: false, parents: [] }),
 		).toThrow();
+	});
+});
+
+describe("DependencyType and the upstream table vocabulary", () => {
+	// Every value this action puts in a row's Type cell has to be a value CSH005
+	// accepts, and the two live in different repositories. Getting this wrong
+	// fails in the CONSUMER's repository — the action opens a PR whose changeset
+	// the consumer's own `savvy changeset check` then rejects — so it must fail
+	// here instead. The check is a subset assertion against the shipped schema
+	// rather than a copy of its literals: a copied list goes stale silently, an
+	// assertion fails the build and names the offending member.
+	type UnsatisfiedByUpstream = Exclude<typeof DependencyType.Type, SilkChangesets.DependencyTableType>;
+	const _everyLocalTypeIsInTheUpstreamVocabulary: [UnsatisfiedByUpstream] extends [never]
+		? true
+		: UnsatisfiedByUpstream = true;
+
+	it("declares only members the upstream vocabulary accepts", () => {
+		// The teeth are the annotation above; this proves the module evaluated.
+		expect(_everyLocalTypeIsInTheUpstreamVocabulary).toBe(true);
+
+		// ...and the runtime half, which the type-level check cannot see: decode
+		// each of our literals through the very schema CSH005 enforces.
+		const upstream = Schema.decodeUnknownSync(SilkChangesets.DependencyTableTypeSchema);
+		for (const literal of DependencyType.literals) {
+			expect(upstream(literal)).toBe(literal);
+		}
+	});
+
+	it("carries the two types that used to be mislabelled", () => {
+		// Regression pin for #327. `packageManager` replaced a
+		// `type === "config" && dependency === "pnpm"` name match that mislabelled
+		// the row AND silently covered neither bun nor npm; `runtime` was local-only
+		// and could never reach the shared table.
+		expect(DependencyType.literals).toContain("packageManager");
+		expect(DependencyType.literals).toContain("runtime");
 	});
 });
