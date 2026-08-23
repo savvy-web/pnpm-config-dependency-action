@@ -210,7 +210,31 @@ describe("buildUpdateSubject", () => {
 			expect(subject).toBe(`${PREFIX}update devDependencies in @savvy-web/foo`);
 		});
 
-		it("degrades to the coarse phrasing when the typed breakdown overflows 72 chars", () => {
+		it("composes pnpm + config + devDependencies with typed nouns (the std-osc8#65 shape)", () => {
+			// Under the old 72-char budget this degraded to the coarse
+			// "update 1 config and 3 dependencies", mislabeling devDependencies.
+			const subject = buildUpdateSubject([
+				mk("pnpm", "config", "11.23.0"),
+				mk("@effected/pnpm-plugin-effect", "config", "0.6.3"),
+				mk("@savvy-web/bundler", "devDependency", "^2.1.22", "std-osc8"),
+				mk("@savvy-web/silk", "devDependency", "^3.10.0", "std-osc8"),
+				mk("@vitest-agent/plugin", "devDependency", "^2.4.6", "std-osc8"),
+			]);
+			expect(subject).toBe(`${PREFIX}upgrade pnpm, update 1 config dependency and 3 devDependencies`);
+		});
+
+		it("enumerates a config + dependency + devDependency mix (the silk-runtime-action#284 shape)", () => {
+			// 73 chars — one over the old budget, so it used to lump a
+			// release-triggering dependency and a devDependency as "2 dependencies".
+			const subject = buildUpdateSubject([
+				mk("@effected/pnpm-plugin-effect", "config", "0.6.1"),
+				mk("@effected/markdown", "dependency", "^0.6.1", "@savvy-web/silk-runtime-action"),
+				mk("@vitest-agent/plugin", "devDependency", "^2.4.5", "@savvy-web/silk-runtime-action"),
+			]);
+			expect(subject).toBe(`${PREFIX}update 1 config dependency, 1 dependency and 1 devDependency`);
+		});
+
+		it("degrades to the coarse phrasing when the typed breakdown overflows 100 chars", () => {
 			const subject = buildUpdateSubject([
 				mk("typescript", "config", "5.9.2"),
 				mk("effect", "dependency", "3.21.3", "@savvy-web/a"),
@@ -221,8 +245,20 @@ describe("buildUpdateSubject", () => {
 				mk("fsevents", "optionalDependency", "2.3.3", "@savvy-web/f"),
 			]);
 			// Typed: "update 1 config dependency, 2 dependencies, 2 devDependencies,
-			// 1 peerDependency and 1 optionalDependency" — over budget. Coarse fits.
-			expect(subject).toBe(`${PREFIX}update 1 config and 6 dependencies`);
+			// 1 peerDependency and 1 optionalDependency" — over budget. The coarse
+			// form lumps the mixed-section batch as "packages", never as
+			// "dependencies", which would misrepresent the devDeps and peers.
+			expect(subject).toBe(`${PREFIX}update 1 config dependency and 6 packages`);
+		});
+
+		it("lumps a deps-only mixed batch as packages when the enumeration overflows", () => {
+			const updates = [
+				...Array.from({ length: 10 }, (_, i) => mk(`dep-${i}`, "dependency", "1.0.0", `@savvy-web/p${i}`)),
+				...Array.from({ length: 10 }, (_, i) => mk(`dev-${i}`, "devDependency", "1.0.0", `@savvy-web/q${i}`)),
+				...Array.from({ length: 11 }, (_, i) => mk(`peer-${i}`, "peerDependency", "1.0.0", `@savvy-web/r${i}`)),
+				...Array.from({ length: 10 }, (_, i) => mk(`opt-${i}`, "optionalDependency", "1.0.0", `@savvy-web/s${i}`)),
+			];
+			expect(buildUpdateSubject(updates)).toBe(`${PREFIX}update 41 packages`);
 		});
 	});
 
@@ -268,7 +304,7 @@ describe("buildUpdateSubject", () => {
 			expect(subject).toBe(`${PREFIX}upgrade pnpm and Node, update 2 config and 2 dependencies`);
 		});
 
-		it("falls back to the default when the composed subject exceeds 72 chars", () => {
+		it("keeps the full composed shape within the 100-char budget for a large plain-deps run", () => {
 			const updates = [
 				mk("pnpm", "config", "11.7.0"),
 				mk("node", "runtime", "26.1.0"),
@@ -277,7 +313,10 @@ describe("buildUpdateSubject", () => {
 				...Array.from({ length: 12 }, (_, i) => mk(`config-${i}`, "config", "1.0.0")),
 				...Array.from({ length: 30 }, (_, i) => mk(`dep-${i}`, "dependency", "1.0.0", `@savvy-web/p${i}`)),
 			];
-			expect(buildUpdateSubject(updates)).toBe(`${PREFIX}update dependencies`);
+			// Fell back to the generic default under the old 72-char budget.
+			expect(buildUpdateSubject(updates)).toBe(
+				`${PREFIX}upgrade pnpm, Node, Deno and Bun, update 12 config and 30 dependencies`,
+			);
 		});
 	});
 
@@ -296,8 +335,8 @@ describe("buildUpdateSubject", () => {
 			expect(buildUpdateSubject([mk("typescript", "config", "~5.9.2")])).toBe(`${PREFIX}bump typescript to 5.9.2`);
 		});
 
-		it("degrades a single-workspace subject to the default when the name overflows 72 chars", () => {
-			const long = "@savvy-web/some-extremely-long-workspace-package-name-here";
+		it("degrades a single-workspace subject to the default when the name overflows 100 chars", () => {
+			const long = "@savvy-web/an-absurdly-long-workspace-package-name-engineered-to-overflow-even-the-longer-budget";
 			const subject = buildUpdateSubject([
 				mk("effect", "dependency", "3.21.3", long),
 				mk("zod", "dependency", "4.0.0", long),
@@ -318,16 +357,34 @@ describe("buildUpdateSubject", () => {
 			[mk("pnpm", "config", "11.7.0+sha512.0123456789abcdef0123456789abcdef0123456789abcdef")],
 			// Long scoped workspace name must degrade rather than overflow.
 			[
-				mk("effect", "dependency", "3.21.3", "@savvy-web/some-extremely-long-workspace-package-name-here"),
-				mk("zod", "dependency", "4.0.0", "@savvy-web/some-extremely-long-workspace-package-name-here"),
+				mk(
+					"effect",
+					"dependency",
+					"3.21.3",
+					"@savvy-web/an-absurdly-long-workspace-package-name-engineered-to-overflow-even-the-longer-budget",
+				),
+				mk(
+					"zod",
+					"dependency",
+					"4.0.0",
+					"@savvy-web/an-absurdly-long-workspace-package-name-engineered-to-overflow-even-the-longer-budget",
+				),
+			],
+			// The std-osc8#65 shape: must render typed, within budget.
+			[
+				mk("pnpm", "config", "11.23.0"),
+				mk("@effected/pnpm-plugin-effect", "config", "0.6.3"),
+				mk("a", "devDependency", "1.0.0", "p"),
+				mk("b", "devDependency", "1.0.0", "p"),
+				mk("c", "devDependency", "1.0.0", "p"),
 			],
 		];
 
 		cases.forEach((updates, i) => {
-			it(`case ${i}: produces a valid <=72 char chore(deps) subject`, () => {
+			it(`case ${i}: produces a valid <=100 char chore(deps) subject`, () => {
 				const subject = buildUpdateSubject(updates);
 				expect(subject.startsWith("chore(deps): ")).toBe(true);
-				expect(subject.length).toBeLessThanOrEqual(72);
+				expect(subject.length).toBeLessThanOrEqual(100);
 				expect(subject.endsWith(".")).toBe(false);
 			});
 		});
