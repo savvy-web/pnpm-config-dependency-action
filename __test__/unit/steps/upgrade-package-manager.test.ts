@@ -95,7 +95,7 @@ describe("upgradePackageManagerStep", () => {
 		expect(calls).toBe(1);
 	});
 
-	it("reports an applied upgrade as a config-typed update", async () => {
+	it("reports an applied upgrade as a packageManager-typed update", async () => {
 		const { result } = await runStep("auto", {
 			applied: true,
 			pm: "pnpm",
@@ -110,7 +110,7 @@ describe("upgradePackageManagerStep", () => {
 		});
 
 		expect(result.updates).toEqual([
-			{ dependency: "pnpm", from: "11.0.0", to: "11.20.0", type: "config", package: null },
+			{ dependency: "pnpm", from: "11.0.0", to: "11.20.0", type: "packageManager", package: null },
 		]);
 		expect(result.skipReason).toBeNull();
 	});

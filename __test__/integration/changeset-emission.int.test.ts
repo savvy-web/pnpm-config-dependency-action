@@ -190,15 +190,23 @@ describe("changeset emission integration (DepsRegenDefault)", () => {
 		expect(files[0].content).toContain("3.2.0");
 	});
 
-	// Regression canary. The emitted table used to run through a bare
-	// remark-gfm/remark-stringify pipeline, which escapes anything that could open
-	// a markdown construct: `~` (GFM strikethrough) became `\~` and `_` (emphasis)
-	// became `\_`. That shipped — spencerbeggs/runtime-resolver's changeset at
-	// commit 5110424 carried `\~0.2.0` / `\~0.2.1` and had to be hand-fixed. The
-	// existing scenarios above all use plain `N.N.N` specifiers and stayed green
-	// throughout, which is exactly why this reached production; the assertion that
-	// matters is the absence of a backslash, not the presence of the versions.
-	it("tilde specifiers and underscored names survive the table writer unescaped", async () => {
+	// Regression canary, and its assertion has been INVERTED once — read the
+	// history before "fixing" it back. The emitted table used to run through a bare
+	// remark-gfm/remark-stringify pipeline whose escaping did not round-trip: `~`
+	// became `\~` and `_` became `\_` as literal text, and that shipped —
+	// spencerbeggs/runtime-resolver's changeset at commit 5110424 carried
+	// `\~0.2.0` and had to be hand-fixed. So the assertion was "no cell may carry a
+	// backslash". As of `@effected/markdown@0.6.3` canonical stringify is a
+	// documented stability commitment: cells ARE escaped and the escapes round-trip
+	// through parsing unchanged, so a raw-backslash ban rejects correct output.
+	// The invariant that survived both regimes is that the VALUE is preserved, so
+	// the test now compares against the shipped serializer rather than a spelling.
+	//
+	// Note what does NOT discriminate here and never did: `toContain("~0.2.0")`
+	// passes against `\~0.2.0`, so the three value assertions this once carried
+	// were decoration — only the backslash check had teeth. Whatever replaces it
+	// must fail on a changed value, not merely on a changed escape.
+	it("tilde specifiers and underscored names round-trip through the canonical table writer", async () => {
 		const deps = (semver: string, underscored: string) => ({
 			"@effected/semver": semver,
 			some_pkg: underscored,
@@ -223,12 +231,19 @@ describe("changeset emission integration (DepsRegenDefault)", () => {
 		expect(result).toHaveLength(1);
 		const [{ content }] = emitted(root);
 
-		// The corruption, stated directly: no cell may carry a backslash escape.
-		expect(content).not.toContain("\\");
-		// ...and the values round-trip verbatim.
-		expect(content).toContain("~0.2.0");
-		expect(content).toContain("~0.2.1");
-		expect(content).toContain("some_pkg");
+		// The emitted table must equal what the canonical serializer produces for
+		// these exact values. Using the shipped serializer as the oracle rather than
+		// a hardcoded spelling is deliberate: `@effected/markdown`'s canonical form
+		// escapes `~` and `_` inside table cells (`\\~0.2.0`, `some\\_pkg`), and those
+		// escapes round-trip through parsing unchanged, so a raw-backslash ban would
+		// now reject correct output. What must never happen is the VALUE changing —
+		// double-escaping, a dropped tilde, a mangled name — and comparing against
+		// the oracle catches every one of those while tracking the canonical form.
+		const canonical = SilkChangesets.DependencyTable.toMarkdown([
+			{ dependency: "@effected/semver", type: "dependency", action: "updated", from: "~0.2.0", to: "~0.2.1" },
+			{ dependency: "some_pkg", type: "dependency", action: "updated", from: "1.0.0", to: "2.0.0" },
+		]);
+		expect(content).toContain(canonical);
 	});
 
 	it("non-versionable package (private, no publish target) is gated out", async () => {

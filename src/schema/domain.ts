@@ -21,12 +21,28 @@ export const NonEmptyString = Schema.String.check(Schema.isMinLength(1, { messag
 /**
  * Dependency type discriminator.
  *
- * - "config" for config dependencies in pnpm-workspace.yaml
+ * - "config" for config dependencies in pnpm-workspace.yaml — pnpm's
+ *   `configDependencies`, and NOTHING else. It used to double as the tag for
+ *   the package-manager self-upgrade, which meant this action rendered
+ *   `| pnpm | config | … |` into consumers' pull requests, claiming pnpm was a
+ *   config dependency (live: spencerbeggs/std-osc8#65)
  * - "dependency" for runtime dependencies detected in lockfile
  * - "devDependency" for dev dependencies updated by RegularDeps
  * - "peerDependency" for peer dependencies synced by PeerSync
  * - "optionalDependency" for optional dependencies
  * - "runtime" for devEngines.runtime engine bumps (node/deno/bun)
+ * - "packageManager" for the package-manager self-upgrade (pnpm/bun/npm).
+ *   Replaced a `type === "config" && dependency === "pnpm"` name match, which
+ *   was wrong twice over: it mislabelled the row, and matching by NAME silently
+ *   covered neither bun nor npm
+ *
+ * Every member must also be a member of `@savvy-web/silk-effects`'
+ * `DependencyTableType`, or a row this action emits fails CSH005 in the
+ * consumer's repository rather than here. That subset relation is asserted at
+ * compile time in `__test__/unit/schema/domain.test.ts` — not restated as a
+ * copied literal list, because a copy goes stale silently while an assertion
+ * fails the build. Upstream's vocabulary also carries "workspace", which this
+ * action never constructs and therefore deliberately does not declare.
  */
 export const DependencyType = Schema.Literals([
 	"config",
@@ -35,6 +51,7 @@ export const DependencyType = Schema.Literals([
 	"peerDependency",
 	"optionalDependency",
 	"runtime",
+	"packageManager",
 ]).annotate({
 	identifier: "DependencyType",
 	title: "Dependency Type",

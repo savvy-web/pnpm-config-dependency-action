@@ -11,7 +11,7 @@ import type { RuntimeName } from "./runtime.js";
  * Dependencies".
  *
  * Resolution is first-match-wins over the run's contents, partitioned into four
- * buckets — the package manager (pnpm), runtime engines (node/deno/bun), pnpm
+ * buckets — the package manager (pnpm/bun/npm), runtime engines (node/deno/bun), pnpm
  * config dependencies, and regular dependencies. A single change is named
  * outright; a single category is summarized; a mix is composed into an
  * `upgrade … , update …` shape. Regular dependencies are broken down by their
@@ -73,9 +73,9 @@ const RUNTIME_ORDER: ReadonlyArray<RuntimeName> = ["node", "deno", "bun"];
 const RUNTIME_LABEL: Record<RuntimeName, string> = { node: "Node", deno: "Deno", bun: "Bun" };
 
 const resolveSubject = (updates: ReadonlyArray<DependencyUpdateResult>, detail: Detail): string => {
-	const pm = updates.find((u) => u.type === "config" && u.dependency === "pnpm") ?? null;
+	const pm = updates.find((u) => u.type === "packageManager") ?? null;
 	const runtimes = RUNTIME_ORDER.filter((r) => updates.some((u) => u.type === "runtime" && u.dependency === r));
-	const config = updates.filter((u) => u.type === "config" && u.dependency !== "pnpm");
+	const config = updates.filter((u) => u.type === "config");
 	const deps = updates.filter((u) => DEP_TYPES.has(u.type));
 
 	const configNames = distinct(config.map((u) => u.dependency));
@@ -87,7 +87,7 @@ const resolveSubject = (updates: ReadonlyArray<DependencyUpdateResult>, detail: 
 
 	// Rules 1-4: a single distinct change — name it.
 	if (total === 1) {
-		if (pm) return `upgrade pnpm to ${displayVersion(pm.to)}`;
+		if (pm) return `upgrade ${pm.dependency} to ${displayVersion(pm.to)}`;
 		if (runtimes.length === 1) {
 			return `upgrade ${RUNTIME_LABEL[runtimes[0]]} to ${displayVersion(runtimeTo(updates, runtimes[0]))}`;
 		}
@@ -130,7 +130,7 @@ const compose = (
 ): string => {
 	const clauses: string[] = [];
 
-	const upgradeTargets = [...(pm ? ["pnpm"] : []), ...runtimes.map((r) => RUNTIME_LABEL[r])];
+	const upgradeTargets = [...(pm ? [pm.dependency] : []), ...runtimes.map((r) => RUNTIME_LABEL[r])];
 	if (upgradeTargets.length > 0) clauses.push(`upgrade ${joinAnd(upgradeTargets)}`);
 
 	const updateClause = updatePhrase(configCount, deps, depCount, detail);

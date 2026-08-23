@@ -253,6 +253,9 @@ const makeHarness = (options: HarnessOptions = {}) => {
 	const discovery = Layer.succeed(WorkspaceDiscovery, {
 		listPackages: vi.fn(() => Effect.succeed([] as ReadonlyArray<WorkspacePackage>)),
 		getPackage: vi.fn(() => Effect.die("getPackage not used in innerProgram tests")),
+		infoIn: vi.fn(() => Effect.die("infoIn not used in innerProgram tests")),
+		listPackagesIn: vi.fn(() => Effect.die("listPackagesIn not used in innerProgram tests")),
+		refreshIn: vi.fn(() => Effect.die("refreshIn not used in innerProgram tests")),
 		importerMap: vi.fn(() => Effect.succeed(new Map())),
 		info: vi.fn(() => Effect.die("info not used in innerProgram tests")),
 		resolveFile: vi.fn(() => Effect.die("resolveFile not used in innerProgram tests")),

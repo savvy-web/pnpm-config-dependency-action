@@ -96,7 +96,7 @@ export const upgradePackageManagerStep = (
 			yield* Effect.logInfo(`  ${reference} → resolved ${outcome.to}`);
 			yield* Effect.logInfo(`  ${pm}: ${outcome.from ?? "added"} -> ${outcome.to}`);
 			return {
-				updates: [{ dependency: pm, from: outcome.from, to: outcome.to, type: "config", package: null }],
+				updates: [{ dependency: pm, from: outcome.from, to: outcome.to, type: "packageManager", package: null }],
 				skipReason: null,
 			};
 		}

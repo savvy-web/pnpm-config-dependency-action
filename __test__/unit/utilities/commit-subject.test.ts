@@ -22,7 +22,7 @@ describe("buildUpdateSubject", () => {
 
 	describe("single headline (rules 1-4)", () => {
 		it("rule 1: only pnpm -> upgrade pnpm to <version>", () => {
-			expect(buildUpdateSubject([mk("pnpm", "config", "11.7.0")])).toBe(`${PREFIX}upgrade pnpm to 11.7.0`);
+			expect(buildUpdateSubject([mk("pnpm", "packageManager", "11.7.0")])).toBe(`${PREFIX}upgrade pnpm to 11.7.0`);
 		});
 
 		it("rule 2: only a runtime -> upgrade <Name> to <version> (capitalized)", () => {
@@ -84,7 +84,7 @@ describe("buildUpdateSubject", () => {
 
 		it("does not count pnpm as a config dep in the summary", () => {
 			const subject = buildUpdateSubject([
-				mk("pnpm", "config", "11.7.0"),
+				mk("pnpm", "packageManager", "11.7.0"),
 				mk("typescript", "config", "5.9.2"),
 				mk("biome", "config", "2.0.0"),
 			]);
@@ -195,7 +195,7 @@ describe("buildUpdateSubject", () => {
 
 		it("composes pnpm + devDependencies with the typed noun", () => {
 			const subject = buildUpdateSubject([
-				mk("pnpm", "config", "11.7.0"),
+				mk("pnpm", "packageManager", "11.7.0"),
 				mk("vitest", "devDependency", "3.0.0", "@savvy-web/a"),
 				mk("tsx", "devDependency", "4.0.0", "@savvy-web/b"),
 			]);
@@ -214,7 +214,7 @@ describe("buildUpdateSubject", () => {
 			// Under the old 72-char budget this degraded to the coarse
 			// "update 1 config and 3 dependencies", mislabeling devDependencies.
 			const subject = buildUpdateSubject([
-				mk("pnpm", "config", "11.23.0"),
+				mk("pnpm", "packageManager", "11.23.0"),
 				mk("@effected/pnpm-plugin-effect", "config", "0.6.3"),
 				mk("@savvy-web/bundler", "devDependency", "^2.1.22", "std-osc8"),
 				mk("@savvy-web/silk", "devDependency", "^3.10.0", "std-osc8"),
@@ -265,7 +265,7 @@ describe("buildUpdateSubject", () => {
 	describe("mixed categories (rule 9)", () => {
 		it("composes pnpm + deps", () => {
 			const subject = buildUpdateSubject([
-				mk("pnpm", "config", "11.7.0"),
+				mk("pnpm", "packageManager", "11.7.0"),
 				mk("effect", "dependency", "3.21.3", "@savvy-web/a"),
 				mk("zod", "dependency", "4.0.0", "@savvy-web/b"),
 			]);
@@ -274,7 +274,7 @@ describe("buildUpdateSubject", () => {
 
 		it("merges pnpm + runtime into a single upgrade clause", () => {
 			const subject = buildUpdateSubject([
-				mk("pnpm", "config", "11.7.0"),
+				mk("pnpm", "packageManager", "11.7.0"),
 				mk("node", "runtime", "26.1.0"),
 				mk("effect", "dependency", "3.21.3", "@savvy-web/a"),
 				mk("zod", "dependency", "4.0.0", "@savvy-web/b"),
@@ -294,7 +294,7 @@ describe("buildUpdateSubject", () => {
 
 		it("composes the full upgrade + update shape", () => {
 			const subject = buildUpdateSubject([
-				mk("pnpm", "config", "11.7.0"),
+				mk("pnpm", "packageManager", "11.7.0"),
 				mk("node", "runtime", "26.1.0"),
 				mk("typescript", "config", "5.9.2"),
 				mk("biome", "config", "2.0.0"),
@@ -306,7 +306,7 @@ describe("buildUpdateSubject", () => {
 
 		it("keeps the full composed shape within the 100-char budget for a large plain-deps run", () => {
 			const updates = [
-				mk("pnpm", "config", "11.7.0"),
+				mk("pnpm", "packageManager", "11.7.0"),
 				mk("node", "runtime", "26.1.0"),
 				mk("deno", "runtime", "2.1.0"),
 				mk("bun", "runtime", "1.2.0"),
@@ -322,7 +322,7 @@ describe("buildUpdateSubject", () => {
 
 	describe("version display + header-budget guard", () => {
 		it("strips a corepack hash suffix from the pnpm version", () => {
-			expect(buildUpdateSubject([mk("pnpm", "config", "11.7.0+sha512.deadbeefcafe")])).toBe(
+			expect(buildUpdateSubject([mk("pnpm", "packageManager", "11.7.0+sha512.deadbeefcafe")])).toBe(
 				`${PREFIX}upgrade pnpm to 11.7.0`,
 			);
 		});
@@ -348,13 +348,13 @@ describe("buildUpdateSubject", () => {
 	describe("conventional-commit + length invariants", () => {
 		const cases: Array<readonly DependencyUpdateResult[]> = [
 			[],
-			[mk("pnpm", "config", "11.7.0")],
+			[mk("pnpm", "packageManager", "11.7.0")],
 			[mk("node", "runtime", "26.1.0")],
 			[mk("effect", "dependency", "3.21.3", "@savvy-web/foo")],
 			[mk("typescript", "config", "5.9.2"), mk("biome", "config", "2.0.0")],
-			[mk("pnpm", "config", "11.7.0"), mk("effect", "dependency", "3.21.3", "@savvy-web/a")],
+			[mk("pnpm", "packageManager", "11.7.0"), mk("effect", "dependency", "3.21.3", "@savvy-web/a")],
 			// Hash-pinned pnpm version must not blow the budget.
-			[mk("pnpm", "config", "11.7.0+sha512.0123456789abcdef0123456789abcdef0123456789abcdef")],
+			[mk("pnpm", "packageManager", "11.7.0+sha512.0123456789abcdef0123456789abcdef0123456789abcdef")],
 			// Long scoped workspace name must degrade rather than overflow.
 			[
 				mk(
@@ -372,7 +372,7 @@ describe("buildUpdateSubject", () => {
 			],
 			// The std-osc8#65 shape: must render typed, within budget.
 			[
-				mk("pnpm", "config", "11.23.0"),
+				mk("pnpm", "packageManager", "11.23.0"),
 				mk("@effected/pnpm-plugin-effect", "config", "0.6.3"),
 				mk("a", "devDependency", "1.0.0", "p"),
 				mk("b", "devDependency", "1.0.0", "p"),
