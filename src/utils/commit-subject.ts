@@ -19,10 +19,12 @@ import type { RuntimeName } from "./runtime.js";
  * optionalDependencies), counting distinct names per section in
  * production-first order.
  *
- * The 72-character header budget is enforced by a progressive ladder: the
- * typed breakdown is tried first; if it overflows, the coarse phrasing
- * (`update 1 config and 6 dependencies`) is tried; only then does the subject
- * degrade to the safe generic fallback.
+ * The 100-character header budget (commitlint's `header-max-length`, via
+ * `@commitlint/config-conventional`) is enforced by a progressive ladder: the
+ * typed breakdown is tried first; if it overflows, the coarse phrasing is
+ * tried; only then does the subject degrade to the safe generic fallback. The
+ * coarse phrasing never mislabels: a batch containing non-`dependencies`
+ * sections is lumped as "packages", not as "dependencies".
  */
 export const buildUpdateSubject = (updates: ReadonlyArray<DependencyUpdateResult>): string => {
 	const typed = `${PREFIX}${resolveSubject(updates, "typed")}`;
@@ -40,7 +42,11 @@ const displayVersion = (raw: string): string => raw.replace(/^[\s^~>=<]+/, "").s
 
 const PREFIX = "chore(deps): ";
 const FALLBACK = "update dependencies";
-const HEADER_MAX = 72;
+// commitlint's enforced limit (header-max-length, @commitlint/config-conventional).
+// The previous 72 was self-imposed git-log styling, and it forced the accurate
+// typed breakdown to degrade into a coarse form that called devDependencies
+// "dependencies" on the most common run shape.
+const HEADER_MAX = 100;
 
 /** How the regular-deps bucket is phrased: per-section nouns or lumped. */
 type Detail = "typed" | "coarse";
@@ -106,7 +112,7 @@ const resolveSubject = (updates: ReadonlyArray<DependencyUpdateResult>, detail: 
 			return `update ${sectionNoun} in ${sharedWorkspace}`;
 		}
 		if (detail === "typed") return depsPhrase(typeCounts);
-		return `update ${depNames.length} dependencies`;
+		return `update ${depNames.length} ${coarseDepNoun(depNames.length, typeCounts)}`;
 	}
 
 	// Rule 9: mixed categories — compose. The ladder in buildUpdateSubject
@@ -138,11 +144,13 @@ const compose = (
 };
 
 /**
- * The `update …` clause. Coarse detail lumps regular deps into one count
- * ("update 4 config and 6 dependencies"); typed detail enumerates per section
- * ("update 1 config dependency and 4 devDependencies"). When the regular deps
- * are all plain `dependencies`, the elliptical coarse form is already precise
- * ("config" modifies the shared noun), so typed detail keeps it.
+ * The `update …` clause. Coarse detail lumps regular deps into one count;
+ * typed detail enumerates per section ("update 1 config dependency and
+ * 4 devDependencies"). When the regular deps are all plain `dependencies`, the
+ * elliptical coarse form is already precise ("config" modifies the shared
+ * noun), so typed detail keeps it. When they are NOT all plain, the coarse
+ * lump noun is "packages" — calling a devDependency batch "dependencies" made
+ * release-neutral runs read as release-triggering.
  */
 const updatePhrase = (
 	configCount: number,
@@ -158,10 +166,25 @@ const updatePhrase = (
 		const typeItems = typeCounts.map(({ type, count }) => `${count} ${depTypeNoun(type, count)}`);
 		return `update ${joinAnd([...configItem, ...typeItems])}`;
 	}
-	if (configCount > 0 && depCount > 0) return `update ${configCount} config and ${pluralize(depCount)}`;
+	if (configCount > 0 && depCount > 0) {
+		// The elliptical shared-noun form is only honest when the noun is right
+		// for every regular dep; otherwise the config noun is spelled out and the
+		// regular deps lump as "packages".
+		return onlyPlainDeps
+			? `update ${configCount} config and ${pluralize(depCount)}`
+			: `update ${configCount} config ${noun(configCount)} and ${depCount} ${coarseDepNoun(depCount, typeCounts)}`;
+	}
 	if (configCount > 0) return `update ${configCount} config ${noun(configCount)}`;
-	return `update ${pluralize(depCount)}`;
+	return `update ${depCount} ${coarseDepNoun(depCount, typeCounts)}`;
 };
+
+/** The honest lump noun for a coarse regular-deps count, pluralized. */
+const coarseDepNoun = (count: number, typeCounts: ReadonlyArray<{ type: DepType; count: number }>): string =>
+	typeCounts.length === 0 || (typeCounts.length === 1 && typeCounts[0].type === "dependency")
+		? noun(count)
+		: count === 1
+			? "package"
+			: "packages";
 
 /** Typed single-category deps phrase: one section or a per-section enumeration. */
 const depsPhrase = (typeCounts: ReadonlyArray<{ type: DepType; count: number }>): string =>
