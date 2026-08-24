@@ -348,6 +348,14 @@ const processDep = (
 		//                       only just started shipping.
 		//   anything else    -> something that exists could not be read faithfully. We
 		//                       do not know what is ours, so we change nothing.
+		//
+		// The final branch is deliberately a catch-all rather than an exhaustive
+		// switch, so a reason ADDED upstream lands on the conservative route by
+		// default. That has already happened once: `@effected/npm@0.12.0` split
+		// `integrityUnverifiable` (the digest could not be computed) out of
+		// `integrityMismatch` (two digests existed and differed), because the
+		// former was being reported as a measured mismatch. It needed no change
+		// here — a reason we do not recognise is exactly a base we cannot trust.
 		let merged: CatalogMap;
 		let deltas: ReadonlyArray<CatalogDelta>;
 

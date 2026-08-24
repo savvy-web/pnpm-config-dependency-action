@@ -594,6 +594,19 @@ discrimination is load-bearing only because something branches on it, and a
 future refactor that collapses the branches makes the union decoration again.
 The mutant that proves it discriminates is in @./08-testing.md.
 
+**The union is consumed as `TarballError["reason"]`, so it widens on its own —
+and it already has.** `@effected/npm@0.12.0` split `integrityUnverifiable` (the
+digest could not be computed) out of `integrityMismatch` (two digests existed
+and differed), because a *failure to verify* was being reported as a *measured
+mismatch*. Nothing here needed changing: the base-routing switch ends in a
+catch-all rather than an exhaustive match, so an unrecognised reason takes the
+conservative skip route by construction. That is the intended trade — an
+exhaustive match would turn every upstream addition into a compile error, and
+the compile error would be answered under time pressure by someone guessing a
+route. *Falsified if* a future member ever belongs on the plugin-wins side; only
+`notFound` does today, and a new "the artifact is genuinely absent" reason would
+have to be routed by hand.
+
 **Note the direction of travel.** The kit's `TarballError` does **not** carry a
 `noCatalogsExport` member and deliberately should not: `extract` stops at the
 extracted directory, so reading a catalogs export, finding it absent, and

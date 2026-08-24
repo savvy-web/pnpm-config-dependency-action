@@ -556,6 +556,35 @@ consumer with no seam to fix it, so loading stays local behind its
 same load, at which point the local loader is worth its own module rather than
 living inside `fetchModuleCatalogs`.
 
+### This repo's `@effected` ranges come from a config dependency, not `package.json`
+
+Recorded because it fired, and because the obvious verification misses it.
+
+`@effected/*` are declared `catalog:effected`, and that catalog is **injected by
+`@effected/pnpm-plugin-effect`**, a pnpm config dependency pinned by hash in
+`pnpm-workspace.yaml`. So bumping a kit package here is not a `package.json`
+edit and cannot be done with `pnpm add`: the range lives in a *published
+artifact belonging to someone else*, and this repo consumes whichever version
+its `configDependencies` pin names.
+
+The consequence, which cost a full install cycle to notice: after a kit release,
+removing a dogfood `file:` override and reinstalling resolves back to the **old**
+versions, because the pinned plugin still carries the old catalog. Every probe
+short of the resolved tree says the release is fine — the packages are on the
+registry at the new versions, and the *published* plugin's catalog names them
+correctly. The stale thing is the **pin**, one level up from what anyone thinks
+to check.
+
+*The check that actually answers it* is the resolved tree, not the registry:
+`node -p "require('./node_modules/@effected/npm/package.json').version"` after
+the install, or grepping the adopted symbol out of the installed `.d.ts`.
+Confirming the published plugin names `^0.12.0` proves the *plugin* is right and
+says nothing about which plugin this repo installs.
+
+So a kit adoption's exit has an extra step, and it is the same operation this
+action performs for its consumers: bump the `configDependencies` pin (version
+**and** integrity) to the release that carries the new catalog, then reinstall.
+
 ### A reachability guard anchored on prose reports the wrong cause
 
 `scripts/assert-native-dynamic-import.mjs` proves `module-catalogs` is still
