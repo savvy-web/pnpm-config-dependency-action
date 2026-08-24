@@ -3,8 +3,8 @@ status: current
 module: silk-update-action
 category: architecture
 created: 2026-02-20
-updated: 2026-07-26
-last-synced: 2026-07-26
+updated: 2026-08-23
+last-synced: 2026-08-23
 completeness: 95
 related:
   - ./_index.md
@@ -57,7 +57,9 @@ src/
 │   ├── changesets.ts      # Changesets service (thin adapter over silk DepsRegen)
 │   ├── config-deps.ts     # ConfigDeps service (pnpm-workspace.yaml)
 │   ├── lockfile.ts        # Lockfile service + standalone capture/compare helpers
-│   ├── module-catalogs.ts # fetchModuleCatalogs (tarball → catalogs export)
+│   ├── module-catalogs.ts # fetchModuleCatalogs — LOADS the entry and reads the
+│   │                      #   catalogs export; fetch/verify/extract is the kit's
+│   │                      #   PackageTarball, entry resolution its resolveEntryPoint
 │   ├── package-manager.ts # detectPackageManager + SupportedPm / DetectedPm
 │   ├── package-manager-upgrade.ts  # PackageManagerUpgrade service (pnpm/bun/npm)
 │   ├── peer-sync.ts       # syncPeers standalone helpers (no service tag)

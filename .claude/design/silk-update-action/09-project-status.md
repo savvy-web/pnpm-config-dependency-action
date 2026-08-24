@@ -3,8 +3,8 @@ status: current
 module: silk-update-action
 category: architecture
 created: 2026-02-20
-updated: 2026-07-26
-last-synced: 2026-07-26
+updated: 2026-08-23
+last-synced: 2026-08-23
 completeness: 95
 related:
   - ./_index.md
@@ -406,11 +406,13 @@ These were investigated, rejected on measurement, and are the half of this
 record that a fresh audit will otherwise re-derive from scratch. Each names what
 would change the answer.
 
-### `@effected/package-json` — NARROWED: adopted for `modify`, decode path still declined (upstream #286)
+### `@effected/package-json` — NARROWED TWICE: `modify` (#286) and `resolveEntryPoint` (effected#282); decode path still declined
 
 **This entry previously read "not adopted". It was narrowed, not overturned** —
-and the difference matters enough to be the heading. One member was adopted; the
-ruling's central objection is untouched and still governs everything else. The
+and the difference matters enough to be the heading. **It has since been
+narrowed a second time** (`resolveEntryPoint`, effected#282) without the ruling
+moving: two decode-free members are adopted, and the ruling's central objection
+is untouched and still governs everything else. The
 original argument is reproduced below rather than replaced, because most of it is
 *still true*, and because the way the record went stale is itself the lesson.
 
@@ -481,6 +483,23 @@ killed **every run in every consumer repo** at v4.6.0 with
 check run existed. Adopting a service into a second consumer is a **layer-wiring
 change**, not just a call-site change, and nothing in the type system said so.
 
+**A second narrowing, and it does NOT disturb the ruling.** effected#282 added
+`resolveEntryPoint`, adopted by `src/services/module-catalogs.ts`. It is a
+**pure, IO-free** function over a plain `{ exports?, main? }` object and never
+touches `Package.decode`, so the objection above is untouched for a second time
+rather than eroded. Read the entry as *"declined in whole → adopted for two
+decode-free members, with the original objection intact for the rest"*.
+
+It is also the first adoption here that **changed behavior rather than just
+moving it**: the kit refuses to fall through to `main`/`index.js` when `exports`
+is present and nothing matches, where this repo's resolver did. That is Node's
+encapsulation rule, and the lenient version resolved a file the package
+deliberately does not export. Measured, not assumed: both config dependencies
+this repo consumes declare a `"."` conditions map with `import` and `default`
+and **no `main` at all**, so the fallback was unreachable for them. The residual
+exposure is a consumer naming a `require`-only config dependency that ships a
+`main`. Detail in @./01-dependencies.md.
+
 **What would change the remaining answer:** nothing outstanding is blocking the
 decode path — `PackageManifest` exists and would accept the workspace root. It
 is unadopted because the read is only used to decide, so decoding buys nothing
@@ -493,6 +512,65 @@ already sorted by lint-staged, so a canonical-reorder write is a no-op *here*.
 Checking only against this repo would have made the original write path look
 safe — and would equally hide a regression if `modify` were ever swapped back
 for a re-serialize.
+
+### The tarball reader was harvested upstream, and the `null` it returned was a live bug
+
+`src/services/module-catalogs.ts` went 326 → 198 lines when `@effected/npm`'s
+`PackageTarball` and `@effected/package-json`'s `resolveEntryPoint` took the
+generic halves (effected#282, this repo's code as the source). Three things are
+worth keeping past the loop that produced them.
+
+**The failure posture had to change, and the kit was right to insist.** The
+local function was total — `Effect<CatalogMap | null, never, …>` — with every
+failure logged and collapsed to `null`. That reads as resilience and was
+partly a defect: `CatalogConfigDeps` consults the **base** version's result to
+decide whether it has a merge base, so an integrity mismatch (bytes that are
+not what the registry vouched for) was indistinguishable from a yanked version,
+took the lossy `pluginWinsMerge` path, and discarded a user's catalog override
+in a consumer's repository on a run that reported success. **Nothing was wrong
+with the error handling in isolation; the defect lived in the collapse.** The
+kit fails with a discriminated `TarballError`, this repo routes on the reason,
+and the swallow is one `Effect.catch` at the call site where the policy belongs.
+
+*How it surfaced is the reusable part:* answering an upstream design question
+about failure posture required re-reading the two call sites, and the two turned
+out not to treat `null` alike. The bug was found by having to **explain** the
+code to someone, not by testing it — and the suite could not have found it,
+because every test asserted `toBeNull()` and the two routes both produce a
+`null` on the way in.
+
+**The boundary sits where the kit stops knowing things.** `extract` answers a
+directory and no more, so "fetched fine but ships no `catalogs` export" is not a
+`TarballError` member and deliberately never will be — a tarball error asserting
+something about this action's file format would be the wrong package making the
+claim. That case is this repo's, and it routes to an *empty* base rather than a
+*missing* one, which is the asymmetry documented in @./05-module-library.md.
+
+**What did NOT come upstream:** the `import()` of the resolved entry. A
+kit-level loader would compile into a context module for every bundling
+consumer with no seam to fix it, so loading stays local behind its
+`webpackIgnore` comment. That is the same reasoning that keeps
+`nativeDynamicImports` out of `src/`.
+
+*What would change the answer:* a second consumer in this repo needing the
+same load, at which point the local loader is worth its own module rather than
+living inside `fetchModuleCatalogs`.
+
+### A reachability guard anchored on prose reports the wrong cause
+
+`scripts/assert-native-dynamic-import.mjs` proves `module-catalogs` is still
+reachable in the bundle by finding a string it emits. That anchor was the **full
+text of a warning**. Rewording the warning during the adoption above failed the
+build with *"could not find module-catalogs in dist/main.js"* — the module was
+fine; a sentence had changed, and the guard named the alarming cause rather than
+the real one.
+
+The anchor is now the stable prefix (`fetchModuleCatalogs:`). An exported symbol
+or a build-time marker would be better still, since **prose is the one part of a
+module guaranteed to change without the module changing**. This is the
+artifact-side twin of the controlled-grep rule this record already carries: an
+absence is only evidence once you have shown the search would have found the
+real thing.
 
 ### `makeAppLayer`'s requirement channel is guarded at compile time — keep the guard
 

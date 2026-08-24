@@ -60,12 +60,6 @@ catalogs:
     '@effected/lockfiles':
       specifier: ^0.6.3
       version: 0.6.3
-    '@effected/npm':
-      specifier: ^0.11.1
-      version: 0.11.1
-    '@effected/package-json':
-      specifier: ^0.10.2
-      version: 0.10.2
     '@effected/runtimes':
       specifier: ^0.4.3
       version: 0.4.3
@@ -88,6 +82,8 @@ catalogs:
 
 overrides:
   '@microsoft/api-extractor>typescript': ^6.0.3
+  '@effected/npm': file:../../spencerbeggs/effected/packages/npm/dist/prod/npm/pkg
+  '@effected/package-json': file:../../spencerbeggs/effected/packages/package-json/dist/prod/npm/pkg
 
 pnpmfileChecksum: sha256-wAkIcvpZp0kGm9BXSzkNHW361RsST95FYMA8kVX8J8Y=
 
@@ -112,13 +108,13 @@ importers:
         version: 0.9.2(@effect/platform-node@4.0.0-rc.109(effect@4.0.0-rc.109)(redis@6.2.1))(@effected/jsonc@0.7.0(effect@4.0.0-rc.109))(@effected/semver@0.5.0(effect@4.0.0-rc.109))(@effected/toml@0.5.0(effect@4.0.0-rc.109))(@effected/yaml@0.11.0(effect@4.0.0-rc.109))(effect@4.0.0-rc.109)(supports-color@7.2.0)
       '@effected/lockfiles':
         specifier: catalog:effected
-        version: 0.6.3(@effected/jsonc@0.7.0(effect@4.0.0-rc.109))(@effected/npm@0.11.1(@effected/semver@0.5.0(effect@4.0.0-rc.109))(effect@4.0.0-rc.109))(@effected/semver@0.5.0(effect@4.0.0-rc.109))(@effected/yaml@0.11.0(effect@4.0.0-rc.109))(effect@4.0.0-rc.109)
+        version: 0.6.3(@effected/jsonc@0.7.0(effect@4.0.0-rc.109))(@effected/npm@file:../../spencerbeggs/effected/packages/npm/dist/prod/npm/pkg(@effected/semver@0.5.0(effect@4.0.0-rc.109))(effect@4.0.0-rc.109))(@effected/semver@0.5.0(effect@4.0.0-rc.109))(@effected/yaml@0.11.0(effect@4.0.0-rc.109))(effect@4.0.0-rc.109)
       '@effected/npm':
-        specifier: catalog:effected
-        version: 0.11.1(@effected/semver@0.5.0(effect@4.0.0-rc.109))(effect@4.0.0-rc.109)
+        specifier: file:../../spencerbeggs/effected/packages/npm/dist/prod/npm/pkg
+        version: file:../../spencerbeggs/effected/packages/npm/dist/prod/npm/pkg(@effected/semver@0.5.0(effect@4.0.0-rc.109))(effect@4.0.0-rc.109)
       '@effected/package-json':
-        specifier: catalog:effected
-        version: 0.10.2(effect@4.0.0-rc.109)
+        specifier: file:../../spencerbeggs/effected/packages/package-json/dist/prod/npm/pkg
+        version: file:../../spencerbeggs/effected/packages/package-json/dist/prod/npm/pkg(effect@4.0.0-rc.109)
       '@effected/runtimes':
         specifier: catalog:effected
         version: 0.4.3(effect@4.0.0-rc.109)
@@ -530,6 +526,7 @@ packages:
 
   '@effected/lockfiles@0.6.3':
     resolution: {integrity: sha512-loyQ149VIQRjs6FAKaBTOf0QdGywuLeA/pcTde9T9vcSY1iasQzJHn6Yma48K8WY95DtsJ8skrNvXs54sNTlIg==}
+    version: 0.6.3
     engines: {node: '>=24.11.0'}
     peerDependencies:
       '@effected/jsonc': ^0.7.0
@@ -554,15 +551,15 @@ packages:
       '@effected/yaml':
         optional: true
 
-  '@effected/npm@0.11.1':
-    resolution: {integrity: sha512-W0CSsSRIM6ysjGOqrKm15P1pebCnd5io6imciAFcLgLZiRS5HEQCK00BjlYvirLOfPj9mdpqRJAtIxdBXRHWuA==}
+  '@effected/npm@file:../../spencerbeggs/effected/packages/npm/dist/prod/npm/pkg':
+    resolution: {directory: ../../spencerbeggs/effected/packages/npm/dist/prod/npm/pkg, type: directory}
     engines: {node: '>=24.11.0'}
     peerDependencies:
       '@effected/semver': ^0.5.0
       effect: 4.0.0-rc.109
 
-  '@effected/package-json@0.10.2':
-    resolution: {integrity: sha512-+gdJpx1aiC3effNfTTMdibe2gW8+tMPaWqJJnYes7aIrtA2pWTGHklbC0CCYIi2VesqXcaMUp6VwCyAdfjBK1g==}
+  '@effected/package-json@file:../../spencerbeggs/effected/packages/package-json/dist/prod/npm/pkg':
+    resolution: {directory: ../../spencerbeggs/effected/packages/package-json/dist/prod/npm/pkg, type: directory}
     engines: {node: '>=24.11.0'}
     peerDependencies:
       effect: 4.0.0-rc.109
@@ -3828,7 +3825,7 @@ snapshots:
       '@effected/github': 0.7.0(effect@4.0.0-rc.109)
       '@effected/glob': 0.4.0(effect@4.0.0-rc.109)
       '@effected/markdown': 0.6.3(@effected/jsonc@0.7.0(effect@4.0.0-rc.109))(@effected/toml@0.5.0(effect@4.0.0-rc.109))(@effected/yaml@0.11.0(effect@4.0.0-rc.109))(effect@4.0.0-rc.109)
-      '@effected/npm': 0.11.1(@effected/semver@0.5.0(effect@4.0.0-rc.109))(effect@4.0.0-rc.109)
+      '@effected/npm': file:../../spencerbeggs/effected/packages/npm/dist/prod/npm/pkg(@effected/semver@0.5.0(effect@4.0.0-rc.109))(effect@4.0.0-rc.109)
       '@effected/sbom': 0.4.1(effect@4.0.0-rc.109)(supports-color@7.2.0)
       '@effected/templates': 0.4.0(effect@4.0.0-rc.109)
       effect: 4.0.0-rc.109
@@ -3864,10 +3861,10 @@ snapshots:
     dependencies:
       effect: 4.0.0-rc.109
 
-  '@effected/lockfiles@0.6.3(@effected/jsonc@0.7.0(effect@4.0.0-rc.109))(@effected/npm@0.11.1(@effected/semver@0.5.0(effect@4.0.0-rc.109))(effect@4.0.0-rc.109))(@effected/semver@0.5.0(effect@4.0.0-rc.109))(@effected/yaml@0.11.0(effect@4.0.0-rc.109))(effect@4.0.0-rc.109)':
+  '@effected/lockfiles@0.6.3(@effected/jsonc@0.7.0(effect@4.0.0-rc.109))(@effected/npm@file:../../spencerbeggs/effected/packages/npm/dist/prod/npm/pkg(@effected/semver@0.5.0(effect@4.0.0-rc.109))(effect@4.0.0-rc.109))(@effected/semver@0.5.0(effect@4.0.0-rc.109))(@effected/yaml@0.11.0(effect@4.0.0-rc.109))(effect@4.0.0-rc.109)':
     dependencies:
       '@effected/jsonc': 0.7.0(effect@4.0.0-rc.109)
-      '@effected/npm': 0.11.1(@effected/semver@0.5.0(effect@4.0.0-rc.109))(effect@4.0.0-rc.109)
+      '@effected/npm': file:../../spencerbeggs/effected/packages/npm/dist/prod/npm/pkg(@effected/semver@0.5.0(effect@4.0.0-rc.109))(effect@4.0.0-rc.109)
       '@effected/semver': 0.5.0(effect@4.0.0-rc.109)
       '@effected/yaml': 0.11.0(effect@4.0.0-rc.109)
       effect: 4.0.0-rc.109
@@ -3880,16 +3877,16 @@ snapshots:
       '@effected/toml': 0.5.0(effect@4.0.0-rc.109)
       '@effected/yaml': 0.11.0(effect@4.0.0-rc.109)
 
-  '@effected/npm@0.11.1(@effected/semver@0.5.0(effect@4.0.0-rc.109))(effect@4.0.0-rc.109)':
+  '@effected/npm@file:../../spencerbeggs/effected/packages/npm/dist/prod/npm/pkg(@effected/semver@0.5.0(effect@4.0.0-rc.109))(effect@4.0.0-rc.109)':
     dependencies:
       '@effected/commands': 0.5.0(effect@4.0.0-rc.109)
       '@effected/semver': 0.5.0(effect@4.0.0-rc.109)
       effect: 4.0.0-rc.109
 
-  '@effected/package-json@0.10.2(effect@4.0.0-rc.109)':
+  '@effected/package-json@file:../../spencerbeggs/effected/packages/package-json/dist/prod/npm/pkg(effect@4.0.0-rc.109)':
     dependencies:
       '@effected/jsonc': 0.7.0(effect@4.0.0-rc.109)
-      '@effected/npm': 0.11.1(@effected/semver@0.5.0(effect@4.0.0-rc.109))(effect@4.0.0-rc.109)
+      '@effected/npm': file:../../spencerbeggs/effected/packages/npm/dist/prod/npm/pkg(@effected/semver@0.5.0(effect@4.0.0-rc.109))(effect@4.0.0-rc.109)
       '@effected/semver': 0.5.0(effect@4.0.0-rc.109)
       '@effected/spdx': 0.4.0(effect@4.0.0-rc.109)
       effect: 4.0.0-rc.109
@@ -3901,7 +3898,7 @@ snapshots:
 
   '@effected/sbom@0.4.1(effect@4.0.0-rc.109)(supports-color@7.2.0)':
     dependencies:
-      '@effected/package-json': 0.10.2(effect@4.0.0-rc.109)
+      '@effected/package-json': file:../../spencerbeggs/effected/packages/package-json/dist/prod/npm/pkg(effect@4.0.0-rc.109)
       '@effected/spdx': 0.4.0(effect@4.0.0-rc.109)
       '@sigstore/bundle': 5.0.0
       '@sigstore/sign': 5.0.0(supports-color@7.2.0)
@@ -3942,9 +3939,9 @@ snapshots:
       '@effected/commands': 0.5.0(effect@4.0.0-rc.109)
       '@effected/git': 0.9.0(effect@4.0.0-rc.109)
       '@effected/glob': 0.4.0(effect@4.0.0-rc.109)
-      '@effected/lockfiles': 0.6.3(@effected/jsonc@0.7.0(effect@4.0.0-rc.109))(@effected/npm@0.11.1(@effected/semver@0.5.0(effect@4.0.0-rc.109))(effect@4.0.0-rc.109))(@effected/semver@0.5.0(effect@4.0.0-rc.109))(@effected/yaml@0.11.0(effect@4.0.0-rc.109))(effect@4.0.0-rc.109)
-      '@effected/npm': 0.11.1(@effected/semver@0.5.0(effect@4.0.0-rc.109))(effect@4.0.0-rc.109)
-      '@effected/package-json': 0.10.2(effect@4.0.0-rc.109)
+      '@effected/lockfiles': 0.6.3(@effected/jsonc@0.7.0(effect@4.0.0-rc.109))(@effected/npm@file:../../spencerbeggs/effected/packages/npm/dist/prod/npm/pkg(@effected/semver@0.5.0(effect@4.0.0-rc.109))(effect@4.0.0-rc.109))(@effected/semver@0.5.0(effect@4.0.0-rc.109))(@effected/yaml@0.11.0(effect@4.0.0-rc.109))(effect@4.0.0-rc.109)
+      '@effected/npm': file:../../spencerbeggs/effected/packages/npm/dist/prod/npm/pkg(@effected/semver@0.5.0(effect@4.0.0-rc.109))(effect@4.0.0-rc.109)
+      '@effected/package-json': file:../../spencerbeggs/effected/packages/package-json/dist/prod/npm/pkg(effect@4.0.0-rc.109)
       '@effected/semver': 0.5.0(effect@4.0.0-rc.109)
       '@effected/walker': 0.5.0(@effected/glob@0.4.0(effect@4.0.0-rc.109))(effect@4.0.0-rc.109)
       '@effected/yaml': 0.11.0(effect@4.0.0-rc.109)
@@ -4465,7 +4462,7 @@ snapshots:
       '@effected/glob': 0.4.0(effect@4.0.0-rc.109)
       '@effected/jsonc': 0.7.0(effect@4.0.0-rc.109)
       '@effected/markdown': 0.6.3(@effected/jsonc@0.7.0(effect@4.0.0-rc.109))(@effected/toml@0.5.0(effect@4.0.0-rc.109))(@effected/yaml@0.11.0(effect@4.0.0-rc.109))(effect@4.0.0-rc.109)
-      '@effected/package-json': 0.10.2(effect@4.0.0-rc.109)
+      '@effected/package-json': file:../../spencerbeggs/effected/packages/package-json/dist/prod/npm/pkg(effect@4.0.0-rc.109)
       '@effected/templates': 0.4.0(effect@4.0.0-rc.109)
       '@effected/walker': 0.5.0(@effected/glob@0.4.0(effect@4.0.0-rc.109))(effect@4.0.0-rc.109)
       '@effected/workspaces': 0.18.0(@effected/jsonc@0.7.0(effect@4.0.0-rc.109))(effect@4.0.0-rc.109)

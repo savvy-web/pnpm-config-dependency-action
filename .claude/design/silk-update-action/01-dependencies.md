@@ -3,8 +3,8 @@ status: current
 module: silk-update-action
 category: architecture
 created: 2026-02-20
-updated: 2026-08-05
-last-synced: 2026-08-05
+updated: 2026-08-23
+last-synced: 2026-08-23
 completeness: 95
 related:
   - ./_index.md
@@ -138,6 +138,25 @@ The action runs on **Effect v4** (`effect` / `@effect/platform-node` both resolv
     caller supplies the clock and missing timestamps drop the version) and
     `PartialReleaseAgeGate` (the permissive per-source contribution type, re-exported by
     `src/services/release-age.ts`).
+  - **`PackageTarball`, adopted at effected#282.** `extract(published)` takes an
+    already-resolved `PublishedVersion` and answers the directory the tarball's
+    `package/` root was unpacked into, failing with a `TarballError` whose `reason`
+    discriminates `notFound` / `http` / `integrityMismatch` / `extractFailed`. It is
+    **scoped** — the temp directory goes when the calling scope closes — which deleted
+    this repo's `mkdtemp` / `rmSync` / `Effect.ensuring` bookkeeping outright.
+    - It was harvested **out of this action** and keeps two properties this repo had
+      already paid for: integrity is verified **before** extraction (a poisoned CDN
+      edge, proxy or mirror must never reach `tar` or `import()`), and a non-2xx
+      response is caught before anything is piped to disk, because otherwise a 404
+      body reaches `tar` and surfaces as a misleading "failed to extract".
+    - Its layer requires `FileSystem | Crypto | HttpClient | ChildProcessSpawner`, and
+      **all four are `ActionServices` members here** (`Crypto` arrives via
+      `NodeServices`), so it is built bare in `makeAppLayer` like `NpmRegistry` and its
+      requirements stay in the channel.
+    - **`tar` still shells out, and that is a tier constraint rather than a
+      preference:** a bundled tarball reader would make `@effected/npm` an *integrated*
+      package, which propagates to `@effected/lockfiles`, which is pure. The cost lands
+      on non-runner consumers, who now need a spawner **and** the binary.
   - **The corepack pin vocabulary, adopted at `0.11.0` (issue #290).**
     `CorepackIntegrityHash.fromSri` converts npm's `sha512-<base64>` to corepack's
     `sha512.<hex>`, failing typed with `InvalidSriIntegrityHashError` on a non-sha512
@@ -273,8 +292,28 @@ The action runs on **Effect v4** (`effect` / `@effect/platform-node` both resolv
 - `@effected/yaml` — parse and stringify `pnpm-workspace.yaml` with consistent formatting.
   `Yaml.parse` / `Yaml.stringify` return Effects (rather than throwing like the `yaml` npm
   package), so `workspace-yaml.ts` yields them and maps failures into `FileSystemError`.
-- **`@effected/package-json` — adopted for `PackageJsonFile.modify`, and
-  for nothing else.** `modify(path, edits)` applies a list of `PackageFieldEdit`s
+- **`@effected/package-json` — adopted for `PackageJsonFile.modify` and
+  `resolveEntryPoint`.** The second is newer (effected#282) and does not disturb the
+  ruling below: it is a **pure, IO-free** function over a plain `{ exports?, main? }`
+  object, so it never touches the decode path the ruling is about. It returns a
+  `Result` whose failure discriminates `noRootExport` / `noConditionMatched` /
+  `unsupportedExportsForm`, which is what lets `module-catalogs.ts` log *which* shape a
+  consumer's plugin had rather than "could not resolve an entry point".
+  - **It is deliberately stricter than the implementation it replaced, and that is a
+    behavior change with a consumer-visible edge.** This repo's resolver fell through to
+    `main`, then `index.js`, when `exports` was present and nothing matched; the kit
+    returns a typed failure. Node's rule is that `exports` **encapsulates** a package, so
+    the lenient reading resolved a file the package deliberately does not export — which
+    then loads and behaves plausibly rather than failing. Measured against the config
+    dependencies this repo actually consumes, the divergence is **unreachable**:
+    `@effected/pnpm-plugin-effect@0.6.4` and `@savvy-web/pnpm-plugin-silk@0.29.1` both
+    declare a `"."` conditions map carrying `import` **and** `default`, and **neither
+    declares `main` at all**, so the fallback could never have fired for them. The
+    exposure that remains is unbounded in principle and narrow in practice: this action
+    loads whatever config dependency a *consumer* names, and a `require`-only package
+    shipping a `main` now resolves to nothing where it used to resolve.
+
+- **`@effected/package-json` — the `PackageJsonFile.modify` ruling.** `modify(path, edits)` applies a list of `PackageFieldEdit`s
   (a JSONC `path` plus a `value`; `value: undefined` deletes) to a manifest on disk in
   one read/edit/write pass, preserving **every byte outside the edited span** — key
   order, indentation, line endings, trailing newline — and skipping the write entirely
@@ -467,7 +506,12 @@ last `pnpm why` run against the current lockfile.
   which this action never does.
 - **A third case, in first-party source:** `src/services/module-catalogs.ts` dynamically
   imports a config dependency's extracted tarball entry — a path computed at runtime, not a
-  package specifier. `nativeDynamicImports` only matches resolved paths under
+  package specifier. **This is the one part of that module that did NOT move upstream**
+  (effected#282), and the magic comment is why: a kit-level loader would hand the same
+  context-module problem to every bundling consumer with no seam to fix it, so
+  `@effected/npm` extracts and `@effected/package-json` resolves, while loading stays here.
+
+  `nativeDynamicImports` only matches resolved paths under
   `node_modules/<name>/`, so it structurally cannot target `src/`. That call site carries an
   inline `/* webpackIgnore: true */` comment instead, and `build:prod` runs
   `scripts/assert-native-dynamic-import.mjs` afterwards to assert the built `dist/main.js`

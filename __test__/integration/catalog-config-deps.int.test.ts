@@ -9,10 +9,12 @@
  * @module services/catalog-config-deps.test
  */
 
+import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NodeServices } from "@effect/platform-node";
+import { PackageTarball } from "@effected/npm";
 import { LockfileReadError, LockfileReader } from "@effected/workspaces";
 import { Effect, Exit, Layer, Option, References } from "effect";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
@@ -49,6 +51,14 @@ let root: string;
 let work: string;
 /** `<pkg>@<version>` -> built tarball path on disk. */
 let tarballs: Map<string, string>;
+/**
+ * `<pkg>@<version>` -> the integrity the REGISTRY vouches for.
+ *
+ * Only set by {@link publishWithBadIntegrity}, which advertises a digest the
+ * served bytes deliberately do not match. Absent means "no published
+ * integrity", which is the unverified path every other test here takes.
+ */
+let integrities: Map<string, string>;
 /** Every tarball URL the HTTP stub was asked for, in order. */
 let downloads: Array<string>;
 
@@ -95,7 +105,15 @@ const registry = (packages: Record<string, ReadonlyArray<string>>) =>
 				{
 					version: versions[versions.length - 1] ?? "0.0.0",
 					versions,
-					perVersion: Object.fromEntries(versions.map((v) => [v, { tarball: tarballUrl(pkg, v) }])),
+					perVersion: Object.fromEntries(
+						versions.map((v) => [
+							v,
+							{
+								tarball: tarballUrl(pkg, v),
+								...(integrities.get(`${pkg}@${v}`) ? { integrity: integrities.get(`${pkg}@${v}`) } : {}),
+							},
+						]),
+					),
 				},
 			]),
 		),
@@ -134,8 +152,12 @@ const failingLockfileStub = Layer.succeed(LockfileReader, {
 	checkIntegrity: () => Effect.die("not used"),
 } as never);
 
-const layers = (packages: Record<string, ReadonlyArray<string>>, lockfile: Layer.Layer<LockfileReader>) =>
-	CatalogConfigDeps.layer.pipe(Layer.provide(Layer.mergeAll(registry(packages), lockfile, httpStub, realRunner)));
+const layers = (packages: Record<string, ReadonlyArray<string>>, lockfile: Layer.Layer<LockfileReader>) => {
+	// PackageTarball has to be built OVER the stubs (it needs the stubbed
+	// HttpClient), not merged beside them (effected#282).
+	const base = Layer.mergeAll(registry(packages), lockfile, httpStub, realRunner);
+	return CatalogConfigDeps.layer.pipe(Layer.provide(Layer.provideMerge(PackageTarball.layer, base)));
+};
 
 const runWith = (
 	deps: ReadonlyArray<string>,
@@ -176,6 +198,21 @@ const readPkgRaw = () => readFileSync(join(root, "package.json"), "utf-8");
 const catalogsSource = (entries: Record<string, Record<string, string>>) =>
 	`export const catalogs = ${JSON.stringify(entries)};`;
 
+/**
+ * Publish `pkg@version` but have the registry advertise an integrity the bytes
+ * do not match — a poisoned mirror, or a mirror serving a rebuilt tarball.
+ */
+const publishWithBadIntegrity = (pkg: string, version: string, source: string) => {
+	publish(pkg, version, source);
+	integrities.set(`${pkg}@${version}`, `sha512-${"A".repeat(86)}==`);
+};
+
+/** The registry-shaped integrity of a built tarball's actual bytes. */
+const integrityOfTarball = (pkg: string, version: string) =>
+	`sha512-${createHash("sha512")
+		.update(readFileSync(tarballs.get(`${pkg}@${version}`) as string))
+		.digest("base64")}`;
+
 /** Build a tarball for `pkg@version` and register it with the HTTP stub. */
 const publish = (pkg: string, version: string, source: string) => {
 	tarballs.set(`${pkg}@${version}`, makeTarball(work, `${pkg.replace(/[^a-z0-9]/gi, "-")}-${version}`, source));
@@ -185,6 +222,7 @@ beforeEach(() => {
 	root = mkdtempSync(join(tmpdir(), "ccd-root-"));
 	work = mkdtempSync(join(tmpdir(), "ccd-work-"));
 	tarballs = new Map();
+	integrities = new Map();
 	downloads = [];
 });
 
@@ -389,6 +427,88 @@ describe("CatalogConfigDeps", () => {
 		expect(result.deltas).toContainEqual(expect.objectContaining({ dependency: "react", action: "added" }));
 		expect(result.deltas.map((d) => d.dependency)).not.toContain("stable");
 		expect(result.deltas.map((d) => d.dependency)).not.toContain("zod");
+	});
+
+	it("does NOT degrade to plugin-wins when the base tarball fails its integrity check", async () => {
+		// THE REGRESSION. Every base-side failure used to arrive as one `null` and
+		// take the plugin-wins path, so an integrity mismatch — bytes that are not
+		// what the registry vouched for — was handled as "there is no merge base"
+		// and silently discarded the user's override on `effect`, on a run that
+		// reported success. A base we cannot read faithfully is not an absent base:
+		// we do not know which entries are ours, so we change nothing at all.
+		publishWithBadIntegrity(PKG, "0.23.1", catalogsSource({ silk: { effect: "^3.20.0" } }));
+		publish(PKG, "0.24.0", catalogsSource({ silk: { effect: "^3.21.4", react: "^19.0.0" } }));
+		writePkg({
+			name: "root",
+			workspaces: ["."],
+			catalogs: { silk: { effect: "3.20.0", zod: "^3.24.0" } },
+			devDependencies: { [PKG]: "^0.23.0" },
+		});
+
+		const result = await run([PKG], ["0.23.1", "0.24.0"], "0.23.1");
+		const silk = readPkg().catalogs.silk;
+
+		// The override survives, nothing is added, and the range is not bumped —
+		// writing 0.24.0 while refusing to merge its catalogs would leave the
+		// manifest describing a release it never saw.
+		expect(silk.effect).toBe("3.20.0");
+		expect(silk.react).toBeUndefined();
+		expect(silk.zod).toBe("^3.24.0");
+		expect(result.updates).toEqual([]);
+		expect(result.deltas).toEqual([]);
+		expect(readPkg().devDependencies[PKG]).toBe("^0.23.0");
+	});
+
+	it("merges against an empty base when the installed version shipped no catalogs", async () => {
+		// A plugin adding catalogs for the first time. The base fetched and
+		// extracted perfectly and simply has no catalogs export — an EMPTY base,
+		// not a missing one. Routing it to plugin-wins (which is what a bare
+		// "base unreadable" test would do) would overwrite a user's entry on a key
+		// the plugin has only just started shipping; routing it to skip would stop
+		// the adoption happening at all.
+		publish(PKG, "0.23.1", `export const nope = 1;`);
+		publish(PKG, "0.24.0", catalogsSource({ silk: { effect: "^3.21.4", react: "^19.0.0" } }));
+		writePkg({
+			name: "root",
+			workspaces: ["."],
+			// Hand-written before the plugin shipped any catalogs, so it is the
+			// user's by definition and must survive verbatim.
+			catalogs: { silk: { effect: "3.20.0" } },
+			devDependencies: { [PKG]: "^0.23.0" },
+		});
+
+		const result = await run([PKG], ["0.23.1", "0.24.0"], "0.23.1");
+		const silk = readPkg().catalogs.silk;
+
+		expect(silk.effect).toBe("3.20.0");
+		expect(silk.react).toBe("^19.0.0");
+		expect(result.deltas).toContainEqual(expect.objectContaining({ dependency: "react", action: "added" }));
+		// `kept`, not absent: against an empty base every existing entry diverges,
+		// which is the merge stating that the override survived. That is the signal
+		// this route exists to produce — plugin-wins would have reported `updated`
+		// here and overwritten the value.
+		expect(result.deltas).toContainEqual(expect.objectContaining({ dependency: "effect", action: "kept" }));
+		expect(readPkg().devDependencies[PKG]).toBe("^0.24.0");
+	});
+
+	it("still reads a tarball whose advertised integrity matches (the control)", async () => {
+		// Without this, "the integrity path rejects everything" would pass the test
+		// above just as well as the real fix does.
+		const source = catalogsSource({ silk: { effect: "^3.21.4" } });
+		publish(PKG, "0.23.1", catalogsSource({ silk: { effect: "^3.20.0" } }));
+		publish(PKG, "0.24.0", source);
+		integrities.set(`${PKG}@0.24.0`, integrityOfTarball(PKG, "0.24.0"));
+		writePkg({
+			name: "root",
+			workspaces: ["."],
+			catalogs: { silk: { effect: "^3.20.0" } },
+			devDependencies: { [PKG]: "^0.23.0" },
+		});
+
+		const result = await run([PKG], ["0.23.1", "0.24.0"], "0.23.1");
+
+		expect(readPkg().catalogs.silk.effect).toBe("^3.21.4");
+		expect(result.updates).not.toEqual([]);
 	});
 
 	it("falls back to the highest version in the declared range when the lockfile has no entry", async () => {

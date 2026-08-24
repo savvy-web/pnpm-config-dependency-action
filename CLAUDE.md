@@ -247,6 +247,29 @@ and do not need the pointer.
   bun: `bun install --force`; npm: unlink `package-lock.json` via `node:fs` then
   `npm install`) — the action mutates all three resolution inputs, so a repair-only
   install could commit an inconsistent lockfile. Advancing transitives is expected
+- **`src/services/module-catalogs.ts` is down to the LOAD.** Fetching,
+  integrity-verifying and extracting a config dependency's tarball is
+  `@effected/npm`'s `PackageTarball.extract` (scoped — no local temp-dir
+  cleanup), and entry resolution is `@effected/package-json`'s
+  `resolveEntryPoint`; both were harvested out of this repo (effected#282).
+  Only the `import()` of the resolved entry stays local, because a kit-level
+  loader would hand every bundling consumer the context-module problem.
+  `fetchModuleCatalogs` now returns a **discriminated** `ModuleCatalogs` outcome
+  rather than `CatalogMap | null`, and that is a **bug fix, not tidying**:
+  `CatalogConfigDeps` reads the *base* version's result to decide whether it has
+  a merge base, so every failure arriving as one `null` meant an integrity
+  mismatch was handled as a yanked version, took the lossy `pluginWinsMerge`
+  path and **discarded a user's catalog override on a run that reported
+  success**. Base routing is now `notFound` → plugin-wins, `noCatalogsExport` →
+  three-way against an **empty** base (a first adoption, where every existing
+  entry is the user's), everything else → **skip the dependency**. The middle
+  two are NOT interchangeable — empty-base against a *yanked* base would freeze
+  every entry and the plugin could never move again. Also note the entry
+  resolver is now **stricter**: no `main`/`index.js` fallback when `exports`
+  matches nothing (Node's encapsulation rule), which is unreachable for both
+  config dependencies this repo consumes (no `main` at all) but not for an
+  arbitrary consumer's. Depth in
+  `@./.claude/design/silk-update-action/05-module-library.md`
 - Config dependencies dispatch on the manager: **pnpm** edits
   `pnpm-workspace.yaml` (`ConfigDeps`); **bun** three-way merges the dependency's
   `catalogs` export into `package.json` against the lockfile's installed version

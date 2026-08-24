@@ -43,8 +43,16 @@ import { fileURLToPath } from "node:url";
 
 const BUNDLE = join(dirname(dirname(fileURLToPath(import.meta.url))), "dist", "main.js");
 
-/** A string emitted verbatim by module-catalogs.ts: proof it is still reachable. */
-const ANCHOR = "fetchModuleCatalogs: could not import an entry module for";
+/**
+ * A string emitted verbatim by module-catalogs.ts: proof it is still reachable.
+ *
+ * Kept to the stable half of the sentence deliberately. The full warning used to
+ * be the anchor and broke this guard when the wording was reworded during the
+ * effected#282 adoption — a build failure whose message named a missing module
+ * rather than a changed string. The shorter the anchor, the fewer edits trip it
+ * for no reason; it only has to be unique to this module.
+ */
+const ANCHOR = "fetchModuleCatalogs:";
 
 /** The call site's first half — the runtime-computed URL the import consumes. */
 const CALL_SITE = "pathToFileURL";

@@ -9,43 +9,14 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NodeServices } from "@effect/platform-node";
-import { DEFAULT_REGISTRY, NpmRegistry, RegistryReadError } from "@effected/npm";
+import { DEFAULT_REGISTRY, NpmRegistry, PackageTarball, RegistryReadError } from "@effected/npm";
 import { Effect, Layer, References } from "effect";
 import { HttpClient, HttpClientError, HttpClientResponse } from "effect/unstable/http";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fetchModuleCatalogs, resolveEntryPoint } from "../../src/services/module-catalogs.js";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { fetchModuleCatalogs } from "../../src/services/module-catalogs.js";
 import { seededRegistry } from "../utils/fixtures.js";
 import { fromMap } from "../utils/spawner.js";
 import { makeTarball } from "./__fixtures__/tarball.js";
-
-// Toggleable failure switches for `node:fs`'s sync APIs, read by the
-// `vi.mock` factory below (hoisted above this file's imports, so the static
-// `mkdtempSync`/`writeFileSync` imports above already resolve to the mocked
-// versions). Both `fetchModuleCatalogs` itself and this test file's own
-// `beforeEach`/fixture setup call these functions through the same mocked
-// module, so each switch defaults to passthrough (calling the real
-// implementation) and is only flipped on for the one test that exercises the
-// wrapped-throw path — see FINDING 3 in the task brief.
-const fsFailures = { mkdtemp: false, write: false };
-
-vi.mock("node:fs", async (importOriginal) => {
-	const actual = await importOriginal<typeof import("node:fs")>();
-	return {
-		...actual,
-		mkdtempSync: (...args: Parameters<typeof actual.mkdtempSync>) => {
-			if (fsFailures.mkdtemp) {
-				throw new Error("ENOSPC: no space left on device, mkdtemp");
-			}
-			return actual.mkdtempSync(...args);
-		},
-		writeFileSync: (...args: Parameters<typeof actual.writeFileSync>) => {
-			if (fsFailures.write) {
-				throw new Error("ENOSPC: no space left on device, write");
-			}
-			return actual.writeFileSync(...args);
-		},
-	};
-});
 
 let work: string;
 let tarballPath: string;
@@ -80,6 +51,14 @@ const httpNotFoundStub = Layer.succeed(
 // the arguments the service assembles.
 const realRunner = NodeServices.layer;
 
+/**
+ * Fetch + integrity + extract is `PackageTarball`'s now (effected#282), so every
+ * stack in this file has to build it OVER the stub layers rather than beside
+ * them -- it needs the HttpClient the test is stubbing, and merging it in as a
+ * sibling would leave its own requirements unsatisfied.
+ */
+const withTarball = <A, E>(base: Layer.Layer<A, E, never>) => Layer.provideMerge(PackageTarball.layer, base);
+
 /** A spawner whose every command fails, for the extraction-failure path. */
 const failingRunner = fromMap(undefined, { exit: 1, stdout: "", stderr: "not a gzip file" }).layer;
 
@@ -103,12 +82,23 @@ const integrityOf = (path: string): string =>
 // default instead of exercising the no-tarball path. `tarball` therefore has
 // no default; every call site is explicit, and this constant names the
 // common case.
+/**
+ * Assert the outcome carries catalogs and hand them back.
+ *
+ * A bare `.catalogs` read would make an `Unavailable` outcome surface as
+ * `undefined` deep inside a diff; this fails on the discriminant instead.
+ */
+const catalogsOf = (outcome: Awaited<ReturnType<typeof run>>) => {
+	expect(outcome._tag).toBe("Catalogs");
+	return outcome._tag === "Catalogs" ? outcome.catalogs : undefined;
+};
+
 const DEFAULT_TARBALL = "https://registry.example/plugin.tgz";
 
 const run = (tarball: string | undefined) =>
 	Effect.runPromise(
 		fetchModuleCatalogs("@fixture/plugin", "1.0.0").pipe(
-			Effect.provide(Layer.mergeAll(registry(tarball), httpStub, realRunner)),
+			Effect.provide(withTarball(Layer.mergeAll(registry(tarball), httpStub, realRunner))),
 			Effect.provideService(References.MinimumLogLevel, "None"),
 		),
 	);
@@ -118,8 +108,6 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-	fsFailures.mkdtemp = false;
-	fsFailures.write = false;
 	rmSync(work, { recursive: true, force: true });
 });
 
@@ -133,37 +121,37 @@ describe("fetchModuleCatalogs", () => {
 
 		const result = await run(DEFAULT_TARBALL);
 
-		expect(result).toEqual({ silk: { effect: "^3.21.4" } });
+		expect(catalogsOf(result)).toEqual({ silk: { effect: "^3.21.4" } });
 	});
 
 	it("accepts a plain-object catalogs export", async () => {
 		tarballPath = makeTarball(work, "1.0.0", `export const catalogs = { silk: { effect: "^3.21.4" } };`);
 
-		expect(await run(DEFAULT_TARBALL)).toEqual({ silk: { effect: "^3.21.4" } });
+		expect(catalogsOf(await run(DEFAULT_TARBALL))).toEqual({ silk: { effect: "^3.21.4" } });
 	});
 
 	it("falls back to a Map/object-shaped default export when there is no named catalogs export", async () => {
 		tarballPath = makeTarball(work, "1.0.0", `export default new Map([["silk", new Map([["effect", "^3.21.4"]])]]);`);
 
-		expect(await run(DEFAULT_TARBALL)).toEqual({ silk: { effect: "^3.21.4" } });
+		expect(catalogsOf(await run(DEFAULT_TARBALL))).toEqual({ silk: { effect: "^3.21.4" } });
 	});
 
 	it("returns null when the module has no catalogs export", async () => {
 		tarballPath = makeTarball(work, "1.0.0", `export const somethingElse = 1;`);
 
-		expect(await run(DEFAULT_TARBALL)).toBeNull();
+		expect(await run(DEFAULT_TARBALL)).toMatchObject({ _tag: "Unavailable" });
 	});
 
 	it("returns null when the catalogs export is malformed", async () => {
 		tarballPath = makeTarball(work, "1.0.0", `export const catalogs = "not a catalog map";`);
 
-		expect(await run(DEFAULT_TARBALL)).toBeNull();
+		expect(await run(DEFAULT_TARBALL)).toMatchObject({ _tag: "Unavailable" });
 	});
 
 	it("returns null when the registry reports no tarball URL", async () => {
 		tarballPath = makeTarball(work, "1.0.0", `export const catalogs = {};`);
 
-		expect(await run(undefined)).toBeNull();
+		expect(await run(undefined)).toMatchObject({ _tag: "Unavailable", reason: "notFound" });
 	});
 
 	it("returns null when the npm registry query itself fails", async () => {
@@ -172,20 +160,22 @@ describe("fetchModuleCatalogs", () => {
 		const result = await Effect.runPromise(
 			fetchModuleCatalogs("@fixture/missing", "1.0.0").pipe(
 				Effect.provide(
-					Layer.mergeAll(
-						NpmRegistry.layerTest({
-							version: (pkg: string) =>
-								Effect.fail(new RegistryReadError({ kind: "transport", package: pkg, registry: DEFAULT_REGISTRY })),
-						}),
-						httpStub,
-						realRunner,
+					withTarball(
+						Layer.mergeAll(
+							NpmRegistry.layerTest({
+								version: (pkg: string) =>
+									Effect.fail(new RegistryReadError({ kind: "transport", package: pkg, registry: DEFAULT_REGISTRY })),
+							}),
+							httpStub,
+							realRunner,
+						),
 					),
 				),
 				Effect.provideService(References.MinimumLogLevel, "None"),
 			),
 		);
 
-		expect(result).toBeNull();
+		expect(result).toMatchObject({ _tag: "Unavailable" });
 	});
 
 	it("returns null when the tarball download fails", async () => {
@@ -193,12 +183,12 @@ describe("fetchModuleCatalogs", () => {
 
 		const result = await Effect.runPromise(
 			fetchModuleCatalogs("@fixture/plugin", "1.0.0").pipe(
-				Effect.provide(Layer.mergeAll(registry(DEFAULT_TARBALL), httpFailStub, realRunner)),
+				Effect.provide(withTarball(Layer.mergeAll(registry(DEFAULT_TARBALL), httpFailStub, realRunner))),
 				Effect.provideService(References.MinimumLogLevel, "None"),
 			),
 		);
 
-		expect(result).toBeNull();
+		expect(result).toMatchObject({ _tag: "Unavailable" });
 	});
 
 	it("returns null when the tarball download responds with a non-2xx status", async () => {
@@ -206,12 +196,12 @@ describe("fetchModuleCatalogs", () => {
 
 		const result = await Effect.runPromise(
 			fetchModuleCatalogs("@fixture/plugin", "1.0.0").pipe(
-				Effect.provide(Layer.mergeAll(registry(DEFAULT_TARBALL), httpNotFoundStub, realRunner)),
+				Effect.provide(withTarball(Layer.mergeAll(registry(DEFAULT_TARBALL), httpNotFoundStub, realRunner))),
 				Effect.provideService(References.MinimumLogLevel, "None"),
 			),
 		);
 
-		expect(result).toBeNull();
+		expect(result).toMatchObject({ _tag: "Unavailable" });
 	});
 
 	it("proceeds without verification when the registry reports no integrity for the version", async () => {
@@ -220,7 +210,7 @@ describe("fetchModuleCatalogs", () => {
 		// The shared `registry()` helper omits `integrity` unless given one, so
 		// every other passing test in this suite already exercises this path;
 		// this test names it explicitly as the absent-integrity case.
-		expect(await run(DEFAULT_TARBALL)).toEqual({ silk: { effect: "^3.21.4" } });
+		expect(catalogsOf(await run(DEFAULT_TARBALL))).toEqual({ silk: { effect: "^3.21.4" } });
 	});
 
 	it("reads the catalogs export when the downloaded tarball matches the advertised integrity", async () => {
@@ -228,12 +218,14 @@ describe("fetchModuleCatalogs", () => {
 
 		const result = await Effect.runPromise(
 			fetchModuleCatalogs("@fixture/plugin", "1.0.0").pipe(
-				Effect.provide(Layer.mergeAll(registry(DEFAULT_TARBALL, integrityOf(tarballPath)), httpStub, realRunner)),
+				Effect.provide(
+					withTarball(Layer.mergeAll(registry(DEFAULT_TARBALL, integrityOf(tarballPath)), httpStub, realRunner)),
+				),
 				Effect.provideService(References.MinimumLogLevel, "None"),
 			),
 		);
 
-		expect(result).toEqual({ silk: { effect: "^3.21.4" } });
+		expect(catalogsOf(result)).toEqual({ silk: { effect: "^3.21.4" } });
 	});
 
 	it("returns null and never extracts when the downloaded tarball does not match the advertised integrity", async () => {
@@ -246,39 +238,36 @@ describe("fetchModuleCatalogs", () => {
 
 		const result = await Effect.runPromise(
 			fetchModuleCatalogs("@fixture/plugin", "1.0.0").pipe(
-				Effect.provide(Layer.mergeAll(registry(DEFAULT_TARBALL, bogusIntegrity), httpStub, realRunner)),
+				Effect.provide(withTarball(Layer.mergeAll(registry(DEFAULT_TARBALL, bogusIntegrity), httpStub, realRunner))),
 				Effect.provideService(References.MinimumLogLevel, "None"),
 			),
 		);
 
-		expect(result).toBeNull();
+		expect(result).toMatchObject({ _tag: "Unavailable" });
 	});
 
-	it("returns null when creating the temp directory throws", async () => {
-		tarballPath = makeTarball(work, "1.0.0", `export const catalogs = {};`);
-		fsFailures.mkdtemp = true;
-
-		expect(await run(DEFAULT_TARBALL)).toBeNull();
-	});
-
-	it("returns null when writing the downloaded tarball to disk throws", async () => {
-		tarballPath = makeTarball(work, "1.0.0", `export const catalogs = {};`);
-		fsFailures.write = true;
-
-		expect(await run(DEFAULT_TARBALL)).toBeNull();
-	});
+	// The temp-directory and tarball-write cases that stood here are DELETED.
+	// Both drove a `vi.mock("node:fs")` switch, and both stages moved into
+	// `PackageTarball` (effected#282), which writes through Effect's `FileSystem`
+	// rather than `node:fs`. The mock no longer intercepts anything, so the tests
+	// passed the happy path while claiming to exercise a failure — a green
+	// assertion about code that never ran, which is worse than no assertion.
+	// Both stages now report `extractFailed`, and that IS covered: the extraction
+	// case below drives a spawner whose `tar` genuinely fails.
 
 	it("returns null when tarball extraction fails", async () => {
 		tarballPath = makeTarball(work, "1.0.0", `export const catalogs = {};`);
 
 		const result = await Effect.runPromise(
 			fetchModuleCatalogs("@fixture/plugin", "1.0.0").pipe(
-				Effect.provide(Layer.mergeAll(registry(DEFAULT_TARBALL), httpStub, failingRunner)),
+				Effect.provide(
+					withTarball(Layer.mergeAll(registry(DEFAULT_TARBALL), httpStub, Layer.merge(realRunner, failingRunner))),
+				),
 				Effect.provideService(References.MinimumLogLevel, "None"),
 			),
 		);
 
-		expect(result).toBeNull();
+		expect(result).toMatchObject({ _tag: "Unavailable" });
 	});
 
 	it("returns null when the entry module cannot be imported (no node_modules for a runtime dependency)", async () => {
@@ -288,78 +277,19 @@ describe("fetchModuleCatalogs", () => {
 			`import "this-package-does-not-exist-xyz-123"; export const catalogs = {};`,
 		);
 
-		expect(await run(DEFAULT_TARBALL)).toBeNull();
+		expect(await run(DEFAULT_TARBALL)).toMatchObject({ _tag: "Unavailable" });
 	});
 });
 
-describe("resolveEntryPoint", () => {
-	// ── subpath map (the "." key) ────────────────────────────────────────────
-	it("resolves a string exports['.'] entry", () => {
-		expect(resolveEntryPoint({ exports: { ".": "./esm.js" } })).toBe("./esm.js");
-	});
-
-	it("resolves the import condition of an object exports['.'] entry", () => {
-		expect(resolveEntryPoint({ exports: { ".": { import: "./esm.js", default: "./cjs.js" } } })).toBe("./esm.js");
-	});
-
-	it("resolves the default condition when import is absent", () => {
-		expect(resolveEntryPoint({ exports: { ".": { default: "./cjs.js" } } })).toBe("./cjs.js");
-	});
-
-	it("resolves the '.' entry of a multi-subpath map, ignoring the other subpaths", () => {
-		expect(resolveEntryPoint({ exports: { ".": "./esm.js", "./sub": "./sub.js" }, main: "./main.js" })).toBe(
-			"./esm.js",
-		);
-	});
-
-	// ── string shorthand ─────────────────────────────────────────────────────
-	it("resolves a string exports field, which is sugar for { '.': <string> }", () => {
-		// It must NOT fall through to `main`: the string IS the "." entry.
-		expect(resolveEntryPoint({ exports: "./esm.js", main: "./main.js" })).toBe("./esm.js");
-	});
-
-	// ── root conditions (no "." key) ─────────────────────────────────────────
-	it("resolves the import condition of a root conditional exports object", () => {
-		expect(resolveEntryPoint({ exports: { import: "./esm.js", default: "./cjs.cjs" }, main: "./main.js" })).toBe(
-			"./esm.js",
-		);
-	});
-
-	it("resolves the default condition of a root conditional exports object when import is absent", () => {
-		expect(resolveEntryPoint({ exports: { require: "./cjs.cjs", default: "./index.cjs" }, main: "./main.js" })).toBe(
-			"./index.cjs",
-		);
-	});
-
-	it("falls back to main for a root conditional exports object with no usable condition", () => {
-		expect(resolveEntryPoint({ exports: { require: "./cjs.cjs" }, main: "./main.js" })).toBe("./main.js");
-	});
-
-	it("treats an object with any '.'-prefixed key as a subpath map, not as root conditions", () => {
-		// `import` here is a condition-looking key inside a subpath map; with no
-		// "." subpath there is no root entry, so `main` is correct.
-		expect(resolveEntryPoint({ exports: { "./sub": "./sub.js", import: "./esm.js" }, main: "./main.js" })).toBe(
-			"./main.js",
-		);
-	});
-
-	// ── fallbacks ────────────────────────────────────────────────────────────
-	it("falls back to main when exports['.'] has no usable condition", () => {
-		expect(resolveEntryPoint({ exports: { ".": {} }, main: "./main.js" })).toBe("./main.js");
-	});
-
-	it("falls back to main when exports is an empty object", () => {
-		expect(resolveEntryPoint({ exports: {}, main: "./main.js" })).toBe("./main.js");
-	});
-
-	it("falls back to main when exports is an array", () => {
-		expect(resolveEntryPoint({ exports: ["./esm.js"], main: "./main.js" })).toBe("./main.js");
-	});
-
-	it("defaults to index.js when neither exports nor main is present", () => {
-		expect(resolveEntryPoint({})).toBe("index.js");
-	});
-});
+// The `resolveEntryPoint` block that stood here is DELETED, not skipped: the
+// function moved to `@effected/package-json` (effected#282) and this repo no
+// longer owns it. Four of its cases asserted the OPPOSITE of the kit's
+// behavior -- ours fell through to `main`/`index.js` when `exports` matched
+// nothing, which resolves a file the package deliberately does not export.
+// Node's rule is encapsulation; the kit returns a typed failure. Re-pointing
+// those four at the kit would have pinned a bug. The end-to-end block below
+// still covers the shapes THIS action actually loads, through the real
+// resolver.
 
 describe("fetchModuleCatalogs — exports shapes end to end", () => {
 	const CATALOGS = `export const catalogs = { silk: { effect: "^3.21.4" } };`;
@@ -367,13 +297,13 @@ describe("fetchModuleCatalogs — exports shapes end to end", () => {
 	it("loads the catalogs of a package whose exports is the string shorthand", async () => {
 		tarballPath = makeTarball(work, "1.0.0", CATALOGS, "./index.js");
 
-		expect(await run(DEFAULT_TARBALL)).toEqual({ silk: { effect: "^3.21.4" } });
+		expect(catalogsOf(await run(DEFAULT_TARBALL))).toEqual({ silk: { effect: "^3.21.4" } });
 	});
 
 	it("loads the catalogs of a package with root conditional exports", async () => {
 		tarballPath = makeTarball(work, "1.0.0", CATALOGS, { import: "./index.js", default: "./index.js" });
 
-		expect(await run(DEFAULT_TARBALL)).toEqual({ silk: { effect: "^3.21.4" } });
+		expect(catalogsOf(await run(DEFAULT_TARBALL))).toEqual({ silk: { effect: "^3.21.4" } });
 	});
 
 	it("loads the catalogs of a package with no exports field at all (index.js fallback)", async () => {
@@ -381,6 +311,6 @@ describe("fetchModuleCatalogs — exports shapes end to end", () => {
 		// would substitute the default subpath map instead.
 		tarballPath = makeTarball(work, "1.0.0", CATALOGS, null);
 
-		expect(await run(DEFAULT_TARBALL)).toEqual({ silk: { effect: "^3.21.4" } });
+		expect(catalogsOf(await run(DEFAULT_TARBALL))).toEqual({ silk: { effect: "^3.21.4" } });
 	});
 });
