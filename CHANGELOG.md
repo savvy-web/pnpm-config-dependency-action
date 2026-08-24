@@ -1,5 +1,22 @@
 # silk-update-action
 
+## 4.11.1
+
+### Dependencies
+
+| Dependency | Type | Action | From | To |
+| --- | --- | --- | --- | --- |
+| @effected/workspaces | dependency | updated | ^0.18.0 | ^0.18.1 |
+| @savvy-web/silk-effects | dependency | updated | ^7.1.0 | ^7.1.1 |
+
+[#342][#342]
+
+### Thanks
+
+Thanks to [@savvy-web-bot](https://github.com/apps/savvy-web-bot) for their contributions!
+
+[#342]: https://github.com/savvy-web/silk-update-action/pull/342
+
 ## 4.11.0
 
 ### Bug Fixes
