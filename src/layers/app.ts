@@ -9,7 +9,7 @@
 import { Git } from "@effected/git";
 import { CheckRun, GitBranch, GitCommit, PullRequest, Repo } from "@effected/github";
 import { DryRun, GitHubToken } from "@effected/github-actions";
-import { NpmRegistry } from "@effected/npm";
+import { NpmRegistry, PackageTarball } from "@effected/npm";
 import { PackageJsonFile } from "@effected/package-json";
 import { BunResolver, DenoResolver, NodeResolver, GitHubClient as RuntimesGitHubClient } from "@effected/runtimes";
 import {
@@ -89,6 +89,9 @@ export const makeAppLayer = (dryRun: boolean, options: { runtimeLive: boolean } 
 	// workspace layers above, its FileSystem/Path requirements stay in this
 	// layer's requirement channel rather than being built here.
 	const packageJsonFile = PackageJsonFile.layer;
+	// Bare, like NpmRegistry: its FileSystem/Crypto/HttpClient/ChildProcessSpawner
+	// requirements are all ActionServices members, so they stay in the channel.
+	const packageTarball = PackageTarball.layer;
 	const gitBranch = GitBranch.layer.pipe(Layer.provide(githubClient));
 	const gitCommit = GitCommit.layer.pipe(Layer.provide(githubClient));
 	const prLayer = PullRequest.layer.pipe(Layer.provide(githubClient));
@@ -157,7 +160,7 @@ export const makeAppLayer = (dryRun: boolean, options: { runtimeLive: boolean } 
 		BranchManager.layer.pipe(Layer.provide(Layer.mergeAll(gitBranch, gitCommit, Git.layer))),
 		PackageManagerUpgrade.layer.pipe(Layer.provide(Layer.merge(npmRegistry, packageJsonFile))),
 		ConfigDeps.layer.pipe(Layer.provide(Layer.merge(npmRegistry, releaseAge))),
-		CatalogConfigDeps.layer.pipe(Layer.provide(Layer.merge(npmRegistry, lockfileReader))),
+		CatalogConfigDeps.layer.pipe(Layer.provide(Layer.mergeAll(npmRegistry, lockfileReader, packageTarball))),
 		RegularDeps.layer.pipe(Layer.provide(Layer.mergeAll(npmRegistry, workspaceDiscovery, releaseAge))),
 		Report.layer.pipe(Layer.provide(prLayer)),
 		RuntimeUpgrade.layer.pipe(Layer.provide(Layer.merge(makeRuntimeResolvers(options.runtimeLive), packageJsonFile))),

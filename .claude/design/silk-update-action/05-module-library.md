@@ -3,8 +3,8 @@ status: current
 module: silk-update-action
 category: architecture
 created: 2026-02-20
-updated: 2026-08-05
-last-synced: 2026-08-05
+updated: 2026-08-23
+last-synced: 2026-08-23
 completeness: 95
 related:
   - ./_index.md
@@ -514,10 +514,37 @@ installed** last run — which is what the lockfile records, hence the
 - Only catalog names present in `base` or `next` are considered; a catalog no
   config dependency ships belongs to the consumer and is never touched.
 
-When the base version's catalogs cannot be read (yanked/unpublished), it degrades
-to `pluginWinsMerge`: `next` overwrites what it defines, disk-only keys survive,
-nothing is removed — and the caller warns, because an override on a key the plugin
-still ships is lost in that mode.
+**What happens when the base cannot be read turns on WHY, and collapsing the
+routes shipped a defect.** Every base failure used to arrive as one `null` and
+take `pluginWinsMerge`, so an integrity mismatch was handled as a missing merge
+base and silently discarded a user's override. The four routes now:
+
+| base outcome | route | why |
+| --- | --- | --- |
+| read | `threeWayMergeCatalogs` against it | the normal case |
+| `notFound` | `pluginWinsMerge` | the artifact is genuinely gone (yanked, unpublished). `next` overwrites what it defines, disk-only keys survive, nothing is removed — and the caller warns, because an override on a key the plugin still ships is lost in that mode |
+| `noCatalogsExport` | `threeWayMergeCatalogs` against **`{}`** | the base loaded fine and simply ships none — a first adoption |
+| anything else | **skip the dependency** | something that exists could not be read faithfully, so we do not know which entries are ours |
+
+**The asymmetry between the middle two rows is the subtle part, and it is not
+about the merge.** Against an empty base *every* manifest entry diverges and is
+therefore `kept`. For a first adoption that is exactly right: those entries
+predate the plugin and are the user's by definition. For a *yanked* base the
+same routing would freeze every existing entry and the plugin could never move
+again — which is why `notFound` takes the lossy-but-progressing path instead.
+So empty-base is correct for one row and paralysing one row over, and the two
+cases must not be merged on the grounds that both "have no base".
+
+The `kept` delta is what makes this testable rather than merely arguable: an
+empty-base merge *reports* the surviving override as `kept`, where plugin-wins
+reports it as `updated` and overwrites the value. A test asserting the delta
+therefore discriminates between the two routes. (An assertion that the entry is
+simply *absent* from the deltas does not — that was wrong on the first attempt
+here, and the suite caught it.)
+
+The skip leaves the declared range unbumped too, for the same reason the
+`next`-side skip does: writing a version whose catalogs were never merged would
+leave the manifest describing a release it never saw.
 
 Nothing here is fatal except a manifest that cannot be read or written: a
 per-dependency failure warns and skips that dependency.
@@ -527,16 +554,65 @@ per-dependency failure warns and skips that dependency.
 Reads a config dependency's `catalogs` export from its **published tarball**.
 pnpm reads this out of the installed package, but this action's merge has to
 happen *before* any install runs (its output feeds the manifest install then
-reads). So `fetchModuleCatalogs` downloads the exact version being written,
-extracts the tarball with `tar` (present on every runner image, so no new
-dependency), and imports the extracted entry directly off disk — self-contained,
-no `node_modules` required. Entry resolution follows `exports` (preferring
-`import` over `default`, handling the conditions-vs-subpath distinction) and falls
-back to `main`.
+reads).
 
-A standalone exported function, not a service — no state, one caller. Its
-`import()` carries an inline `/* webpackIgnore: true */`; see the build note in
-@./01-dependencies.md.
+**Most of this module moved upstream** (effected#282) and it is now 198 lines,
+down from 326. Fetching, integrity-verifying and extracting the tarball is
+`@effected/npm`'s `PackageTarball.extract` — **scoped**, so the temp directory
+is removed when the calling scope closes and this module owns no cleanup at
+all. Entry resolution is `@effected/package-json`'s `resolveEntryPoint`.
+
+What stayed is the half that is genuinely local: **loading** the resolved entry
+with `import()`, and deciding what a missing or malformed `catalogs` export
+means. The loader deliberately did not go upstream — a kit-level `import()` of
+a computed path would hand every bundling consumer the context-module problem
+with no seam to fix it. That call site keeps its inline
+`/* webpackIgnore: true */`; see the build note in @./01-dependencies.md.
+
+A standalone exported function, not a service — no state, one caller.
+
+#### The outcome is discriminated, and that is a bug fix rather than tidying
+
+`fetchModuleCatalogs` returns a `ModuleCatalogs` outcome —
+`{ _tag: "Catalogs", catalogs }` or `{ _tag: "Unavailable", reason }` — where
+`reason` carries `TarballError`'s four members verbatim (`notFound`, `http`,
+`integrityMismatch`, `extractFailed`) plus this module's own post-extract
+stages (`unresolvedEntryPoint`, `notImportable`, `noCatalogsExport`,
+`malformedCatalogs`).
+
+It used to return `CatalogMap | null` with `E = never`, and **the collapse was
+reachable as a live defect**, not merely imprecise. `CatalogConfigDeps` reads
+the *base* version's result to decide whether it has a merge base, and read
+every `null` as "there is no base", which routes to the lossy `pluginWinsMerge`.
+So an integrity mismatch on the base tarball — bytes that are not what the
+registry vouched for — discarded a user's catalog override, in a consumer's
+repository, on a run that reported success. The routing table and the
+asymmetry it turns on are under `CatalogConfigDeps` above.
+
+*Falsified if* the reason ever stops being read at the call site: the
+discrimination is load-bearing only because something branches on it, and a
+future refactor that collapses the branches makes the union decoration again.
+The mutant that proves it discriminates is in @./08-testing.md.
+
+**The union is consumed as `TarballError["reason"]`, so it widens on its own —
+and it already has.** `@effected/npm@0.12.0` split `integrityUnverifiable` (the
+digest could not be computed) out of `integrityMismatch` (two digests existed
+and differed), because a *failure to verify* was being reported as a *measured
+mismatch*. Nothing here needed changing: the base-routing switch ends in a
+catch-all rather than an exhaustive match, so an unrecognised reason takes the
+conservative skip route by construction. That is the intended trade — an
+exhaustive match would turn every upstream addition into a compile error, and
+the compile error would be answered under time pressure by someone guessing a
+route. *Falsified if* a future member ever belongs on the plugin-wins side; only
+`notFound` does today, and a new "the artifact is genuinely absent" reason would
+have to be routed by hand.
+
+**Note the direction of travel.** The kit's `TarballError` does **not** carry a
+`noCatalogsExport` member and deliberately should not: `extract` stops at the
+extracted directory, so reading a catalogs export, finding it absent, and
+deciding what an absent one means are all consumer policy. A tarball error
+asserting something about this action's file format would be the wrong
+boundary.
 
 ### src/services/regular-deps.ts - RegularDeps
 

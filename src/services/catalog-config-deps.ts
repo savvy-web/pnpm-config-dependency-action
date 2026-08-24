@@ -26,6 +26,7 @@
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import type { PackageTarball } from "@effected/npm";
 import { NpmRegistry } from "@effected/npm";
 import { LockfileReader } from "@effected/workspaces";
 import { Context, Effect, Layer, Option } from "effect";
@@ -75,7 +76,7 @@ export class CatalogConfigDeps extends Context.Service<
 			// context here and re-providing it keeps the service method's R = never
 			// without threading each service through by hand.
 			const context = yield* Effect.context<
-				NpmRegistry | LockfileReader | HttpClient.HttpClient | ChildProcessSpawner.ChildProcessSpawner
+				NpmRegistry | PackageTarball | LockfileReader | HttpClient.HttpClient | ChildProcessSpawner.ChildProcessSpawner
 			>();
 			return {
 				update: (deps, workspaceRoot) => updateImpl(deps, workspaceRoot).pipe(Effect.provide(context)),
@@ -276,7 +277,7 @@ const processDep = (
 ): Effect.Effect<
 	DepOutcome,
 	never,
-	NpmRegistry | LockfileReader | HttpClient.HttpClient | ChildProcessSpawner.ChildProcessSpawner
+	NpmRegistry | PackageTarball | LockfileReader | HttpClient.HttpClient | ChildProcessSpawner.ChildProcessSpawner
 > =>
 	Effect.gen(function* () {
 		const located = findDependency(manifest, name);
@@ -315,8 +316,8 @@ const processDep = (
 
 		const base = yield* resolveBaseVersion(name, parsed, versions);
 
-		const nextCatalogs = yield* fetchModuleCatalogs(name, next);
-		if (nextCatalogs === null) {
+		const nextOutcome = yield* fetchModuleCatalogs(name, next);
+		if (nextOutcome._tag !== "Catalogs") {
 			// fetchModuleCatalogs already warned with the reason. The range is not
 			// bumped either: writing a version whose catalogs we could not merge would
 			// leave the manifest describing a plugin release it never saw.
@@ -325,18 +326,60 @@ const processDep = (
 			);
 			return skipped(catalogs);
 		}
+		const nextCatalogs = nextOutcome.catalogs;
 
-		const baseCatalogs = base === next ? nextCatalogs : yield* fetchModuleCatalogs(name, base);
+		const baseOutcome = base === next ? nextOutcome : yield* fetchModuleCatalogs(name, base);
 
-		const { merged, deltas } =
-			baseCatalogs === null
-				? pluginWinsMerge(catalogs, nextCatalogs)
-				: threeWayMergeCatalogs(overlayOwned(baseCatalogs, owned, nextCatalogs), catalogs, nextCatalogs);
+		// How a base failure is handled turns on WHY it failed, and collapsing the
+		// three routes is a bug this code has already shipped: every reason used to
+		// arrive as one `null` and take the plugin-wins path, so an integrity
+		// mismatch on the base tarball silently discarded a user's override on a run
+		// that reported success.
+		//
+		//   notFound         -> the base artifact is gone (yanked/unpublished). There
+		//                       is genuinely no merge base, so plugin-wins is the
+		//                       deliberate lossy-but-progressing choice.
+		//   noCatalogsExport -> the base fetched and extracted fine and simply shipped
+		//                       no catalogs. That is an EMPTY base, not a missing one:
+		//                       every manifest entry in these catalogs predates us, so
+		//                       a three-way merge against {} keeps them as the user's
+		//                       and adds what the new version ships. Plugin-wins here
+		//                       would overwrite a user's entry on a key the plugin has
+		//                       only just started shipping.
+		//   anything else    -> something that exists could not be read faithfully. We
+		//                       do not know what is ours, so we change nothing.
+		//
+		// The final branch is deliberately a catch-all rather than an exhaustive
+		// switch, so a reason ADDED upstream lands on the conservative route by
+		// default. That has already happened once: `@effected/npm@0.12.0` split
+		// `integrityUnverifiable` (the digest could not be computed) out of
+		// `integrityMismatch` (two digests existed and differed), because the
+		// former was being reported as a measured mismatch. It needed no change
+		// here — a reason we do not recognise is exactly a base we cannot trust.
+		let merged: CatalogMap;
+		let deltas: ReadonlyArray<CatalogDelta>;
 
-		if (baseCatalogs === null) {
+		if (baseOutcome._tag === "Catalogs") {
+			({ merged, deltas } = threeWayMergeCatalogs(
+				overlayOwned(baseOutcome.catalogs, owned, nextCatalogs),
+				catalogs,
+				nextCatalogs,
+			));
+		} else if (baseOutcome.reason === "notFound") {
 			yield* Effect.logWarning(
-				`CatalogConfigDeps: could not read catalogs from the installed ${name}@${base}; merging ${next} plugin-wins — its entries overwrite the manifest's, local additions survive, and nothing is removed`,
+				`CatalogConfigDeps: no published tarball for the installed ${name}@${base}; merging ${next} plugin-wins — its entries overwrite the manifest's, local additions survive, and nothing is removed`,
 			);
+			({ merged, deltas } = pluginWinsMerge(catalogs, nextCatalogs));
+		} else if (baseOutcome.reason === "noCatalogsExport") {
+			yield* Effect.logInfo(
+				`CatalogConfigDeps: ${name}@${base} shipped no catalogs, so ${next} is a first adoption — merging against an empty base, which keeps every existing entry as the user's`,
+			);
+			({ merged, deltas } = threeWayMergeCatalogs(overlayOwned({}, owned, nextCatalogs), catalogs, nextCatalogs));
+		} else {
+			yield* Effect.logWarning(
+				`CatalogConfigDeps: could not read catalogs from the installed ${name}@${base} (${baseOutcome.reason}), leaving ${name} at ${located.specifier} — merging without a trustworthy base could discard a local override`,
+			);
+			return skipped(catalogs);
 		}
 
 		const newSpecifier = `${parsed.prefix}${next}`;
@@ -376,7 +419,7 @@ const updateImpl = (
 ): Effect.Effect<
 	CatalogConfigDepsResult,
 	FileSystemError,
-	NpmRegistry | LockfileReader | HttpClient.HttpClient | ChildProcessSpawner.ChildProcessSpawner
+	NpmRegistry | PackageTarball | LockfileReader | HttpClient.HttpClient | ChildProcessSpawner.ChildProcessSpawner
 > =>
 	Effect.gen(function* () {
 		if (deps.length === 0) return { updates: [], deltas: [] };

@@ -3,8 +3,8 @@ status: current
 module: silk-update-action
 category: architecture
 created: 2026-02-20
-updated: 2026-07-26
-last-synced: 2026-07-26
+updated: 2026-08-23
+last-synced: 2026-08-23
 completeness: 95
 related:
   - ./_index.md
@@ -17,8 +17,13 @@ implementation-plans: []
 [Back to index](./_index.md)
 
 **Framework:** Vitest with v8 coverage, forks pool for Effect-TS compatibility.
-Current suite: **648 tests across 44 files, all passing** (verified by
+Current suite: **643 tests across 44 files, all passing** (verified by
 `pnpm vitest run`, not carried forward from this document's previous figure).
+
+**This total went DOWN, and the table below explains why rather than leaving a
+drop to look like the silent-uncollection incident recorded further down.** The
+`@effected/npm` / `@effected/package-json` adoption (effected#282) deleted 15
+tests and added 3.
 
 **Accounting for the delta from the 581 this document used to state** — and the
 answer is not "it drifted", which is what it looks like:
@@ -32,7 +37,8 @@ answer is not "it drifted", which is what it looks like:
 | 599 | before `check-peers`: +5 `unit/utilities/commit-signoff.test.ts`, +4 in `services/package-manager-upgrade.test.ts`, +1 in `doubles.test.ts` (two sign-off cases in `main.test.ts` were rewritten, not added) | `pnpm vitest run`, 42 files |
 | **634** | the `check-peers` work, itemised in the first paragraph below this table | `pnpm vitest run`, 44 files |
 | 645 | inferred, not measured — see the honesty note below | — |
-| **648** | now: +3 in `unit/steps/peer-check.test.ts` (the peer-gate false-positive work), itemised below | `pnpm vitest run`, 44 files |
+| **648** | the peer-gate false-positive work: +3 in `unit/steps/peer-check.test.ts`, itemised below | `pnpm vitest run`, 44 files |
+| **643** | now: the effected#282 adoption, **-15 / +3**, itemised below | `pnpm vitest run`, 44 files |
 
 **The 581 was never a real count.** `f55fab6` — the kit-wave and
 `@effected/package-json` adoption — added 8 tests and edited this file's figure
@@ -79,6 +85,41 @@ has **not** been isolated; 645 is arithmetic (648 measured, minus the three
 attributable additions), not a measurement. Recorded that way deliberately, per
 the 581 entry above: a plausible unexplained increment is exactly the figure
 this table exists to distrust.
+
+**Accounting for 648 -> 643 (-15, +3, no file change), because a DROP is the
+delta this document most wants explained.** Both deletions removed tests of code
+this repo no longer owns, and neither was a skip:
+
+- **-13, the `resolveEntryPoint` block** in `integration/module-catalogs.int.test.ts`.
+  The function moved to `@effected/package-json`. Re-pointing the block at the kit was
+  considered and **rejected**: four of its cases asserted the `main` / `index.js`
+  fallback, which is the behavior the kit deliberately does not have, so keeping them
+  would have pinned a bug in a suite that looked like coverage. The end-to-end block
+  below it still exercises the shapes this action actually loads, through the real
+  resolver.
+- **-2, the temp-directory and tarball-write failure cases** in the same file, plus the
+  `vi.mock("node:fs")` harness that existed only for them. Both stages moved into
+  `PackageTarball`, which writes through Effect's `FileSystem` rather than `node:fs`, so
+  **the mock no longer intercepted anything and both tests were passing the happy path
+  while claiming to exercise a failure.** That is worse than no test, and it is the
+  reason to recount after an adoption rather than assume a green suite still means what
+  it meant. Both stages report `extractFailed` now, which the extraction case below
+  them does cover, through a spawner whose `tar` genuinely fails.
+- **+3 in `integration/catalog-config-deps.int.test.ts`**, pinning the base-merge fix:
+  an integrity mismatch on the base tarball must NOT plugin-wins (the regression), a
+  base that ships no catalogs must merge against an empty base (the adjacent fix), and
+  — the control — a **matching** integrity must still read normally.
+
+**The control is the load-bearing one.** Without it, "the integrity path rejects
+everything" satisfies the regression test exactly as well as the real fix does.
+
+**Mutation-verified, aimed at the assertion rather than the code:** collapsing the
+routing back to "any `Unavailable` base -> plugin-wins" turns two of the three red with
+`expected '^3.21.4' to be '3.20.0'` — the user's override being overwritten, which is
+the defect stated as a diff. Note also that the empty-base test's *first* assertion was
+wrong (it expected the surviving override to be absent from the deltas, where the merge
+correctly reports it as `kept`), and the suite caught that rather than the author
+noticing.
 
 ## Layout
 
