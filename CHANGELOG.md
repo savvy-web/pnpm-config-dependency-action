@@ -1,5 +1,21 @@
 # silk-update-action
 
+## 4.11.9
+
+### Dependencies
+
+| Dependency | Type | Action | From | To |
+| --- | --- | --- | --- | --- |
+| @effected/runtimes | dependency | updated | ^0.4.4 | ^0.4.5 |
+
+[#378][#378]
+
+### Thanks
+
+Thanks to [@savvy-web-bot](https://github.com/apps/savvy-web-bot) for their contributions!
+
+[#378]: https://github.com/savvy-web/silk-update-action/pull/378
+
 ## 4.11.8
 
 ### Dependencies
