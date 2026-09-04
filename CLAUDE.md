@@ -111,7 +111,7 @@ and do not need the pointer.
 ## Testing
 
 - **Framework**: Vitest with v8 coverage, forks pool (Effect compatibility).
-  Current suite: **648 tests across 44 files**, measured, not carried forward.
+  Current suite: **643 tests across 44 files**, measured, not carried forward.
   **Treat a test count here as evidence and re-derive it** (`pnpm vitest run`) — a
   figure this line once carried was never a real count, having been edited by a
   plausible `+1` in the very commit that invalidated it, which is what made it
@@ -220,7 +220,15 @@ and do not need the pointer.
   `__test__/unit/doubles.test.ts`. **Tests for `src/utils/` therefore live in
   `__test__/unit/utilities/`, not `__test__/unit/utils/`** — they sat in the
   latter and silently stopped running, dropping the suite from 580 to 478.
-  `__test__/unit/test-collection.test.ts` fails if it recurs.
+  `__test__/unit/test-collection.test.ts` fails if it recurs. Fixture directories
+  are named **`fixtures/`** (renamed from `__fixtures__/` to match the kit canon);
+  they hold inert `.yaml` data and one `.ts` helper and **no `.test.ts`**, so
+  being reserved costs nothing there — the rule only bites a suite file.
+- **`vitest.setup.ts` strips every runner-owned prefix before any suite runs** —
+  `INPUT_`, `GITHUB_`, `RUNNER_`, `ACTIONS_` and now **`STATE_`**. The last is the
+  sharpest of the five: `ActionState` reads exactly those pairs, so a fixture that
+  forgets to seed its own state reads the **host** workflow's persisted state,
+  decodes it successfully, and passes on someone else's data.
 - `@actions/*` is never imported; the head SHA comes from `ActionEnvironment`
   (`env.github.sha`), the log level from `env.isDebug`
 - Action input is `app-client-id` (not `app-id`); `post.ts` always revokes
@@ -452,9 +460,29 @@ and do not need the pointer.
 - `action.config.ts`: `build.nativeDynamicImports` lists
   `@changesets/apply-release-plan` only, so rspack preserves its fully dynamic
   `await import()`. `@effected/workspaces`' `ConfigDependencyHooks` has the same
-  pattern but must **not** be listed (the builder's ignore-loader throws); its
-  "Critical dependency" warning is benign. First-party dynamic imports use an inline
-  `/* webpackIgnore: true */` instead (`src/services/module-catalogs.ts`), asserted
-  post-build by `scripts/assert-native-dynamic-import.mjs`. The `build.ignore`
-  cyclonedx entries are **vestigial**. Rationale in
+  pattern but must **not** be listed — the builder's ignore-loader throws on that
+  file. This line used to add "its 'Critical dependency' warning is benign"; there
+  is **no warning any more**, because the installed `ConfigDependencyHooks.js`
+  now carries its own inline `/* webpackIgnore: true */` (upstream
+  spencerbeggs/effected#242) and rspack leaves the import native. If the warning
+  ever returns, the fix is upstream, **not** an entry in this list. First-party
+  dynamic imports use the same inline comment (`src/services/module-catalogs.ts`),
+  asserted post-build by `scripts/assert-native-dynamic-import.mjs`.
+  **`build.ignore` is DELETED, not "vestigial"** — which is what this line used
+  to say, and it stayed pending long enough to be worth closing. It named
+  three optional `@cyclonedx/cyclonedx-library` plugins that only ever arrived
+  through the deleted `@savvy-web/github-action-effects`; cyclonedx now has
+  **zero** occurrences in `pnpm-lock.yaml`, and rebuilding without the key changed
+  `dist/main.js` by minifier variable renaming alone. Rationale in
   `@./.claude/design/silk-update-action/01-dependencies.md`
+- **`persistLocal` stays DISABLED — a deliberate divergence from the kit canon,
+  not an oversight, and the reason is recorded here so it is not "fixed".** The
+  canon says enable it so a committed `.github/actions/local` can serve as an
+  `act`/CI smoke target. Nothing in this repo runs `act`, and the cost is measured
+  rather than assumed: the persisted copy is a **byte-for-byte duplicate** of
+  `dist/`, so enabling it roughly **doubles** the ~2 MB payload every consumer
+  downloads on every run. The dead scaffolding was removed rather than fed —
+  `.actrc` and `.github/workflows/act-test.yml` are **deleted**, and that workflow
+  could never have worked anyway: it did `uses: ./.github/actions/local`, a path
+  this repo has never had. *Revisit when* something actually consumes the
+  persisted output.

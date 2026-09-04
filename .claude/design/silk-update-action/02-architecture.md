@@ -3,8 +3,8 @@ status: current
 module: silk-update-action
 category: architecture
 created: 2026-02-20
-updated: 2026-08-23
-last-synced: 2026-08-23
+updated: 2026-09-04
+last-synced: 2026-09-04
 completeness: 95
 related:
   - ./_index.md
@@ -56,7 +56,8 @@ src/
 │   ├── catalog-config-deps.ts   # CatalogConfigDeps service (bun config-dep workflow)
 │   ├── changesets.ts      # Changesets service (thin adapter over silk DepsRegen)
 │   ├── config-deps.ts     # ConfigDeps service (pnpm-workspace.yaml)
-│   ├── lockfile.ts        # Lockfile service + standalone capture/compare helpers
+│   ├── lockfile.ts        # standalone capture/compare helpers; the tag and layer
+│   │                      #   are DELETED — nothing in src/ resolved them
 │   ├── module-catalogs.ts # fetchModuleCatalogs — LOADS the entry and reads the
 │   │                      #   catalogs export; fetch/verify/extract is the kit's
 │   │                      #   PackageTarball, entry resolution its resolveEntryPoint
@@ -67,7 +68,7 @@ src/
 │   ├── release-age.ts     # ReleaseAge service + gate-discovery helpers
 │   ├── report.ts          # Report service (PR, summary, commit msg)
 │   ├── runtime-upgrade.ts # RuntimeUpgrade service (devEngines.runtime upgrades)
-│   └── workspace-yaml.ts  # WorkspaceYaml helpers
+│   └── workspace-yaml.ts  # WorkspaceYaml helpers (also tagless — same finding)
 └── utils/
     ├── branch.ts          # resolveTargetBranch
     ├── catalogs.ts        # CatalogMap, normalize/read/write/threeWayMergeCatalogs
@@ -140,7 +141,7 @@ __test__/
 - **Workspace enumeration:** all direct workspace enumeration goes through
   `WorkspaceDiscovery` from `@effected/workspaces` (arg-less `listPackages()` /
   `importerMap()`; the root is bound when the layer is built), consumed by
-  `RegularDeps`, `PeerSync` and `Lockfile`. `Changesets` does not enumerate
+  `RegularDeps`, `PeerSync` and the lockfile helpers. `Changesets` does not enumerate
   directly — that happens inside silk's `DepsRegen`.
 
 ## Data Flow
@@ -307,6 +308,15 @@ bundle. It is also what the compile-time guard below is checking: the channel is
   - `WorkspaceYamlLive` was **deleted rather than renamed**: nothing in `src/`
     wired it, so its only consumer was its own test suite. See
     @./05-module-library.md.
+  - **`Lockfile.layer` went the same way, and the list above is where it was
+    detectable.** It was a `static layer` in the correct place on the correct
+    class, and it appears nowhere in this enumeration because `makeAppLayer`
+    never wired it — which is exactly the `WorkspaceYamlLive` shape a second
+    time. Re-derive with `grep -n Lockfile src/layers/app.ts`: the three hits
+    are the kit's `LockfileReader`, a different service wearing a similar name.
+    **A domain layer absent from this list is not a documentation gap to fill,
+    it is a layer with no consumer** — that reading is what these two deletions
+    have in common, and it is cheaper than auditing call sites.
   - `PreLive` / `PostLive` in the entry points are untouched. They are aliases
     for `GitHubApp.layer`, not service layers, so the convention does not apply.
 - `ReleaseAge.layer` over `WorkspaceCatalogs` + `NpmRegistry`, provided to

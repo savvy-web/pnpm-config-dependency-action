@@ -37,6 +37,14 @@ path, so `dev` then only installs with the sibling repos checked out — the
 accepted trade-off. Commits must be GPG-signed with the verified key for
 `C. Spencer Beggs <spencer@savvyweb.systems>`.
 
+**The vendored `.repos/effect` and `.repos/effected` checkouts are reference
+source, and re-pinning them is part of a dependency bump, not a chore after it.**
+Re-pin in the same commit as the bump, and verify by comparing the vendored
+`packages/<name>/package.json` against `node_modules` — **never** by reading the
+tag name, which is what let both pins drift for several waves before this
+reconciliation caught them. `.repos/config.json` carries the full rule, including
+why neither `purpose` field names a version.
+
 **Currently active:** nothing is **linked** — every first-party dep is on its
 published registry version (see `package.json`). `@effect/vitest` reads
 `catalog:effect`, so the lockstep with `effect` is now **structural**: the
@@ -54,16 +62,28 @@ which `pnpm why` answers and a version number never did** — which is why no
 current version literal appears in that sentence, and why re-adding one would be
 a regression rather than an update.
 
-The **workspaces duplicate is BACK (measured 2026-08-21)**: this repo hand-bumped
-`@effected/workspaces` to `^0.17.0` (for `WorkspaceCatalogs.refresh()`) while
-`@savvy-web/silk-effects@6.0.4` stays on `^0.16.0`, so two copies resolve and
-both reach `dist/main.js` — the same silk-effects duplicate that closed after
-the beta.107 wave, recurring with this repo moving first. Safe while the shapes
-agree (this action's own imports resolve `0.17.0`); it dedupes when silk-effects
-bumps. `@effected/npm` still resolves one copy. Detail in
+The **workspaces duplicate has closed (measured 2026-09-04)**, and how it closed
+matters more than that it did. This paragraph read "the duplicate is BACK
+(measured 2026-08-21)": this repo had hand-bumped `@effected/workspaces` for
+`WorkspaceCatalogs.refresh()` while `@savvy-web/silk-effects` sat a `0.x` minor
+behind, so two copies resolved and both reached `dist/main.js`. What resolved it
+is a **shape change upstream, not a version bump** — silk-effects declares
+`@effected/workspaces` as a **peerDependency** now rather than a direct
+dependency, and a peer range this repo already satisfies cannot duplicate.
+Today every one of the twelve installed `@effected/*` packages resolves exactly
+one copy, as does `effect`. The confirming probe is the same one that proved the
+duplicate: `@effected/workspaces/WorkspaceCatalogs`, `…/WorkspaceDiscovery` and
+`…/WorkspaceRoot` each occur **once** in the minified `dist/main.js` — matching
+the single-copy controls `@effected/npm/NpmRegistry` and
+`@effected/github/GitBranch` — where they occurred twice.
+
+**Do not read that as settled.** This same claim has said "closed" twice before
+and been falsified each time within one dependency bump — once by a transitive
+pulling a second `@effected/github` in behind an unrelated bump, once by this
+repo's own hand-bump. It is a **dated measurement, not a property**. Detail in
 `.claude/design/silk-update-action/01-dependencies.md`. Verify with
-`pnpm why <pkg>` — the lockfile grep reports which versions exist, never who
-pulls them.
+`pnpm why <pkg>` — a lockfile grep reports which versions exist, never who pulls
+them.
 
 ## Development & Release Cycle
 

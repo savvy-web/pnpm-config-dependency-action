@@ -2,8 +2,8 @@
 	"repos": {
 		"effect": {
 			"url": "https://github.com/Effect-TS/effect.git",
-			"ref": "effect@4.0.0-beta.107",
-			"purpose": "Read-only Effect v4 source pinned to the tag matching the effect catalog (4.0.0-beta.107) — the authority on what v4 actually exports, plus the v3→v4 migration notes and the @effect/vitest reference implementation.",
+			"ref": "effect@4.0.0-rc.109",
+			"purpose": "Read-only Effect v4 source pinned to the tag matching the version of `effect` this repo installs — the authority on what v4 actually exports, plus the v3→v4 migration notes and the @effected/vitest reference implementation. Re-pin whenever the effect catalog moves, in the same commit as the bump. This purpose deliberately does NOT name the version: an inline version literal is a second source of truth that goes stale silently while `ref` is updated, which is exactly what happened at the beta.107 pin. Verify by comparing packages/effect/package.json at the pinned commit against node_modules, never by reading the tag name.",
 			"sparse": [
 				"packages/effect",
 				"packages/vitest",
@@ -20,12 +20,12 @@
 					"migration-notes": "migration",
 					"vitest-reference": "packages/vitest/src"
 				},
-				"startHere": "packages/effect/src settles what v4 actually exports; migration/*.md settles v3→v4 renames. Before trusting an answer, check the pin matches the installed effect version — node_modules wins on disagreement."
+				"startHere": "packages/effect/src settles what v4 actually exports; migration/*.md settles v3→v4 renames. Before trusting an answer, confirm the pin matches the installed effect version (`node -p \"require('./node_modules/effect/package.json').version\"` against `.repos/effect/packages/effect/package.json`) — node_modules wins on disagreement."
 			}
 		},
 		"effected": {
 			"url": "https://github.com/spencerbeggs/effected.git",
-			"ref": "@effected/workspaces@0.13.0",
+			"ref": "@effected/github-actions@0.10.2",
 			"purpose": "Read-only source for the @effected package kit — the authority on its real export surface and intended usage. Pinned to the monorepo release wave whose tags carry the versions this repo installs, so every vendored package under packages/ matches node_modules exactly at this pin. Re-pin whenever a dependency bump moves any @effected/* version, in the same commit as the bump; verify by comparing packages/<name>/package.json at the pinned commit against node_modules, never by reading the tag name. This purpose deliberately does NOT enumerate the versions — an inline list is a second source of truth that goes stale silently while the ref is updated, which is exactly what happened at the 0.11.1 pin.",
 			"sparse": [
 				"packages",
@@ -34,7 +34,7 @@
 				"README.md"
 			],
 			"orientation": {
-				"layout": "pnpm monorepo, one directory per published package under packages/<name>/ with src/, test files co-located, and its own CLAUDE.md. design/ holds the kit's internal design docs. The website/, lib/, plugin/ and lockfile trees are excluded from the sparse checkout. This repo carries six submodules of its OWN (.repos/cmark-gfm, commonmark-js, commonmark-spec, effect, mdast, mdast-util-from-markdown) — leave every one uninitialized. `sparse` cannot evict a nested submodule's worktree, because it belongs to a different repository, so a recursive init materializes .repos/effected/.repos/effect as a SECOND Effect clone that drifts off the top-level .repos/effect pin; an agent reading Effect source through this tree then gets a version nobody pinned, and effected stays permanently dirty. Repair with `savvy repos restore effected`, which deinitializes them. Verify with `git -C .repos/effected submodule status` — every line must start with `-`.",
+				"layout": "pnpm monorepo, one directory per published package under packages/<name>/ with src/, test files co-located, and its own CLAUDE.md. design/ holds the kit's internal design docs. The website/, lib/, plugin/ and lockfile trees are excluded from the sparse checkout. This repo carries nine submodules of its OWN (.repos/cmark-gfm, commonmark-js, commonmark-spec, effect, mdast, mdast-util-from-markdown, mdast-util-mdx-expression, mdast-util-mdx-jsx, mdast-util-mdxjs-esm) — leave every one uninitialized. `sparse` cannot evict a nested submodule's worktree, because it belongs to a different repository, so a recursive init materializes .repos/effected/.repos/effect as a SECOND Effect clone that drifts off the top-level .repos/effect pin; an agent reading Effect source through this tree then gets a version nobody pinned, and effected stays permanently dirty. Repair with `savvy repos restore effected`, which deinitializes them. Verify with `git -C .repos/effected submodule status` — every line must start with `-`.",
 				"keyPaths": {
 					"packages": "packages",
 					"actions-runtime": "packages/github-actions/src",

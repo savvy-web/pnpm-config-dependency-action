@@ -952,7 +952,7 @@ describe("check-peers gate", () => {
 		writeFixture("pnpm");
 		writeFileSync(
 			join(root, "pnpm-lock.yaml"),
-			readFileSync(new URL("./steps/__fixtures__/pnpm-lock.unmet-peer.yaml", import.meta.url), "utf8"),
+			readFileSync(new URL("./steps/fixtures/pnpm-lock.unmet-peer.yaml", import.meta.url), "utf8"),
 		);
 		const harness = makeHarness({ configUpdates: [update("effect", "4.0.0", "4.1.0")], gitStatus: ["package.json"] });
 		await runInner(harness, baseInputs({ "check-peers": "no-auto-merge", "auto-merge": "squash" }));

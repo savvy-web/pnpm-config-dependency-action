@@ -3,8 +3,8 @@ status: current
 module: silk-update-action
 category: architecture
 created: 2026-02-20
-updated: 2026-08-23
-last-synced: 2026-08-23
+updated: 2026-09-04
+last-synced: 2026-09-04
 completeness: 95
 related:
   - ./_index.md
@@ -21,6 +21,20 @@ implementation-plans: []
 The authoritative dependency list and ranges live in the `dependencies` block of `package.json` — this doc does not mirror them.
 
 **It did, though, in seven places, and every single one had rotted.** Six package headings carried a declared range in parentheses (`@effected/commands`, `git`, `workspaces`, `package-json`, `schemastore`, `github-action-builder`) and one restated a transitive range; the five `0.x` kit entries were stale by one to three **minors** — breaking, on a `0.x` line, per the caret trap recorded below — and `github-action-builder` by four patches on a stable `2.x` line, which is harmless and is exactly why nobody noticed the other five. They are removed rather than refreshed — refreshing is what produced the drift, and it re-arms the same trap for the next reader. A version literal that must agree with a file two directories away has no mechanism keeping it honest, which is the same argument the duplicate-resolutions section below reaches on its own evidence. **Where a version *is* load-bearing it is stated as history** ("`0.9.0` shipped `PackageManifest`", "adopted at `0.11.0`") — a claim about what a release contained, which does not go stale, rather than a claim about what is installed, which does.
+
+**The same rule has since been applied outside these documents, which is the
+useful confirmation that it generalizes.** `.repos/config.json` pins read-only
+checkouts of `Effect-TS/effect` and `spencerbeggs/effected` for source lookups,
+and its `effect` entry's prose `purpose` **named the pinned version inline**
+beside the `ref` field that also named it — two sources of truth one line apart.
+Predictably the prose went stale while `ref` was maintained. The literal is gone
+from the prose; the `ref` is the single source, and the entry now says how to
+check it (compare `packages/effect/package.json` at the pin against
+`node_modules`, never read the tag name). The `effected` entry had already
+learned this and said so; the `effect` entry had not. **Two entries in one file,
+one carrying the lesson and one still exhibiting the bug, is what a rule looks
+like before it has been applied everywhere** — worth checking for rather than
+assuming a recorded lesson propagated.
 
 Every runtime dependency is inlined into `dist/{pre,main,post}.js` at build time; the packages whose behavior is load-bearing for this action are described below.
 
@@ -338,52 +352,58 @@ The action runs on **Effect v4** (`effect` / `@effect/platform-node` both resolv
 
 ### Duplicate resolutions — recurring, caught each time by `pnpm why`
 
-**Current state, measured 2026-08-21:** `@effected/npm`,
-`@effected/package-json`, `@effected/lockfiles`, `@effected/github`,
-`@effected/github-actions` and `@effected/commands` each resolve **exactly one
-copy**, as does `effect`. **`@effected/workspaces` resolves two** — `0.17.0`
-pulled by this action directly, `0.16.0` pulled by `@savvy-web/silk-effects@6.0.4`
-(whose `^0.16.0` the `0.x` caret pins to the old minor) and by dev tooling
-(`@savvy-web/cli`, `@vitest-agent/*`).
+**Current state, measured 2026-09-04:** every one of the **twelve** installed
+`@effected/*` packages — `npm`, `github`, `github-actions`, `workspaces`,
+`lockfiles`, `runtimes`, `semver`, `yaml`, `commands`, `git`, `package-json`,
+`schemastore` — resolves **exactly one copy**, as does `effect`. Measured by
+running `pnpm why` on each and reading its trailing `Found N version` line, not
+by inspecting the lockfile.
 
-The previous sentence here read "each resolve exactly one copy" with no
-exception, and it stopped being true when this repo hand-bumped to `^0.17.0`
-for the `refresh()` member (commit `a089f44`) while silk-effects stayed on
-`^0.16.0`. **That is the `silk-effects` duplicate from the beta.107 wave
-recurring in the other direction** — last time silk-effects was ahead-of or
-behind this repo's workspaces range, this time this repo moved first — and it
-confirms the paragraph below that closed it was right to keep the limit-statement
-rather than the closure.
+**The `@effected/workspaces` duplicate is therefore closed, and HOW it closed is
+the part worth carrying.** The superseded text is preserved rather than
+overwritten, because its measurement was right and its forecast was wrong:
 
-**Both copies reach `dist/main.js`.** silk-effects is a bundled runtime
-dependency (`DepsRegenDefault` is built on its own workspaces copy), and the
-probe agrees: the workspaces service-tag strings (`WorkspaceCatalogs`,
-`WorkspaceDiscovery`, `WorkspaceRoot`) each occur **twice** in the minified
-bundle where every single-copy package's tag (`@effected/npm/NpmRegistry`,
-`@effected/github/GitBranch`) occurs once. (An occurrence count over minified
-output is an inference, not a module-graph dump — but two class declarations is
-the only reading consistent with the single-copy controls.)
+> **`@effected/workspaces` resolves two** — `0.17.0` pulled by this action
+> directly, `0.16.0` pulled by `@savvy-web/silk-effects@6.0.4` (whose `^0.16.0`
+> the `0.x` caret pins to the old minor) and by dev tooling. … It dedupes when
+> silk-effects bumps its range; until then this is a dated measurement carrying
+> a real (bundle-size) cost and a latent hazard, not a closed state.
 
-Why this is *currently* safe, by the section's own rule below — "safe while the
-shapes agree": Effect resolves services by the tag's string id, this action's
-own imports resolve to the `0.17.0` copy (so the layer `makeAppLayer` builds
-**has** `refresh()`), silk-effects' internals resolve to theirs, and all suites
-and typecheck are green against the pair. And why it is not safe by
-construction: `refresh()` is precisely a **version-gated member that exists on
-one copy and not the other** — the hypothetical the limit-statement below names.
-It dedupes when silk-effects bumps its range; until then this is a dated
-measurement carrying a real (bundle-size) cost and a latent hazard, not a
-closed state.
+It did **not** dedupe by silk-effects bumping a direct range. `silk-effects`
+declares `@effected/workspaces` as a **peerDependency** now, not a dependency —
+and a peer range the consumer already satisfies is structurally incapable of
+producing a second copy, where a direct `0.x` caret one minor behind necessarily
+produces one. So the forecast named the right outcome by the wrong route, which
+matters because the wrong route was something to *wait* for and the right one was
+a decision somebody upstream had to make. *Re-derive with* `pnpm why
+@effected/workspaces` (silk-effects appears as a dependent, so its absence is
+**not** the tell) against
+`node -p "require('./node_modules/@savvy-web/silk-effects/package.json').peerDependencies"`.
+
+**The bundle probe agrees, and its method is the load-bearing half.** The
+fully-qualified tag ids `@effected/workspaces/WorkspaceCatalogs`,
+`…/WorkspaceDiscovery` and `…/WorkspaceRoot` each occur **once** in the minified
+`dist/main.js`, where each occurred twice, matching the single-copy controls
+`@effected/npm/NpmRegistry` and `@effected/github/GitBranch` (also 1).
+
+**Grep the bare class names instead and you get 7, 15 and 4** — method names,
+log strings, re-exports — which reads as three duplicates that do not exist.
+The tag id is the only string that appears exactly once per class declaration.
+An occurrence count over minified output is still an inference rather than a
+module-graph dump; what makes it usable is that the controls are measured in the
+same run and land on 1.
 
 ```text
 $ pnpm why @effected/workspaces
-Found 2 versions of @effected/workspaces
+Found 1 version of @effected/workspaces
 ```
 
-**This recurs at every kit bump; it is not a closed issue.** The most recent
-instance is worth the detail because the obvious reading of it was **wrong**, and
-the wrong reading survived a full documentation pass before an experiment killed
-it.
+**This recurs at every kit bump; it is not a closed issue.** The
+`@effected/github` instance below is worth the detail because the obvious reading
+of it was **wrong**, and the wrong reading survived a full documentation pass
+before an experiment killed it. (It was "the most recent instance" when written
+and no longer is — the workspaces recurrence above came later. A doc that says
+"most recent" acquires an obligation nobody honours.)
 
 Moving `@effected/npm` to `^0.11.0` also required `@effected/github-actions@0.9.1`,
 which depends on `@effected/github@0.7.0`. This repo's own `^0.6.0` was still
@@ -432,6 +452,16 @@ recurred in 2026-08**, this time with this repo moving first (`^0.17.0` for
 measurement at the top of this section. The sentence is left as written because
 it was true when written; what it teaches is that "the ranges now agree" is a
 statement with a date on it.
+
+**And that recurrence has now closed too, differently** (2026-09-04, top of this
+section) — by silk-effects moving the dependency to a **peer**, which removes
+the ability to duplicate rather than restoring agreement between two ranges. So
+the same visible symptom has been fixed by two mechanisms with different
+durability: "the ranges agree today" lasts until either side moves, whereas
+"there is only one range" lasts until the peer declaration changes. Worth
+distinguishing when reading a future green measurement — **the interesting
+question is not whether the count is 1, it is which of those two states
+produced it.**
 
 The old entry's limit-statement is worth preserving as reasoning, because it is what made
 this worth tracking rather than shrugging at: Effect resolves services by the tag's **string
@@ -489,21 +519,57 @@ last `pnpm why` run against the current lockfile.
 
 ### `action.config.ts` notes
 
-- **`build.ignore`** lists `xmlbuilder2`, `libxmljs2` and `ajv-formats-draft2019` — the
-  optional XML/JSON-validator plugins of `@cyclonedx/cyclonedx-library`. That library came
-  in transitively **through `@savvy-web/github-action-effects`**, which is now deleted:
-  cyclonedx no longer appears in the lockfile at all, so these three entries are currently
-  **vestigial**. They are harmless (ignoring a package that is not in the graph is a no-op)
-  and the comment in `action.config.ts` still describes the old provenance.
+- **`build.ignore` is GONE — the "vestigial" loose end is closed, not still
+  pending.** It listed `xmlbuilder2`, `libxmljs2` and `ajv-formats-draft2019`, the
+  optional XML/JSON-validator plugins of `@cyclonedx/cyclonedx-library`, which came in
+  transitively **through `@savvy-web/github-action-effects`**. That package is deleted,
+  and cyclonedx now has **zero occurrences in `pnpm-lock.yaml`** (`grep -c cyclonedx
+  pnpm-lock.yaml` → `0`), so the three entries were aliasing packages that are not in
+  the graph. The key is removed from `action.config.ts` along with the comment that
+  still described the old provenance.
+  - **The confirming evidence is a rebuild, not the argument.** "Ignoring a package
+    that is not in the graph is a no-op" is a claim about rspack, and this record's own
+    standard is that a plausible claim is not a measurement: rebuilding without the key
+    changed `dist/main.js` only by minifier variable renaming, which is what proves the
+    entries were genuinely inert rather than merely believed to be. That the removal was
+    *safe* and that the entries were *doing nothing* are two different statements, and
+    the diff is what carries the second one.
+  - Recorded rather than deleted because the shape recurs: a `build.ignore` entry
+    naming a package that has left the graph is invisible — nothing fails, nothing
+    warns, and the comment explaining it keeps reading as current. *Falsified if* a
+    future dependency reintroduces cyclonedx, at which point the question is whether
+    the action invokes its optional plugins, not whether these three names should
+    return by reflex.
 - **`build.nativeDynamicImports`** lists `@changesets/apply-release-plan` only. The
   changesets v3 engine loads the configured changelog module via a fully dynamic
   `await import(changelogPath)`; without this, rspack compiles it into a context module and
   the action throws `Cannot find module 'file:///…'` at runtime.
   `@effected/workspaces`' `ConfigDependencyHooks` loader has the same computed-import
   pattern and IS reachable in this bundle, but is deliberately **not** listed — registering
-  it makes the builder's ignore-loader throw and fails the build. rspack emits a benign
-  "Critical dependency" warning instead, inert unless the config-dependency-hooks path runs,
-  which this action never does.
+  it makes the builder's ignore-loader throw and fails the build.
+  - **The "benign Critical dependency warning" this bullet described is gone, and
+    the reason it was tolerable was also wrong.** It read: *"rspack emits a benign
+    'Critical dependency' warning instead, inert unless the config-dependency-hooks
+    path runs, which this action never does."* Both halves have to be corrected
+    separately.
+  - *On the warning:* upstream fixed it. `ConfigDependencyHooks`' in-process
+    loader carries its own inline `/* webpackIgnore: true */` as of
+    `@effected/workspaces@0.13.0` (spencerbeggs/effected#242) — a claim about a
+    release, and re-derived here against the installed copy by finding the marker
+    on the `import(candidateUrl)` site in
+    `node_modules/@effected/workspaces/ConfigDependencyHooks.js`. That the warning
+    is consequently **absent from a build** follows, but was **not** re-run in
+    this pass — stated as unverified rather than asserted.
+  - *On "this action never does":* it very much does. Release-age discovery and
+    the `check-peers` rules read both replay config-dependency hooks, twice per
+    enabled run. What is true is narrower: this action wires
+    `layerWithConfigDependenciesSubprocess`, whose computed import lives inside a
+    **static** `REPLAY_SCRIPT` string handed to `node -e`, so the bundler never
+    sees it as an import at all. The *in-process* loader is the one that is never
+    reached — which is a fact about the layer choice, not about the feature.
+  - Either way the standing instruction is unchanged: if a "Critical dependency"
+    warning naming `ConfigDependencyHooks.js` ever returns, the fix is upstream,
+    not an entry in this list.
 - **A third case, in first-party source:** `src/services/module-catalogs.ts` dynamically
   imports a config dependency's extracted tarball entry — a path computed at runtime, not a
   package specifier. **This is the one part of that module that did NOT move upstream**
@@ -518,3 +584,12 @@ last `pnpm why` run against the current lockfile.
   still holds a genuine `await import(<ident>)` there. Deleting the magic comment fails the
   build — which matters because a context-module rewrite only breaks in production (vitest
   runs the source, not the bundle).
+- **`persistLocal.enabled` is `false`, deliberately, against canon B6** — and the
+  comment saying so is the change; the flag itself did not move. Persisting writes a
+  byte-for-byte copy of `dist/*` into `.github/actions/local`, so it roughly **doubles**
+  what every consumer downloads on every run (committed `dist` is 2,080,144 bytes —
+  `cat dist/*.js | wc -c`) to serve an `act` loop this repo does not run. The
+  scaffolding that would have consumed it (`.actrc`, `.github/workflows/act-test.yml`)
+  is **deleted**, not fed: that workflow did `uses: ./.github/actions/local`, a path
+  that never existed here. Full reasoning and the revisit condition are the settled
+  decision in @./09-project-status.md.

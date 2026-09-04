@@ -1,10 +1,26 @@
 /**
- * Effect Schema definitions for silk-update-action.
+ * The action's domain schemas, and the `result` output contract built from them.
  *
- * Uses Schema for type inference, validation, and encoding/decoding.
- * Types are derived from schemas, eliminating duplication.
+ * Each schema derives its TypeScript type via `typeof Schema.Type`, so the type
+ * and the validator cannot drift. {@link RunResultDocument} composes the same
+ * schemas the run already produces rather than restating them in a parallel
+ * reporting shape — two shapes would diverge, and the divergence would be
+ * invisible because both would still serialize.
  *
- * @module schemas
+ * **Every shared schema carries an explicit `identifier` annotation.** The
+ * lowering hoists a sub-schema used in more than one place into `$defs` and
+ * invents a *positional* name when there is none, so a second anonymous union
+ * silently renames the first in a document published at a public `$id`. A
+ * `$defs` key matching `Union_`/`Struct_` is a missing annotation here, not an
+ * artifact to commit.
+ *
+ * The JSON Schema is generated from {@link RunResultDocument} by
+ * `lib/scripts/generate-schema.ts` through `@effected/schemastore`'s
+ * `SchemaPipeline` — lint, ajv strict-mode gate, write-if-content-changed.
+ * Change the contract by editing these types and running `pnpm generate-schema`;
+ * never by editing the emitted JSON.
+ *
+ * @module schema/domain
  */
 
 import { Schema } from "effect";

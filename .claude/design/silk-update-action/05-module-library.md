@@ -3,8 +3,8 @@ status: current
 module: silk-update-action
 category: architecture
 created: 2026-02-20
-updated: 2026-08-23
-last-synced: 2026-08-23
+updated: 2026-09-04
+last-synced: 2026-09-04
 completeness: 95
 related:
   - ./_index.md
@@ -675,30 +675,48 @@ standalone `parseValidSemVer` from `@effected/semver`.
 - `lock`: sync on every version bump. `minor`: sync only on minor+ bumps, flooring
   patch to `.0`.
 
-### src/services/lockfile.ts - Lockfile
+### src/services/lockfile.ts - lockfile capture and comparison
 
 Compare lockfile snapshots before and after updates. Package-manager agnostic:
 normalizes `pnpm-lock.yaml`, `bun.lock` and `package-lock.json` into one model via
 `@effected/lockfiles`' pure `Lockfile.parse(content, { format })`.
 
-```typescript
-export class Lockfile extends Context.Service<Lockfile, {
- readonly capture: (pm: SupportedPm, workspaceRoot: string) =>
-  Effect.Effect<LockfileModel | null, LockfileError>;
- readonly compare: (before, after, workspaceRoot) =>
-  Effect.Effect<ReadonlyArray<LockfileChange>, LockfileError, WorkspaceDiscovery>;
-}>()("Lockfile") {}
-```
+**Standalone functions, no service tag — and this is the SECOND instance of a
+pattern already recorded above, not a new finding.** There was a `Lockfile`
+`Context.Service` tag and a `static readonly layer` here; both are **deleted**,
+for exactly the reason `WorkspaceYaml`'s tag and layer were deleted (see that
+section): the layer was a pure pass-through to the same `*Impl` functions the
+standalone helpers called, and **nothing in `src/` ever resolved the tag** —
+`program.ts` and `steps/lockfile-snapshot.ts` call `captureLockfileState` /
+`compareLockfiles` directly. The only code that resolved it was this module's
+own test suite, so those tests passed precisely because they were the sole
+callers.
+
+The `*Impl` indirection went with it: the two exported functions now hold the
+bodies directly, since the split existed only to let the layer and the helper
+share one implementation.
+
+*Re-derive rather than trust this paragraph:* `grep -rn 'Lockfile' src/ | grep
+-v services/lockfile.ts` should return no resolution of a local `Lockfile` tag
+(the hits are `@effected/lockfiles`' `Lockfile` model and `LockfileReader`,
+which are different things wearing a similar name). *Falsified if* a step or
+service ever needs to swap the capture implementation under test — at which
+point a tag earns its place, and the argument here is not that services are
+wrong but that this one had no consumer.
 
 **`compareCatalogs`** walks every importer consuming a changed catalog entry and
 emits **one `LockfileChange` per (catalog change, importer, dep section) triple**,
 each carrying the precise `type`. `compareImporters` handles non-catalog specifier
 changes (including removals), reading the section from the `after` snapshot.
 
-**Exported helpers** used directly by `program.ts`: `LOCKFILE_NAMES` (the lockfile
-each supported manager writes), `captureLockfileState(pm, workspaceRoot?)`,
-`compareLockfiles(before, after, workspaceRoot?)` and
-`groupChangesByPackage(changes)`.
+**Exported helpers**, which are now the module's whole surface, used by
+`program.ts` and `steps/lockfile-snapshot.ts`: `LOCKFILE_NAMES` (the lockfile
+each supported manager writes), `captureLockfileState(pm, workspaceRoot)`,
+`compareLockfiles(before, after, workspaceRoot)` and
+`groupChangesByPackage(changes)`. **The workspace root is required on both**,
+per the no-`process.cwd()`-defaults rule at the top of this document; this
+section carried it as `workspaceRoot?` until now, which the signatures never
+supported.
 
 ### src/services/runtime-upgrade.ts - RuntimeUpgrade
 

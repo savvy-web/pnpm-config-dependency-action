@@ -1,9 +1,13 @@
 /**
- * Schema-based error definitions using Effect Schema TaggedError.
+ * The action's typed error union.
  *
- * Provides validated error types with rich metadata and custom messages.
+ * Every member is a `Schema.TaggedError` carrying the metadata its handler
+ * needs, and every member has a construction site in `src/` — an error class
+ * with no producer is a claim the type system carries indefinitely and no test
+ * can falsify, which is why four of them were deleted and why
+ * `__test__/unit/errors/errors.test.ts` pins the exported set.
  *
- * @module schemas/errors
+ * @module errors/errors
  */
 
 import { Schema } from "effect";

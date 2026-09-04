@@ -14,7 +14,12 @@ import { WorkspaceDiscovery } from "@effected/workspaces";
 import { Effect, Layer, Logger, References, Result } from "effect";
 import { describe, expect, it } from "vitest";
 import type { LockfileChange } from "../../../src/schema/domain.js";
-import { LOCKFILE_NAMES, Lockfile, groupChangesByPackage } from "../../../src/services/lockfile.js";
+import {
+	LOCKFILE_NAMES,
+	captureLockfileState,
+	compareLockfiles,
+	groupChangesByPackage,
+} from "../../../src/services/lockfile.js";
 
 /**
  * Mock WorkspaceDiscovery layer that returns a fixed package map for /workspace root.
@@ -99,18 +104,14 @@ const pnpmCatalogs = (
 	catalogs: Record<string, Record<string, { specifier: string; version: string }>>,
 ): PnpmExtension => ({ _tag: "pnpm", catalogs }) as unknown as PnpmExtension;
 
-/** Run Lockfile.compare via the Live layer with logging suppressed. */
+/** Run compareLockfiles via the standalone export with logging suppressed. */
 const runCompare = (
 	before: LockfileModel | null,
 	after: LockfileModel | null,
 	discovery: Layer.Layer<WorkspaceDiscovery> = MockWorkspacesLive,
 ) =>
 	Effect.runPromise(
-		Effect.gen(function* () {
-			const lockfile = yield* Lockfile;
-			return yield* lockfile.compare(before, after, "/workspace");
-		}).pipe(
-			Effect.provide(Lockfile.layer),
+		compareLockfiles(before, after, "/workspace").pipe(
 			Effect.provide(discovery),
 			Effect.provideService(References.MinimumLogLevel, "None"),
 		),
@@ -119,13 +120,7 @@ const runCompare = (
 const runEffect = <A, E>(effect: Effect.Effect<A, E>) =>
 	Effect.runPromise(Effect.result(effect).pipe(Effect.provideService(References.MinimumLogLevel, "None")));
 
-const runCapture = (pm: "pnpm" | "bun" | "npm", root: string) =>
-	runEffect(
-		Effect.gen(function* () {
-			const lockfile = yield* Lockfile;
-			return yield* lockfile.capture(pm, root);
-		}).pipe(Effect.provide(Lockfile.layer)),
-	);
+const runCapture = (pm: "pnpm" | "bun" | "npm", root: string) => runEffect(captureLockfileState(pm, root));
 
 const tempRoot = () => mkdtempSync(join(tmpdir(), "lockfile-test-"));
 
@@ -178,7 +173,7 @@ describe("LOCKFILE_NAMES", () => {
 	});
 });
 
-describe("Lockfile.capture", () => {
+describe("captureLockfileState", () => {
 	it("parses a pnpm lockfile", async () => {
 		const root = tempRoot();
 		writeFileSync(join(root, "pnpm-lock.yaml"), PNPM_LOCK);
@@ -271,11 +266,7 @@ describe("Lockfile.capture", () => {
 		});
 
 		const result = await Effect.runPromise(
-			Effect.gen(function* () {
-				const lockfile = yield* Lockfile;
-				return yield* lockfile.capture("bun", root);
-			}).pipe(
-				Effect.provide(Lockfile.layer),
+			captureLockfileState("bun", root).pipe(
 				Effect.provide(Layer.succeed(References.CurrentLoggers, new Set([captureLogger]))),
 			),
 		);
@@ -287,7 +278,7 @@ describe("Lockfile.capture", () => {
 	});
 });
 
-describe("Lockfile.compare - null handling", () => {
+describe("compareLockfiles - null handling", () => {
 	it("returns empty array when before is null", async () => {
 		expect(await runCompare(null, makeLockfile())).toEqual([]);
 	});
@@ -301,7 +292,7 @@ describe("Lockfile.compare - null handling", () => {
 	});
 });
 
-describe("Lockfile.compare - workspace discovery failure", () => {
+describe("compareLockfiles - workspace discovery failure", () => {
 	it("falls back to the bare importer id when the importer map cannot be read", async () => {
 		const before = makeLockfile({ importers: [importer("pkgs/core", [["lodash", "^4.17.0"]])] });
 		const after = makeLockfile({ importers: [importer("pkgs/core", [["lodash", "^4.18.0"]])] });
@@ -313,7 +304,7 @@ describe("Lockfile.compare - workspace discovery failure", () => {
 	});
 });
 
-describe("Lockfile.compare - pnpm catalogs", () => {
+describe("compareLockfiles - pnpm catalogs", () => {
 	it("reports the specifier move and the consuming importer", async () => {
 		const before = makeLockfile({
 			extension: pnpmCatalogs({ silk: { effect: { specifier: "^3.0.0", version: "3.0.5" } } }),
@@ -472,7 +463,7 @@ describe("Lockfile.compare - pnpm catalogs", () => {
 	});
 });
 
-describe("Lockfile.compare - bun catalogs", () => {
+describe("compareLockfiles - bun catalogs", () => {
 	/**
 	 * bun records the bare specifier in its catalog and the resolved version on
 	 * the package tuples, so the version must be joined in by name.
@@ -598,7 +589,7 @@ describe("Lockfile.compare - bun catalogs", () => {
 	});
 });
 
-describe("Lockfile.compare - importer specifier changes", () => {
+describe("compareLockfiles - importer specifier changes", () => {
 	it("detects a non-catalog specifier change", async () => {
 		const before = makeLockfile({ importers: [importer("pkgs/core", [["lodash", "^4.17.0"]])] });
 		const after = makeLockfile({ importers: [importer("pkgs/core", [["lodash", "^4.18.0"]])] });

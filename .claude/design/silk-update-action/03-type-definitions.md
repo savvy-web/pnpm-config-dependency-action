@@ -3,8 +3,8 @@ status: current
 module: silk-update-action
 category: architecture
 created: 2026-02-20
-updated: 2026-07-26
-last-synced: 2026-07-26
+updated: 2026-09-04
+last-synced: 2026-09-04
 completeness: 95
 related:
   - ./_index.md
@@ -29,6 +29,29 @@ Effect v4 Schema spellings used throughout: literal unions are
 `Schema.Literals([...])` (was `Schema.Literal(...)`) and refinements attach via
 `.check(...)` (e.g. `Schema.String.check(Schema.isMinLength(1))`) rather than
 `.pipe(Schema.…)`.
+
+**Both modules' `@module` tags were fossils of a directory that no longer
+exists, and this is worth a line because of *how long* they survived.**
+`schema/domain.ts` declared `@module schemas` and `errors/errors.ts` declared
+`@module schemas/errors` — the plural `schemas/` layout, renamed to the singular
+`schema/` some time ago. Both now match their paths, and all **49** `@module`
+tags in `src/` agree with their file's path (re-derived by comparing each tag
+against `src/`-relative path minus `.ts`, not by reading them).
+
+A `@module` tag naming a directory that does not exist **cannot fail anything** —
+it is a docblock, tsc does not resolve it, and every tool that renders it renders
+the wrong name faithfully. That is the same silence as a `build.ignore` entry for
+an absent package (@./01-dependencies.md) and a design doc citing a deleted test
+file: the class of claim that is checkable in one pass and checked by nothing.
+*Re-derive with* a loop over `grep -rl '@module' src/` comparing the tag to the
+path; it is a one-liner, which is the argument for running it rather than
+trusting this paragraph.
+
+The two docblocks also gained content that had lived **only** in this document:
+`domain.ts` now carries the `identifier`-annotation rule and the
+`@effected/schemastore` generation note in its own header. That is deliberate
+duplication — the rule is violated at the *definition site*, which is where the
+reader is when they add a schema, and the depth stays here.
 
 ## Domain Schemas (src/schema/domain.ts)
 

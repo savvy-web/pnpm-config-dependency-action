@@ -3,8 +3,8 @@ status: current
 module: silk-update-action
 category: architecture
 created: 2026-02-20
-updated: 2026-08-23
-last-synced: 2026-08-23
+updated: 2026-09-04
+last-synced: 2026-09-04
 completeness: 95
 related:
   - ./_index.md
@@ -28,7 +28,9 @@ those kit packages (mapping table in @./01-dependencies.md).
 
 All domain logic is wrapped as Effect services with `Context.Service` + `Layer`,
 plus a few standalone helper modules (`detectPackageManager`, `syncPeers`,
-`fetchModuleCatalogs`, the `WorkspaceYaml` / `Lockfile` helpers). Layer
+`fetchModuleCatalogs`, the `workspace-yaml` / `lockfile` helpers — the last two
+having **shed their tags and layers**, in that order and on the same finding: a
+service nothing in `src/` resolves is dead code with a type signature). Layer
 composition is centralized in `src/layers/app.ts`.
 
 **Architecture:**
@@ -132,27 +134,58 @@ rather than silently performing a package-manager-only run.
 
 **Known loose ends:**
 
-- `action.config.ts`'s `build.ignore` list (`xmlbuilder2`, `libxmljs2`,
-  `ajv-formats-draft2019`) is vestigial: it existed for `@cyclonedx/cyclonedx-library`,
-  which came in transitively through the deleted `github-action-effects` and no
-  longer appears in the lockfile at all. Harmless, but the comment there still
-  describes the old provenance.
-- **Duplicate resolutions: recurring, not closed — and currently OPEN.** As of
-  2026-08-21, `@effected/workspaces` resolves **two copies** (`0.17.0` direct,
-  `0.16.0` through `@savvy-web/silk-effects@6.0.4` and dev tooling), and the
-  tag-string probe indicates **both reach `dist/main.js`** — the exact
-  silk-effects duplicate this bullet used to describe as closed, recurring in
-  the other direction because this repo hand-bumped to `^0.17.0` for
-  `WorkspaceCatalogs.refresh()` while silk-effects' `0.x` caret stays on
-  `^0.16.0`. Safe today by the "shapes agree" rule (this action's imports
-  resolve `0.17.0`, so its layers have `refresh()`); it dedupes when
-  silk-effects bumps. Measurement, method and the hazard statement are in
-  @./01-dependencies.md. The bullet's history stands: **it said "closed" for a
-  release and was wrong within one dependency bump** (moving `@effected/npm`
-  pulled a second `@effected/github` in behind it), then said "every package
-  resolves one copy today" and was falsified by this repo's own next kit bump.
-  Re-verify with `pnpm why <pkg>`, never a lockfile grep: the grep reports
-  which versions exist, only `pnpm why` reports who pulls each one.
+- ~~`action.config.ts`'s `build.ignore` list~~ — **CLOSED, and left here rather
+  than deleted so the shape stays legible.** This bullet read: *"`build.ignore`
+  (`xmlbuilder2`, `libxmljs2`, `ajv-formats-draft2019`) is vestigial: it existed
+  for `@cyclonedx/cyclonedx-library`, which came in transitively through the
+  deleted `github-action-effects` and no longer appears in the lockfile at all.
+  Harmless, but the comment there still describes the old provenance."* Every
+  word of that was true, and it sat as an open loose end for releases because
+  "harmless" is a reason not to act.
+  - The key and its comment are now **removed**. Re-derived before removing:
+    `grep -c cyclonedx pnpm-lock.yaml` → `0`.
+  - **What made it actionable was measuring rather than reasoning.** Rebuilding
+    without the key changed `dist/main.js` only by minifier variable renaming —
+    the evidence that the entries were inert, as distinct from the argument that
+    they ought to be. Detail in @./01-dependencies.md.
+  - The general form, since this record keeps meeting it: **a loose end whose
+    own description says "harmless" has no mechanism that will ever close it.**
+    Nothing fails, nothing warns, and the stale comment beside it keeps reading
+    as current documentation of a live decision.
+- **Duplicate resolutions: recurring, and clean as of 2026-09-04 — which is a
+  dated measurement, not a closed issue.** Re-measured today: **all twelve
+  installed `@effected/*` packages resolve exactly one copy, and so does
+  `effect`** (`pnpm why <pkg>` on each, reading the trailing `Found N version`
+  line).
+  - **What closed it is a shape change upstream, not a version bump**, and the
+    distinction is the useful part. `@savvy-web/silk-effects` now declares
+    `@effected/workspaces` as a **peerDependency** (`^0.18.0`) rather than a
+    direct dependency, and a peer range this repo already satisfies **cannot**
+    duplicate — where a direct `0.x` caret one minor behind necessarily does.
+    So the fix was not "wait for silk-effects to bump", which is what the
+    superseded text below predicted.
+  - **The superseded claim, preserved because its prediction was wrong in an
+    instructive way.** This bullet read: *"currently OPEN. As of 2026-08-21,
+    `@effected/workspaces` resolves two copies (`0.17.0` direct, `0.16.0`
+    through `@savvy-web/silk-effects@6.0.4` and dev tooling), and the tag-string
+    probe indicates both reach `dist/main.js` … it dedupes when silk-effects
+    bumps."* The measurement was right; the mechanism it forecast was not.
+  - **Confirming probe — and it has to be the fully-qualified tag id.**
+    `@effected/workspaces/WorkspaceCatalogs`, `…/WorkspaceDiscovery` and
+    `…/WorkspaceRoot` each occur **once** in the minified `dist/main.js`, where
+    they occurred twice, matching the single-copy controls
+    `@effected/npm/NpmRegistry` and `@effected/github/GitBranch`. Grepping the
+    **bare** class names instead returns 7 / 15 / 4 — method names, log strings
+    and re-exports — which would read as three duplicates that do not exist. A
+    probe whose controls are not also measured is not a probe.
+  - **Do not read this as settled, and note this bullet's own record on that.**
+    It has claimed "closed" twice and been falsified within one dependency bump
+    each time: once by moving `@effected/npm`, which pulled a second
+    `@effected/github` in behind it, and once by this repo's own hand-bump to
+    `^0.17.0`. Nothing structural prevents a third. Re-verify with
+    `pnpm why <pkg>`, **never** a lockfile grep — the grep reports which
+    versions exist, only `pnpm why` reports who pulls each one. Method and the
+    hazard statement in @./01-dependencies.md.
 - **`@effected/package-json` is adopted for `PackageJsonFile.modify` only** —
   a declared runtime dependency, wired as `PackageJsonFile.layer` in
   `makeAppLayer` and consumed by both `RuntimeUpgrade` and
@@ -817,6 +850,45 @@ plausible one — at which point `collectReferenceLists` is the entry point, and
 (including why `collectReferenceLists` beats `harvestIssueReferences`: the
 latter reads `Closes #247, #248 and #251` as **only** #247).
 
+### `persistLocal` stays disabled — a deliberate divergence from canon B6
+
+The `@effected` `github-action-canon.md` (2026-09-04) says B6: enable
+`persistLocal` so a committed `.github/actions/local` exists as the target for
+an `act` smoke loop. **This repo diverges, on cost, and the divergence is now
+written down in `action.config.ts` rather than surviving as an unexplained
+`enabled: false`** — which is the actual change, since the flag was already off
+and looked like drift.
+
+**The cost is arithmetic, not judgement.** `persistLocal` writes a copy of the
+built action, so the persisted `dist/*` is byte-for-byte the committed `dist/*`.
+Committed `dist` measures **2,080,144 bytes** (`main` + `pre` + `post`,
+re-derived with `cat dist/*.js | wc -c`), and `action.yml` another 6,835, so
+enabling it adds ≈2.09 MB against the ≈2.08 MB already there — it **roughly
+doubles a payload every consumer downloads on every run**, which for a
+dependency-update action fires on a schedule in many repositories. The figure
+recorded during the change (2,086,999 bytes added) sits 20 bytes off that sum,
+consistent with the persisted `action.yml` repointing `runs.main`; it is
+corroborated by construction rather than taken on trust.
+
+**The benefit is zero here, which is what makes it a divergence rather than a
+trade.** The user confirmed `act` is not used in this repo, and the scaffolding
+that would have consumed the output was **already broken**:
+`.github/workflows/act-test.yml` ran `uses: ./.github/actions/local`, a path
+that has never existed in this repository — so it could only ever fail. It and
+`.actrc` are **deleted** rather than fed. Recorded because "there is a workflow
+for it" reads as evidence that something is exercised, and here it was evidence
+of the opposite: a consumer pointing at a path nobody generated.
+
+*What would change the answer:* a **real** consumer of the persisted output — a
+green `act` job, or a CI step that runs the action from the local path. Canon
+alignment on its own is not one, and neither is re-adding the workflow; the
+workflow is the thing that has to work first.
+
+*Unverified here:* that `act` would in fact succeed against this action if the
+scaffolding were restored. Nothing in this pass ran it, and the three-phase
+pre/main/post shape plus the GitHub App token lifecycle are the parts that would
+have to be checked first.
+
 ### `format.ts` and `services/report.ts` stay separate
 
 Two rendering modules, split by sink: `format.ts` renders the **run's** log
@@ -932,6 +1004,27 @@ pattern is worth naming because it recurs:
   the removal). `grep -rl 'from "node:' src/` returns 13 files today. Corrected
   in place above; noted here because the enumeration has now been wrong twice,
   which suggests recounting rather than editing it next time.
+- **A doc can cite a file that does not exist, and nothing will ever say so.**
+  @./08-testing.md's "Entry points" entry listed `unit/main.effect.test.ts` and
+  `unit/main.test.ts`. The first had been **deleted at `5c92284`** and the line
+  never reconciled; the second was deleted in the canon-B1 pass. So one was
+  stale by many releases and the other by hours, and the entry read identically
+  in both states. **A test-file citation is a claim about the filesystem that
+  costs one `ls` to check** — and the class is broader than tests, since the
+  same silence covers a `@module` tag naming a renamed directory (see
+  @./03-type-definitions.md) and a `build.ignore` entry naming an absent
+  package. Cheap check, run by nothing.
+- **A true-sounding qualifier can be the false part of a true sentence.**
+  @./01-dependencies.md said the `ConfigDependencyHooks` bundler warning was
+  "inert unless the config-dependency-hooks path runs, which this action never
+  does". This action runs that path **twice per enabled run** (release-age
+  discovery and the `check-peers` rules read). What was true is much narrower —
+  the *in-process* loader is unreached, because this repo wires the
+  **subprocess** variant, whose computed import lives inside a static script
+  string. The sentence was defensible if you already knew which variant was
+  meant, and flatly wrong to a reader who did not, which is the worse failure
+  of the two. **Name the mechanism, not the feature**, when a claim turns on
+  which of two implementations is wired.
 - **A control proves the wrong half.** Three tests were written for the peer-glob
   rejection, one of them deliberately a control — and all three asserted only
   `Exit.isFailure`, which the bug they were meant to catch *also* satisfies (it

@@ -16,7 +16,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { fetchModuleCatalogs } from "../../src/services/module-catalogs.js";
 import { seededRegistry } from "../utils/fixtures.js";
 import { fromMap } from "../utils/spawner.js";
-import { makeTarball } from "./__fixtures__/tarball.js";
+import { makeTarball } from "./fixtures/tarball.js";
 
 let work: string;
 let tarballPath: string;
