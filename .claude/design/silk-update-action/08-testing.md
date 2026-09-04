@@ -146,9 +146,16 @@ the file is in the right *directory*, and only the name is wrong.
   **`utilities/`, not `utils/`** — `utils` is a reserved segment and a suite
   placed there is silently never collected, which is the incident recorded under
   Layout below.
-- 24 out, 18 + 6 in. *Re-derive with*
-  `git show HEAD:__test__/unit/main.test.ts | grep -cE '^\s*(it|it\.effect)\('`
+- 24 out, 18 + 6 in — every assertion preserved across the split, none
+  rewritten. *Re-derive with*
+  `git show <pre-split>:__test__/unit/main.test.ts | grep -cE '^\s*(it|it\.effect)\('`
   against the same count on each destination, before and after.
+- **And confirm collection separately, because this is the delta most able to
+  hide an uncollected file.** `pnpm exec vitest list --filesOnly` reports **44**
+  against **44** `*.test.ts` on disk (`find __test__ -name '*.test.ts' | wc -l`).
+  Both numbers are needed: the runner's count alone would have looked identical
+  had the `__fixtures__/` → `fixtures/` rename swept a suite into a reserved
+  segment, which is precisely the failure recorded under Layout.
 
 Two other layout changes in the same pass, neither affecting the count: the
 fixture directories `__test__/integration/__fixtures__/` and
@@ -156,12 +163,20 @@ fixture directories `__test__/integration/__fixtures__/` and
 `__test__/integration/.gitkeep` is deleted (a fossil in a directory that already
 held populated scenario directories).
 
-**The rename moves those fixtures INTO a reserved segment, and that is the
-point rather than a hazard.** `__fixtures__` was *not* reserved, so a `.test.ts`
-landing there would have been collected from a directory whose name says it
-holds fixtures; `fixtures` is reserved at any depth, so the exclusion is now
-structural. Nothing under either path is a `.test.ts` today, and
-`__test__/unit/test-collection.test.ts` fails if one appears.
+**A claim that the rename makes the exclusion "structural" stood here briefly
+and is FALSE — measured, not argued.** The reasoning was that `__fixtures__` is
+not a reserved name while `fixtures` is reserved *at any depth*, so moving the
+directories under the reserved name would make the plugin exclude them. The
+second half does not hold against the installed toolchain: a probe `.test.ts`
+planted at `__test__/unit/steps/fixtures/__probe__/` **is collected**, as is one
+at `__test__/unit/utils/__probe__/`, while one at `__test__/fixtures/__probe__/`
+is not. Only the **direct child of `__test__`** is excluded — see the Layout
+section, where the same measurement corrects the depth rule itself.
+
+So the rename is a naming convergence on canon, and buys nothing structural.
+What actually keeps a `.test.ts` out of those directories is
+`__test__/unit/test-collection.test.ts`, which enforces the any-depth rule
+locally and is deliberately stricter than the plugin.
 
 ## Layout
 
@@ -177,12 +192,33 @@ __test__/
 └── utils/          # RESERVED: helper modules, EXCLUDED from collection
 ```
 
-**`utils`, `fixtures` and `snapshots` are reserved directory names, at *any*
-depth under `__test__`, not just at the top level.** The rule in
-`@vitest-agent/sdk` (`utils/test-location.js`) is
-`segments.slice(1, -1).some((s) => TEST_HELPER_DIRS.includes(s))` — so a test
-file is classified `excluded` if **any** intermediate path segment is one of
-those three names. `utils/` is for helpers and mocks; tests must not live there.
+**`utils`, `fixtures` and `snapshots` are reserved directory names — but only
+as a DIRECT CHILD of `__test__` in the installed toolchain, not at any depth.**
+This document asserted the any-depth version for a long time, citing
+`@vitest-agent/sdk`'s `segments.slice(1, -1).some(...)`. Two things are wrong
+with that citation: `@vitest-agent/sdk` **is not installed here at all** (only
+`cli`, `mcp` and `plugin` are), and the behaviour it describes is not what the
+installed plugin does.
+
+*Re-derived by probe rather than by reading code*, which is the only method that
+settles it: planting a `probe.test.ts` and listing with
+`pnpm exec vitest list --filesOnly` collects
+`__test__/unit/steps/fixtures/__probe__/` and `__test__/unit/utils/__probe__/`,
+and does **not** collect `__test__/fixtures/__probe__/`.
+
+`utils/` is still for helpers and mocks and tests must still not live there —
+what changed is *why* they must not. The enforcement is local:
+`__test__/unit/test-collection.test.ts` applies the any-depth rule itself and
+is therefore **stricter than the plugin**. That is fail-safe (it can only
+over-exclude) and is the reason nothing is broken, but it means the convention
+is held up by this repo's own guard rather than by the runner.
+
+**Unverified, and worth flagging rather than smoothing over:** the 580 → 478
+incident below is recorded as five suites under `__test__/unit/utils/` silently
+not being collected. Under the measured direct-child-only rule they *would* have
+been collected, so either the plugin's behaviour changed since, or that
+incident's mechanism was something else. Nobody has re-derived it, and this
+paragraph should not be read as explaining it.
 
 That has a sharp edge worth stating plainly: an excluded file is silently
 **never collected** — the suite shrinks while every local count still looks
@@ -424,6 +460,23 @@ difference.
   scope provisioning (the minted test token's `permissions` must grant the
   `required` scopes or `provision` fails with `TokenPermissionError`), start-time
   persistence, duration reporting and unconditional revocation.
+  - **`main.effect.test.ts` was challenged during review as a filename this
+    document had invented. It is not — and the provenance is recorded because
+    that reading is easy to arrive at and hard to shake.** The file was born
+    **co-located** as `src/main.effect.test.ts` in `826309a` (the initial
+    implementation), moved to `__test__/unit/main.effect.test.ts` in `c2a75fd`
+    as an `R052` rename, and was deleted in `5c92284` at 80 lines. Any of
+    `git log --follow --diff-filter=A -- __test__/unit/main.effect.test.ts`,
+    `git ls-tree -r --name-only 826309a | grep main.effect`, or
+    `git show 5c92284 --stat -- __test__/unit/main.effect.test.ts` settles it.
+  - **A file that changed path is invisible to a history query pinned to the
+    path it ended at**, and the query returns empty rather than erroring — the
+    same shape as the controlled-grep rule this record already carries: an
+    absence is evidence only once the search has been shown capable of finding
+    the thing. The near miss is worth more than the fact. The proposed
+    correction was to log this as a *fabricated* filename in
+    @./09-project-status.md's claims register — which would have put a false
+    claim into the one section that exists to catalogue false claims.
 - **Doubles self-tests** (`unit/doubles.test.ts`) — see the reserved-directory note
   above. It also pins that the `ActionState` double **fails typed** on a missing
   key rather than dying, which is what the real store does. The double used to

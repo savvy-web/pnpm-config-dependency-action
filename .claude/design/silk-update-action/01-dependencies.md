@@ -213,9 +213,14 @@ The action runs on **Effect v4** (`effect` / `@effect/platform-node` both resolv
   github-split fallout: its tag, tool-discovery, managed-section and changesets-markdown
   families moved into the kit. **The `Changesets` / `DepsRegen` surface this repo consumes
   is unchanged** across that major (the `changeset-emission.int.test.ts` drift canary is
-  green). Its embedded changesets engine still tracks the @changesets v3 `next` prereleases
-  (`@changesets/apply-release-plan@8-next` etc. — the engine that writes the
-  `@changesets/config@4` `$schema` into `.changeset/config.json`). Consumed surface:
+  green). Its embedded changesets engine has since left the `next` prereleases: this
+  line read "still tracks the @changesets v3 `next` prereleases
+  (`@changesets/apply-release-plan@8-next` etc.)" and the lockfile now resolves a plain
+  `@changesets/apply-release-plan@8.0.0`. The engine is still the one that writes the
+  `@changesets/config@4` `$schema` into `.changeset/config.json`, which is the part that
+  mattered; the `-next` suffix was the perishable half and is the reason this sentence
+  named a version at all. *Re-derive with* `grep apply-release-plan pnpm-lock.yaml`.
+  Consumed surface:
   - `Changesets.DepsRegen` — `plan({ cwd, base })` + `execute(plan)` over the cumulative
     `merge-base(base) → worktree` dependency diff, consolidating stale pure-dependency
     changesets into one current table per package. Gating (versionable-minus-ignored)

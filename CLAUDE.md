@@ -211,19 +211,31 @@ and do not need the pointer.
     annotation at the definition site, not an artifact to commit.** Depth in
     `@./.claude/design/silk-update-action/03-type-definitions.md`
 - **Tests are not co-located**: every unit suite lives in `__test__/unit/**`
-  mirroring `src/`. `utils`, `fixtures` and `snapshots` are **reserved by
-  AgentPlugin for helpers and mocks and excluded from collection — at ANY depth
-  under `__test__`, not just the top level** (the rule is
-  `segments.slice(1,-1).some(s => TEST_HELPER_DIRS.includes(s))`). A `.test.ts`
-  crossing one silently never runs, and the aggregate coverage gate stays green.
-  Keep helpers as plain `.ts` in `__test__/utils/`, pinned from
-  `__test__/unit/doubles.test.ts`. **Tests for `src/utils/` therefore live in
-  `__test__/unit/utilities/`, not `__test__/unit/utils/`** — they sat in the
-  latter and silently stopped running, dropping the suite from 580 to 478.
-  `__test__/unit/test-collection.test.ts` fails if it recurs. Fixture directories
-  are named **`fixtures/`** (renamed from `__fixtures__/` to match the kit canon);
-  they hold inert `.yaml` data and one `.ts` helper and **no `.test.ts`**, so
-  being reserved costs nothing there — the rule only bites a suite file.
+  mirroring `src/`. `utils`, `fixtures` and `snapshots` are reserved for helpers
+  and mocks and must never hold a `.test.ts` — an excluded suite silently never
+  runs and the aggregate coverage gate stays green. Keep helpers as plain `.ts`
+  in `__test__/utils/`, pinned from `__test__/unit/doubles.test.ts`. **Tests for
+  `src/utils/` live in `__test__/unit/utilities/`, not `__test__/unit/utils/`.**
+  - **This entry used to say the reservation applies "at ANY depth under
+    `__test__`, not just the top level", citing
+    `segments.slice(1,-1).some(...)` in `@vitest-agent/sdk`. Both halves are
+    wrong.** `@vitest-agent/sdk` is not installed here (only `cli`, `mcp` and
+    `plugin` are), and the installed plugin excludes only the **direct child of
+    `__test__`**. Measured by probe, which is the only method that settles it:
+    a planted `probe.test.ts` under `__test__/unit/steps/fixtures/__probe__/`
+    and under `__test__/unit/utils/__probe__/` is **collected**; one under
+    `__test__/fixtures/__probe__/` is not. Re-derive with
+    `pnpm exec vitest list --filesOnly`, never by reading a rule out of a doc.
+  - **What holds the convention up is this repo's own guard, not the runner.**
+    `__test__/unit/test-collection.test.ts` applies the any-depth rule itself,
+    so it is deliberately **stricter** than the plugin. That is fail-safe — it
+    can only over-exclude — and it is why nothing is broken despite the doc
+    having been wrong.
+  - **The 580 → 478 drop is therefore UNEXPLAINED, not explained.** It is
+    recorded as five suites under `__test__/unit/utils/` silently not being
+    collected; under the measured rule they would have been collected. Either
+    the plugin changed since or the mechanism was something else. Do not cite
+    that incident as evidence for the depth rule.
 - **`vitest.setup.ts` strips every runner-owned prefix before any suite runs** —
   `INPUT_`, `GITHUB_`, `RUNNER_`, `ACTIONS_` and now **`STATE_`**. The last is the
   sharpest of the five: `ActionState` reads exactly those pairs, so a fixture that
