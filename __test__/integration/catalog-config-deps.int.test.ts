@@ -21,7 +21,7 @@ import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CatalogConfigDeps } from "../../src/services/catalog-config-deps.js";
 import { seededRegistry } from "../utils/fixtures.js";
-import { makeTarball } from "./__fixtures__/tarball.js";
+import { makeTarball } from "./fixtures/tarball.js";
 
 // Toggle for the final manifest write, so the FileSystemError path can be
 // exercised without depending on filesystem permissions (which differ between

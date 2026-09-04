@@ -19,7 +19,7 @@ import { peerCheckStep } from "../../../src/steps/peer-check.js";
 
 const parseFixture = (name: string) =>
 	Effect.runSync(
-		Lockfile.parse(readFileSync(new URL(`./__fixtures__/${name}`, import.meta.url), "utf8"), {
+		Lockfile.parse(readFileSync(new URL(`./fixtures/${name}`, import.meta.url), "utf8"), {
 			format: "pnpm",
 		}),
 	);

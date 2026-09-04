@@ -1,5 +1,5 @@
 /**
- * Lockfile service for capturing and comparing lockfile state.
+ * Lockfile capture and comparison.
  *
  * Package-manager agnostic: reads `pnpm-lock.yaml`, `bun.lock` or
  * `package-lock.json` and parses it through `@effected/lockfiles`'
@@ -7,6 +7,21 @@
  * `Lockfile` model. `Lockfile.parse` is a pure parser (no memoized reader
  * service), so a "before" and an "after" snapshot can be parsed in the same
  * process.
+ *
+ * **Standalone functions, not a service.** There was a `Lockfile` tag and a
+ * `static readonly layer` here; both were deleted because nothing in `src/`
+ * ever resolved the tag — `program.ts` and `steps/lockfile-snapshot.ts` call
+ * only {@link captureLockfileState} / {@link compareLockfiles} directly. The
+ * only code that ever resolved the tag was this module's own test suite, so
+ * those tests passed precisely because they were the sole callers. Same
+ * reasoning as the `WorkspaceYaml` tag/layer deletion in
+ * `services/workspace-yaml.ts` — a construct whose only consumer is its own
+ * test is indistinguishable from dead code.
+ *
+ * The suite now drives {@link captureLockfileState} / {@link compareLockfiles}
+ * directly, which is what `program.ts` and `steps/lockfile-snapshot.ts`
+ * actually call — so it exercises the production path rather than a parallel
+ * one.
  *
  * @module services/lockfile
  */
@@ -16,38 +31,10 @@ import { join } from "node:path";
 import type { ImporterDependency, LockfileImporter } from "@effected/lockfiles";
 import { Lockfile as LockfileModel } from "@effected/lockfiles";
 import { WorkspaceDiscovery } from "@effected/workspaces";
-import { Context, Effect, Layer } from "effect";
+import { Effect } from "effect";
 import { LockfileError } from "../errors/errors.js";
 import type { LockfileChange } from "../schema/domain.js";
 import type { SupportedPm } from "./package-manager.js";
-
-// ══════════════════════════════════════════════════════════════════════════════
-// Service Interface
-// ══════════════════════════════════════════════════════════════════════════════
-
-export class Lockfile extends Context.Service<
-	Lockfile,
-	{
-		readonly capture: (pm: SupportedPm, workspaceRoot: string) => Effect.Effect<LockfileModel | null, LockfileError>;
-		readonly compare: (
-			before: LockfileModel | null,
-			after: LockfileModel | null,
-			workspaceRoot: string,
-		) => Effect.Effect<ReadonlyArray<LockfileChange>, LockfileError, WorkspaceDiscovery>;
-	}
->()("Lockfile") {
-	/**
-	 * Live layer.
-	 *
-	 * Declared IN the class body, which is load-bearing rather than stylistic: a
-	 * member attached by post-class assignment is tree-shaken out of the bundled
-	 * `dist`, and that fails only in production because vitest runs the source.
-	 */
-	static readonly layer = Layer.succeed(this, {
-		capture: (pm, workspaceRoot) => captureLockfileStateImpl(pm, workspaceRoot),
-		compare: (before, after, workspaceRoot) => compareLockfilesImpl(before, after, workspaceRoot),
-	});
-}
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Standalone Function Exports
@@ -69,52 +56,6 @@ export const LOCKFILE_NAMES: Record<SupportedPm, string> = {
  * that has never installed still runs, it just has nothing to diff against.
  */
 export const captureLockfileState = (
-	pm: SupportedPm,
-	workspaceRoot: string,
-): Effect.Effect<LockfileModel | null, LockfileError> => captureLockfileStateImpl(pm, workspaceRoot);
-
-/**
- * Compare two lockfile states to detect dependency changes.
- */
-export const compareLockfiles = (
-	before: LockfileModel | null,
-	after: LockfileModel | null,
-	workspaceRoot: string,
-): Effect.Effect<ReadonlyArray<LockfileChange>, LockfileError, WorkspaceDiscovery> =>
-	compareLockfilesImpl(before, after, workspaceRoot);
-
-/**
- * Group lockfile changes by affected package.
- */
-export const groupChangesByPackage = (changes: ReadonlyArray<LockfileChange>): Map<string, LockfileChange[]> => {
-	const grouped = new Map<string, LockfileChange[]>();
-
-	for (const change of changes) {
-		if (change.type === "config") {
-			// Config changes go under a special "root" key
-			const existing = grouped.get("(root)") ?? [];
-			existing.push(change);
-			grouped.set("(root)", existing);
-		} else {
-			for (const pkg of change.affectedPackages) {
-				const existing = grouped.get(pkg) ?? [];
-				existing.push(change);
-				grouped.set(pkg, existing);
-			}
-		}
-	}
-
-	return grouped;
-};
-
-// ══════════════════════════════════════════════════════════════════════════════
-// Implementation Functions
-// ══════════════════════════════════════════════════════════════════════════════
-
-/**
- * Capture current lockfile state.
- */
-const captureLockfileStateImpl = (
 	pm: SupportedPm,
 	workspaceRoot: string,
 ): Effect.Effect<LockfileModel | null, LockfileError> =>
@@ -148,6 +89,72 @@ const captureLockfileStateImpl = (
 			),
 		);
 	});
+
+/**
+ * Compare two lockfile states to detect dependency changes.
+ */
+export const compareLockfiles = (
+	before: LockfileModel | null,
+	after: LockfileModel | null,
+	workspaceRoot: string,
+): Effect.Effect<ReadonlyArray<LockfileChange>, LockfileError, WorkspaceDiscovery> =>
+	Effect.gen(function* () {
+		if (!before || !after) {
+			yield* Effect.logWarning("Cannot compare lockfiles: one or both are null");
+			return [];
+		}
+
+		yield* Effect.logDebug(
+			`Comparing ${after.format} lockfiles: ${before.importers.length} -> ${after.importers.length} importer(s)`,
+		);
+
+		// Needed by both the catalog and the importer comparison.
+		const importerToPackage = yield* buildImporterToPackageMap(workspaceRoot);
+		yield* Effect.logDebug(`Importer to package map: ${JSON.stringify(Object.fromEntries(importerToPackage))}`);
+
+		const changes: LockfileChange[] = [];
+
+		// Catalogs are shared version definitions (catalog:silk, etc). They are NOT
+		// the same as pnpm's configDependencies.
+		const catalogChanges = yield* compareCatalogs(before, after, importerToPackage);
+		changes.push(...catalogChanges);
+
+		// Non-catalog specifier changes, per importer.
+		const packageChanges = yield* compareImporters(before, after, importerToPackage);
+		changes.push(...packageChanges);
+
+		yield* Effect.logInfo(`Detected ${changes.length} dependency change(s)`);
+
+		return changes;
+	});
+
+/**
+ * Group lockfile changes by affected package.
+ */
+export const groupChangesByPackage = (changes: ReadonlyArray<LockfileChange>): Map<string, LockfileChange[]> => {
+	const grouped = new Map<string, LockfileChange[]>();
+
+	for (const change of changes) {
+		if (change.type === "config") {
+			// Config changes go under a special "root" key
+			const existing = grouped.get("(root)") ?? [];
+			existing.push(change);
+			grouped.set("(root)", existing);
+		} else {
+			for (const pkg of change.affectedPackages) {
+				const existing = grouped.get(pkg) ?? [];
+				existing.push(change);
+				grouped.set(pkg, existing);
+			}
+		}
+	}
+
+	return grouped;
+};
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Implementation Functions
+// ══════════════════════════════════════════════════════════════════════════════
 
 /**
  * Map a lockfile dep section onto the LockfileChange type discriminator.
@@ -299,44 +306,6 @@ const buildImporterToPackageMap = (
 			out.set(relativePath, pkg.name);
 		}
 		return out;
-	});
-
-/**
- * Compare two lockfile states to detect dependency changes.
- */
-const compareLockfilesImpl = (
-	before: LockfileModel | null,
-	after: LockfileModel | null,
-	workspaceRoot: string,
-): Effect.Effect<ReadonlyArray<LockfileChange>, LockfileError, WorkspaceDiscovery> =>
-	Effect.gen(function* () {
-		if (!before || !after) {
-			yield* Effect.logWarning("Cannot compare lockfiles: one or both are null");
-			return [];
-		}
-
-		yield* Effect.logDebug(
-			`Comparing ${after.format} lockfiles: ${before.importers.length} -> ${after.importers.length} importer(s)`,
-		);
-
-		// Needed by both the catalog and the importer comparison.
-		const importerToPackage = yield* buildImporterToPackageMap(workspaceRoot);
-		yield* Effect.logDebug(`Importer to package map: ${JSON.stringify(Object.fromEntries(importerToPackage))}`);
-
-		const changes: LockfileChange[] = [];
-
-		// Catalogs are shared version definitions (catalog:silk, etc). They are NOT
-		// the same as pnpm's configDependencies.
-		const catalogChanges = yield* compareCatalogs(before, after, importerToPackage);
-		changes.push(...catalogChanges);
-
-		// Non-catalog specifier changes, per importer.
-		const packageChanges = yield* compareImporters(before, after, importerToPackage);
-		changes.push(...packageChanges);
-
-		yield* Effect.logInfo(`Detected ${changes.length} dependency change(s)`);
-
-		return changes;
 	});
 
 /**

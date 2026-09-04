@@ -1,12 +1,28 @@
 import { describe, expect, it } from "@effect/vitest";
-import { GitHubError, PullRequest, Repo, RepoRef } from "@effected/github";
+import { GitHubError, InstallationToken, PullRequest, Repo, RepoRef } from "@effected/github";
+import { ActionState } from "@effected/github-actions";
 import { Changesets as SilkChangesets } from "@savvy-web/silk-effects";
-import { Cause, Effect, Layer, References, Schema } from "effect";
+import { Cause, DateTime, Effect, Layer, Redacted, References, Schema } from "effect";
 import type { CatalogDelta } from "../../../src/schema/domain.js";
 import { Report } from "../../../src/services/report.js";
 import { actionStateTestLayer, emptyActionState } from "../../utils/action-doubles.js";
 import type { PullRequestTestState } from "../../utils/fixtures.js";
-import { emptyPullRequestState, fakeSha, pnpmUpgradeUpdate, pullRequestTestLayer } from "../../utils/fixtures.js";
+import {
+	configUpdate,
+	configUpdateNew,
+	configUpdates,
+	emptyPullRequestState,
+	fakeSha,
+	mixedUpdates,
+	packageChangeset,
+	pnpmUpgradeUpdate,
+	pullRequest,
+	pullRequestTestLayer,
+	regularUpdate,
+	regularUpdateGlob,
+	regularUpdates,
+	rootChangeset,
+} from "../../utils/fixtures.js";
 
 /** Every resource method resolves `Repo` per call, so tests provide one. */
 const repoLayer = Repo.layer(RepoRef.make({ owner: "test", repo: "repo" }));
@@ -22,14 +38,35 @@ const repoLayer = Repo.layer(RepoRef.make({ owner: "test", repo: "repo" }));
  * sees `BotIdentity.githubActions` — byte-identical to what the hand-rolled
  * `signoffLine()` this replaced produced with no slug, which is why the sign-off
  * assertions in this file did not have to move.
+ *
+ * A caller that needs a DIFFERENT persisted token (the App-bot sign-off case
+ * below) passes its own `ActionState` layer as the second argument.
  */
-const makeReportLayer = (state: PullRequestTestState) =>
-	Layer.merge(
-		Report.layer.pipe(
-			Layer.provide(Layer.merge(pullRequestTestLayer(state), actionStateTestLayer(emptyActionState()))),
-		),
-		repoLayer,
-	);
+const makeReportLayer = (
+	state: PullRequestTestState,
+	actionState: Layer.Layer<ActionState> = actionStateTestLayer(emptyActionState()),
+) => Layer.merge(Report.layer.pipe(Layer.provide(Layer.merge(pullRequestTestLayer(state), actionState))), repoLayer);
+
+/**
+ * An `ActionState` whose `get` answers with a real `InstallationToken`.
+ *
+ * A real `InstallationToken.make(...)` rather than a structurally-correct
+ * literal: `botIdentity()` is a method on the class, so a plain object
+ * typechecks through the double and then fails at runtime.
+ */
+const stateWithToken = (identity: { appSlug: string; appName: string }): Layer.Layer<ActionState> =>
+	ActionState.layerTest({
+		get: (() =>
+			Effect.succeed(
+				InstallationToken.make({
+					token: Redacted.make("ghs_test_token_123"),
+					expiresAt: DateTime.makeUnsafe("2030-01-01T01:00:00Z"),
+					installationId: 4242,
+					permissions: {},
+					...identity,
+				}),
+			)) as ActionState["Service"]["get"],
+	});
 
 // ══════════════════════════════════════════════════════════════════════════════
 // Tests
@@ -418,6 +455,87 @@ describe("generateCommitMessage", () => {
 			expect(msg.split("\n")[0]).toBe("chore(deps): update dependencies");
 		}),
 	);
+
+	it.effect("generates message for config-only updates", () =>
+		Effect.gen(function* () {
+			const state = emptyPullRequestState();
+			const layer = makeReportLayer(state);
+
+			const message = yield* Effect.gen(function* () {
+				const report = yield* Report;
+				return report.generateCommitMessage(configUpdates);
+			}).pipe(Effect.provide(layer), Effect.provideService(References.MinimumLogLevel, "None"));
+
+			expect(message).toContain("chore(deps): update 2 config dependencies");
+			expect(message).toContain("- typescript: 5.3.3 -> 5.4.0");
+			expect(message).toContain("- @biomejs/biome: new -> 1.6.1");
+		}),
+	);
+
+	it.effect("generates message for dev-only updates", () =>
+		Effect.gen(function* () {
+			const state = emptyPullRequestState();
+			const layer = makeReportLayer(state);
+
+			const message = yield* Effect.gen(function* () {
+				const report = yield* Report;
+				return report.generateCommitMessage(regularUpdates);
+			}).pipe(Effect.provide(layer), Effect.provideService(References.MinimumLogLevel, "None"));
+
+			expect(message).toContain("chore(deps): update 2 devDependencies");
+			expect(message).toContain("- effect: 3.0.0 -> 3.1.0");
+		}),
+	);
+
+	it.effect("generates message for mixed updates", () =>
+		Effect.gen(function* () {
+			const state = emptyPullRequestState();
+			const layer = makeReportLayer(state);
+
+			const message = yield* Effect.gen(function* () {
+				const report = yield* Report;
+				return report.generateCommitMessage(mixedUpdates);
+			}).pipe(Effect.provide(layer), Effect.provideService(References.MinimumLogLevel, "None"));
+
+			expect(message).toContain("chore(deps): update 2 config dependencies and 2 devDependencies");
+		}),
+	);
+
+	// The sign-off used to be a `signoffLine(appSlug?)` parameter that NOTHING
+	// ever passed — `steps/commit-and-pr.ts` calls `generateCommitMessage` with
+	// updates only — so the App-bot branch was reachable from this suite and
+	// from nowhere else, and every real run signed as `github-actions[bot]`
+	// while the App bot authored the commit. It now comes from the persisted
+	// token, so this asserts the identity the RUN would use.
+	it.effect("signs off as the App bot named by the persisted token", () =>
+		Effect.gen(function* () {
+			const state = emptyPullRequestState();
+			const layer = makeReportLayer(state, stateWithToken({ appSlug: "my-app", appName: "My App" }));
+
+			const message = yield* Effect.gen(function* () {
+				const report = yield* Report;
+				return report.generateCommitMessage(configUpdates);
+			}).pipe(Effect.provide(layer), Effect.provideService(References.MinimumLogLevel, "None"));
+
+			expect(message).toContain("Signed-off-by: my-app[bot] <my-app[bot]@users.noreply.github.com>");
+		}),
+	);
+
+	it.effect("falls back to github-actions[bot] when no token is persisted", () =>
+		Effect.gen(function* () {
+			const state = emptyPullRequestState();
+			const layer = makeReportLayer(state);
+
+			const message = yield* Effect.gen(function* () {
+				const report = yield* Report;
+				return report.generateCommitMessage(configUpdates);
+			}).pipe(Effect.provide(layer), Effect.provideService(References.MinimumLogLevel, "None"));
+
+			expect(message).toContain(
+				"Signed-off-by: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>",
+			);
+		}),
+	);
 });
 
 describe("generatePRBody", () => {
@@ -569,6 +687,116 @@ describe("generatePRBody", () => {
 			expect(omitted).toBe(empty);
 		}),
 	);
+
+	it.effect("generates body with per-package tables", () =>
+		Effect.gen(function* () {
+			const state = emptyPullRequestState();
+			const layer = makeReportLayer(state);
+
+			const body = yield* Effect.gen(function* () {
+				const report = yield* Report;
+				return report.generatePRBody(configUpdates, []);
+			}).pipe(Effect.provide(layer));
+
+			expect(body).toContain("### root workspace");
+			expect(body).toContain("| Dependency | Type | Action | From | To |");
+			expect(body).toContain("typescript");
+			expect(body).toContain("5.3.3");
+			expect(body).toContain("5.4.0");
+		}),
+	);
+
+	it.effect("groups regular dependencies by package", () =>
+		Effect.gen(function* () {
+			const state = emptyPullRequestState();
+			const layer = makeReportLayer(state);
+
+			const body = yield* Effect.gen(function* () {
+				const report = yield* Report;
+				return report.generatePRBody([regularUpdate], []);
+			}).pipe(Effect.provide(layer));
+
+			expect(body).toContain("### @savvy-web/core");
+			expect(body).toContain("effect");
+			expect(body).toContain("devDependency");
+		}),
+	);
+
+	it.effect("generates body with multiple package sections for mixed updates", () =>
+		Effect.gen(function* () {
+			const state = emptyPullRequestState();
+			const layer = makeReportLayer(state);
+
+			const body = yield* Effect.gen(function* () {
+				const report = yield* Report;
+				return report.generatePRBody(mixedUpdates, []);
+			}).pipe(Effect.provide(layer));
+
+			expect(body).toContain("### root workspace");
+			expect(body).toContain("### @savvy-web/core");
+		}),
+	);
+
+	it.effect("includes changeset details sections", () =>
+		Effect.gen(function* () {
+			const state = emptyPullRequestState();
+			const layer = makeReportLayer(state);
+
+			const body = yield* Effect.gen(function* () {
+				const report = yield* Report;
+				return report.generatePRBody(configUpdates, [packageChangeset, rootChangeset]);
+			}).pipe(Effect.provide(layer));
+
+			expect(body).toContain("### Changesets");
+			expect(body).toContain("2 changeset(s) created");
+			expect(body).toContain("<summary>@savvy-web/core</summary>");
+			expect(body).toContain("<summary>root workspace</summary>");
+		}),
+	);
+
+	it.effect("shows glob patterns in dependency column", () =>
+		Effect.gen(function* () {
+			const state = emptyPullRequestState();
+			const layer = makeReportLayer(state);
+
+			const body = yield* Effect.gen(function* () {
+				const report = yield* Report;
+				return report.generatePRBody([regularUpdateGlob], []);
+			}).pipe(Effect.provide(layer));
+
+			expect(body).toContain("@effect/*");
+		}),
+	);
+
+	it.effect("includes footer", () =>
+		Effect.gen(function* () {
+			const state = emptyPullRequestState();
+			const layer = makeReportLayer(state);
+
+			const body = yield* Effect.gen(function* () {
+				const report = yield* Report;
+				return report.generatePRBody(configUpdates, []);
+			}).pipe(Effect.provide(layer));
+
+			expect(body).toContain("---");
+			expect(body).toContain("silk-update-action");
+		}),
+	);
+
+	it.effect("shows added action for new dependencies", () =>
+		Effect.gen(function* () {
+			const state = emptyPullRequestState();
+			const layer = makeReportLayer(state);
+
+			const body = yield* Effect.gen(function* () {
+				const report = yield* Report;
+				return report.generatePRBody([configUpdateNew], []);
+			}).pipe(Effect.provide(layer));
+
+			expect(body).toContain("added");
+			expect(body).toContain("—");
+		}),
+	);
 });
 
 describe("generateSummary", () => {
@@ -629,6 +857,97 @@ describe("generateSummary", () => {
 
 			expect(summary).toContain("### PR Body Preview");
 			expect(summary).toContain("Catalog Changes");
+		}),
+	);
+
+	it.effect("generates summary with PR link", () =>
+		Effect.gen(function* () {
+			const state = emptyPullRequestState();
+			const layer = makeReportLayer(state);
+
+			const result = yield* Effect.gen(function* () {
+				const report = yield* Report;
+				return report.generateSummary(configUpdates, [], pullRequest, false);
+			}).pipe(Effect.provide(layer));
+
+			expect(result).toContain(`[#42](${pullRequest.url})`);
+			expect(result).toContain("**Dependencies updated:** 2");
+		}),
+	);
+
+	it.effect("generates summary without PR (null)", () =>
+		Effect.gen(function* () {
+			const state = emptyPullRequestState();
+			const layer = makeReportLayer(state);
+
+			const result = yield* Effect.gen(function* () {
+				const report = yield* Report;
+				return report.generateSummary(configUpdates, [], null, false);
+			}).pipe(Effect.provide(layer));
+
+			expect(result).not.toContain("Pull request:");
+			expect(result).toContain("**Dependencies updated:** 2");
+		}),
+	);
+
+	it.effect("generates dry-run summary with PR body preview", () =>
+		Effect.gen(function* () {
+			const state = emptyPullRequestState();
+			const layer = makeReportLayer(state);
+
+			const result = yield* Effect.gen(function* () {
+				const report = yield* Report;
+				return report.generateSummary(mixedUpdates, [], null, true);
+			}).pipe(Effect.provide(layer));
+
+			expect(result).toContain("### PR Body Preview");
+			expect(result).toContain("View PR body");
+		}),
+	);
+
+	it.effect("does not show PR body preview when not dry-run", () =>
+		Effect.gen(function* () {
+			const state = emptyPullRequestState();
+			const layer = makeReportLayer(state);
+
+			const result = yield* Effect.gen(function* () {
+				const report = yield* Report;
+				return report.generateSummary(mixedUpdates, [], pullRequest, false);
+			}).pipe(Effect.provide(layer));
+
+			expect(result).not.toContain("PR Body Preview");
+		}),
+	);
+
+	it.effect("shows changeset details", () =>
+		Effect.gen(function* () {
+			const state = emptyPullRequestState();
+			const layer = makeReportLayer(state);
+
+			const result = yield* Effect.gen(function* () {
+				const report = yield* Report;
+				return report.generateSummary(configUpdates, [packageChangeset, rootChangeset], null, false);
+			}).pipe(Effect.provide(layer));
+
+			expect(result).toContain("### Changesets Created");
+			expect(result).toContain("**Changesets created:** 2");
+		}),
+	);
+
+	it.effect("shows per-package tables in summary", () =>
+		Effect.gen(function* () {
+			const state = emptyPullRequestState();
+			const layer = makeReportLayer(state);
+			const updates = [configUpdate, regularUpdate];
+
+			const result = yield* Effect.gen(function* () {
+				const report = yield* Report;
+				return report.generateSummary(updates, [], null, false);
+			}).pipe(Effect.provide(layer));
+
+			expect(result).toContain("root workspace");
+			expect(result).toContain("@savvy-web/core");
+			expect(result).toContain("| Dependency | Type | Action | From | To |");
 		}),
 	);
 });

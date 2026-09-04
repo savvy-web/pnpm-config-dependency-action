@@ -3,8 +3,8 @@ status: current
 module: silk-update-action
 category: architecture
 created: 2026-02-20
-updated: 2026-08-05
-last-synced: 2026-08-05
+updated: 2026-09-04
+last-synced: 2026-09-04
 completeness: 95
 related:
   - ./_index.md
@@ -164,13 +164,20 @@ production because vitest runs the source.
 - `RegularDeps.layer` — `NpmRegistry`, `WorkspaceDiscovery`, `ReleaseAge`
 - `Changesets.layer` — `Changesets.DepsRegen`
 - `Report.layer` — `PullRequest`, **`ActionState`**. The second is newer and is the interesting entry in this list: `Report` resolves the DCO sign-off once in its layer body (`resolveSignoff()`, over the token `pre` persisted), so `ActionState` rises into the layer's requirement channel. It is **not** provided in `makeAppLayer` — it is an `ActionServices` member, so it is left in the channel for `Action.run`'s runtime to satisfy at the boundary, exactly like `ChildProcessSpawner` under `BranchManager`. That is the intended shape, and `__test__/unit/layers/app.test.ts` is what distinguishes it from the *unintended* shape (a leftover requirement nothing supplies), which is not otherwise a type error
-- `Lockfile.layer` — no requirements
+
+**That is the whole list — nine layers, and `Lockfile.layer` is no longer among
+them.** This entry used to read "`Lockfile.layer` — no requirements", which was
+the tell: a layer with no requirements and no consumer is a layer doing nothing.
+The tag and layer in `src/services/lockfile.ts` are **deleted**, because nothing
+in `src/` resolved the tag — the same finding, and the same argument, that
+removed `WorkspaceYaml`'s tag and layer. See @./05-module-library.md for the
+detail and the falsification condition.
 
 `PreLive` / `PostLive` in the entry points are **not** part of this: they are
 aliases for `GitHubApp.layer`, not service layers.
 
 Stateless concerns (`detectPackageManager`, `syncPeers`, `fetchModuleCatalogs`,
-the `workspace-yaml` and `Lockfile` standalone helpers) export functions consumed
+the `workspace-yaml` and `lockfile` standalone helpers) export functions consumed
 by the step modules in `src/steps/`, which is what `program.ts` composes — it no
 longer calls them directly. `syncPeers` and `compareLockfiles` require
 `WorkspaceDiscovery` in their environment.

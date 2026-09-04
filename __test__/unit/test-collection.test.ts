@@ -4,15 +4,26 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 /**
- * Directory names `@vitest-agent/plugin` reserves for helpers, fixtures and
- * mocks. A `*.test.ts` whose path crosses one of these is classified
- * `excluded` and is **silently never collected** — the suite shrinks and the
- * aggregate coverage gate stays green, so nothing reports it.
+ * Directory names reserved for helpers, fixtures and mocks. A `*.test.ts`
+ * placed under one is not a test this repo will run, and the failure mode is
+ * silence: the suite shrinks while the aggregate coverage gate stays green, so
+ * nothing reports it.
  *
- * Mirrors `TEST_HELPER_DIRS` in `@vitest-agent/sdk`'s `utils/test-location.js`
- * (the rule is `segments.slice(1, -1).some((s) => TEST_HELPER_DIRS.includes(s))`).
- * Hardcoded rather than imported because the SDK is a transitive dependency of
- * the plugin and is not resolvable from this package's root.
+ * **This guard is deliberately STRICTER than the runner, and the comment here
+ * used to get that backwards.** It claimed to mirror `TEST_HELPER_DIRS` in
+ * `@vitest-agent/sdk`'s `utils/test-location.js`, rule
+ * `segments.slice(1, -1).some(...)` — but `@vitest-agent/sdk` is not installed
+ * (only `cli`, `mcp` and `plugin` are), and the installed plugin excludes only
+ * the **direct child of `__test__`**. Measured by planting a `probe.test.ts`
+ * and listing with `pnpm exec vitest list --filesOnly`: probes under
+ * `__test__/unit/steps/fixtures/` and `__test__/unit/utils/` are collected,
+ * one under `__test__/fixtures/` is not.
+ *
+ * So the any-depth check below is this repo's own convention, not a mirror of
+ * anything. Keep it: it is fail-safe (it can only over-exclude), it survives
+ * the plugin changing its rule in either direction, and a nested `utils/`
+ * holding a suite is a naming mistake regardless of whether the runner
+ * happens to collect it.
  */
 const RESERVED_HELPER_DIRS = ["fixtures", "snapshots", "utils"];
 

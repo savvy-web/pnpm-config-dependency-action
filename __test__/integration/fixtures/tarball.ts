@@ -7,7 +7,7 @@
  * test drives the same fetch path end-to-end, so this builder lives here as
  * a shared module rather than duplicated (or inlined) in either test file.
  *
- * @module services/__fixtures__/tarball
+ * @module integration/fixtures/tarball
  */
 
 import { execFileSync } from "node:child_process";

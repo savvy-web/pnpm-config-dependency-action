@@ -30,16 +30,17 @@ constants; services expose companion `*Shape` interfaces; workspace layers are
 ## Domain services
 
 `BranchManager`, `PackageManagerUpgrade`, `ConfigDeps`, `CatalogConfigDeps`,
-`RegularDeps`, `ReleaseAge`, `RuntimeUpgrade`, `Lockfile`, `Changesets`,
+`RegularDeps`, `ReleaseAge`, `RuntimeUpgrade`, `Changesets`,
 `Report` — **every one wired as a `static layer` on the class**, the same
 convention as the kit, declared *in* the class body (a member attached after the
 class is tree-shaken out of `dist` and fails only in production). No `*Live`
 constant survives in `src/services/`.
 
 Stateless helpers: `detectPackageManager`, `syncPeers`, `fetchModuleCatalogs`,
-and the `workspace-yaml` functions — the `WorkspaceYaml` **tag and layer were
-deleted**, since nothing in `src/` wired them and their only consumer was their
-own test.
+the `workspace-yaml` functions and the `lockfile` functions
+(`captureLockfileState`, `compareLockfiles`) — the `WorkspaceYaml` and
+`Lockfile` **tags and layers were deleted**, since nothing in `src/` wired them
+and their only consumer was their own test, in each case.
 
 **Both `package.json` writers** (`RuntimeUpgrade`, `PackageManagerUpgrade`)
 resolve `PackageJsonFile` in their **layer bodies**, so `makeAppLayer` must

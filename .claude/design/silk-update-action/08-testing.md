@@ -3,8 +3,8 @@ status: current
 module: silk-update-action
 category: architecture
 created: 2026-02-20
-updated: 2026-08-23
-last-synced: 2026-08-23
+updated: 2026-09-04
+last-synced: 2026-09-04
 completeness: 95
 related:
   - ./_index.md
@@ -20,10 +20,17 @@ implementation-plans: []
 Current suite: **643 tests across 44 files, all passing** (verified by
 `pnpm vitest run`, not carried forward from this document's previous figure).
 
-**This total went DOWN, and the table below explains why rather than leaving a
-drop to look like the silent-uncollection incident recorded further down.** The
-`@effected/npm` / `@effected/package-json` adoption (effected#282) deleted 15
-tests and added 3.
+**The most recent change moved 24 tests between files and shows up as `0` in
+both columns, which is the case this table is worst at.** A count that does not
+move is not evidence that nothing happened — and here even the *file* count held
+at 44, because one file was deleted and one added in the same pass. The
+accounting is below; the reason it is spelled out is that "643, unchanged" is
+exactly what a silently-uncollected suite also looks like (the incident further
+down).
+
+**The total went DOWN one change earlier, and that is separately explained
+rather than left to look like the same incident.** The `@effected/npm` /
+`@effected/package-json` adoption (effected#282) deleted 15 tests and added 3.
 
 **Accounting for the delta from the 581 this document used to state** — and the
 answer is not "it drifted", which is what it looks like:
@@ -38,7 +45,8 @@ answer is not "it drifted", which is what it looks like:
 | **634** | the `check-peers` work, itemised in the first paragraph below this table | `pnpm vitest run`, 44 files |
 | 645 | inferred, not measured — see the honesty note below | — |
 | **648** | the peer-gate false-positive work: +3 in `unit/steps/peer-check.test.ts`, itemised below | `pnpm vitest run`, 44 files |
-| **643** | now: the effected#282 adoption, **-15 / +3**, itemised below | `pnpm vitest run`, 44 files |
+| 643 | the effected#282 adoption, **-15 / +3**, itemised below | `pnpm vitest run`, 44 files |
+| **643** | now: the canon-B1 layout pass — **0 net**, and the file count also held at 44 while one file was deleted and one added | `pnpm vitest run`, 44 files |
 
 **The 581 was never a real count.** `f55fab6` — the kit-wave and
 `@effected/package-json` adoption — added 8 tests and edited this file's figure
@@ -68,7 +76,7 @@ control).
 **Accounting for 634 -> 648 (+14, +0 files) — only +3 of which are tests this
 repo added.** The three are all in `unit/steps/peer-check.test.ts`: two
 kit-drift canaries over **real pnpm 11.22.0 lockfile fixtures**
-(`__fixtures__/pnpm-lock.alias.yaml`, `pnpm-lock.publish-dir-link.yaml`)
+(`fixtures/pnpm-lock.alias.yaml`, `pnpm-lock.publish-dir-link.yaml`)
 asserting proven-clean gating on the npm-alias and `publishDirectory` `link:`
 shapes that `@effected/lockfiles` ≤0.6.1 misclassified as `unresolvedEdge`
 (commit `2ddb105`), and one refresh-ordering test whose `WorkspaceCatalogs`
@@ -121,6 +129,55 @@ wrong (it expected the surviving override to be absent from the deltas, where th
 correctly reports it as `kept`), and the suite caught that rather than the author
 noticing.
 
+**Accounting for 643 -> 643 (0 net, 44 files -> 44 files) — the canon-B1 layout
+pass, and the one delta in this table that has to be derived from the file
+contents because neither column moves.** `__test__/unit/main.test.ts` is
+**deleted** and its 24 tests redistributed, because it never touched
+`src/main.ts` at all: it imported `Report` and `src/utils/markdown.js`, so its
+name asserted a mapping to a source module that did not exist. It was the
+`__test__/unit/**` mirrors-`src/` rule broken in the quietest possible way —
+the file is in the right *directory*, and only the name is wrong.
+
+- **+18 into `__test__/unit/services/report.test.ts`** (33 -> 51): the
+  `generateCommitMessage`, `generatePRBody` and `generateSummary` blocks, which
+  belong beside the rest of `Report`'s suite.
+- **+6 into a new `__test__/unit/utilities/markdown.test.ts`**: the
+  `cleanVersion` and `npmUrl` blocks, covering `src/utils/markdown.ts`. Note
+  **`utilities/`, not `utils/`** — `utils` is a reserved segment and a suite
+  placed there is silently never collected, which is the incident recorded under
+  Layout below.
+- 24 out, 18 + 6 in — every assertion preserved across the split, none
+  rewritten. *Re-derive with*
+  `git show <pre-split>:__test__/unit/main.test.ts | grep -cE '^\s*(it|it\.effect)\('`
+  against the same count on each destination, before and after.
+- **And confirm collection separately, because this is the delta most able to
+  hide an uncollected file.** `pnpm exec vitest list --filesOnly` reports **44**
+  against **44** `*.test.ts` on disk (`find __test__ -name '*.test.ts' | wc -l`).
+  Both numbers are needed: the runner's count alone would have looked identical
+  had the `__fixtures__/` → `fixtures/` rename swept a suite into a reserved
+  segment, which is precisely the failure recorded under Layout.
+
+Two other layout changes in the same pass, neither affecting the count: the
+fixture directories `__test__/integration/__fixtures__/` and
+`__test__/unit/steps/__fixtures__/` are renamed to `fixtures/`, and the stray
+`__test__/integration/.gitkeep` is deleted (a fossil in a directory that already
+held populated scenario directories).
+
+**A claim that the rename makes the exclusion "structural" stood here briefly
+and is FALSE — measured, not argued.** The reasoning was that `__fixtures__` is
+not a reserved name while `fixtures` is reserved *at any depth*, so moving the
+directories under the reserved name would make the plugin exclude them. The
+second half does not hold against the installed toolchain: a probe `.test.ts`
+planted at `__test__/unit/steps/fixtures/__probe__/` **is collected**, as is one
+at `__test__/unit/utils/__probe__/`, while one at `__test__/fixtures/__probe__/`
+is not. Only the **direct child of `__test__`** is excluded — see the Layout
+section, where the same measurement corrects the depth rule itself.
+
+So the rename is a naming convergence on canon, and buys nothing structural.
+What actually keeps a `.test.ts` out of those directories is
+`__test__/unit/test-collection.test.ts`, which enforces the any-depth rule
+locally and is deliberately stricter than the plugin.
+
 ## Layout
 
 Tests are **not co-located**. Every unit suite lives under `__test__/unit/`,
@@ -135,12 +192,33 @@ __test__/
 └── utils/          # RESERVED: helper modules, EXCLUDED from collection
 ```
 
-**`utils`, `fixtures` and `snapshots` are reserved directory names, at *any*
-depth under `__test__`, not just at the top level.** The rule in
-`@vitest-agent/sdk` (`utils/test-location.js`) is
-`segments.slice(1, -1).some((s) => TEST_HELPER_DIRS.includes(s))` — so a test
-file is classified `excluded` if **any** intermediate path segment is one of
-those three names. `utils/` is for helpers and mocks; tests must not live there.
+**`utils`, `fixtures` and `snapshots` are reserved directory names — but only
+as a DIRECT CHILD of `__test__` in the installed toolchain, not at any depth.**
+This document asserted the any-depth version for a long time, citing
+`@vitest-agent/sdk`'s `segments.slice(1, -1).some(...)`. Two things are wrong
+with that citation: `@vitest-agent/sdk` **is not installed here at all** (only
+`cli`, `mcp` and `plugin` are), and the behaviour it describes is not what the
+installed plugin does.
+
+*Re-derived by probe rather than by reading code*, which is the only method that
+settles it: planting a `probe.test.ts` and listing with
+`pnpm exec vitest list --filesOnly` collects
+`__test__/unit/steps/fixtures/__probe__/` and `__test__/unit/utils/__probe__/`,
+and does **not** collect `__test__/fixtures/__probe__/`.
+
+`utils/` is still for helpers and mocks and tests must still not live there —
+what changed is *why* they must not. The enforcement is local:
+`__test__/unit/test-collection.test.ts` applies the any-depth rule itself and
+is therefore **stricter than the plugin**. That is fail-safe (it can only
+over-exclude) and is the reason nothing is broken, but it means the convention
+is held up by this repo's own guard rather than by the runner.
+
+**Unverified, and worth flagging rather than smoothing over:** the 580 → 478
+incident below is recorded as five suites under `__test__/unit/utils/` silently
+not being collected. Under the measured direct-child-only rule they *would* have
+been collected, so either the plugin's behaviour changed since, or that
+incident's mechanism was something else. Nobody has re-derived it, and this
+paragraph should not be read as explaining it.
 
 That has a sharp edge worth stating plainly: an excluded file is silently
 **never collected** — the suite shrinks while every local count still looks
@@ -172,6 +250,40 @@ Shared helpers currently in that directory:
   asserting on the double.
 - `fixtures.ts` — shared domain fixtures (`DependencyUpdateResult`,
   `ChangesetFile`, `LockfileChange`, PR results) plus registry/PR test layers.
+
+## Environment isolation (`vitest.setup.ts`)
+
+Before any suite runs, `vitest.setup.ts` deletes every `process.env` key
+carrying a prefix the GitHub Actions runner owns: `INPUT_`, `GITHUB_`, `RUNNER_`,
+`ACTIONS_` and — newly — **`STATE_`**. (`TEST_LOGS`, the suites' own opt-in for
+log output, is deliberately outside every stripped prefix.)
+
+Two failures it prevents, and they are different in kind:
+
+- **The entry points self-execute.** All three carry a
+  `if (process.env.GITHUB_ACTIONS)` guard, so under a real runner's environment
+  merely *importing* the module under test runs the whole phase — including a
+  live `GitHubToken.provision` — mid-suite.
+- **Runner values leak into reads a suite forgot to stub.** `ActionInput`
+  resolves `INPUT_*`, `ActionEnvironment` snapshots `GITHUB_*` / `RUNNER_*` at
+  layer construction, and `ActionState` reads `STATE_*`.
+
+**`STATE_*` is the sharpest of the set, which is why it is worth naming rather
+than folding into "the runner's variables".** The other prefixes mostly produce
+a *wrong* value, which tends to fail an assertion. A fixture that forgets to
+seed its own state instead reads the **host workflow's** persisted state and
+**decodes it successfully** — `ActionState` round-trips through each caller's
+Schema, so real, well-formed, someone-else's data satisfies the decode. The test
+passes, for the wrong reason, and only in CI.
+
+*Falsified if* a service starts reading a runner variable under a prefix not in
+that list. The list is a denylist, so it is only as complete as the last time
+somebody checked it against what `@effected/github-actions` reads.
+
+*Unverified:* whether the strip would have changed any current suite's result.
+It was added as defence, not in response to an observed failure here, and no
+suite was run against a seeded `STATE_*` environment to demonstrate the
+difference.
 
 ## Test framework posture
 
@@ -289,8 +401,10 @@ Shared helpers currently in that directory:
   a structurally-correct literal typechecks through the double and dies at
   runtime.
   - Mutation-verified from the consumer side: hard-coding the fallback trailer in
-    `Report.layer` turns `main.test.ts`'s "signs off as the App bot named by the
-    persisted token" red. Worth noting *which* test that is — the sign-off tests
+    `Report.layer` turns the "signs off as the App bot named by the persisted
+    token" case red — a case that lived in `main.test.ts` when this note was
+    written and now lives in `unit/services/report.test.ts`, having moved with
+    the rest of that file's `Report` coverage. Worth noting *which* test that is — the sign-off tests
     that already existed asserted the fallback string, which the mutant also
     produces, so they never discriminated on identity at all.
 - **Layer requirement channel** (`unit/layers/app.test.ts`) — **the only suite
@@ -332,13 +446,37 @@ Shared helpers currently in that directory:
     a layer that is wired but fails to construct still ships. See
     @./09-project-status.md for the three ways the type assertion itself can stop
     discriminating.
-- **Entry points** (`unit/main.test.ts`, `unit/main.effect.test.ts`,
-  `unit/pre.test.ts`, `unit/post.test.ts`) — orchestration with injected fakes,
-  and the token lifecycle. The `pre` / `post` suites drive the **real**
+- **Entry points** (`unit/pre.test.ts`, `unit/post.test.ts`) — the token
+  lifecycle. **This entry named two more files than exist**, and each was wrong
+  for a different reason, so neither is a simple rename: `unit/main.effect.test.ts`
+  was deleted back at `5c92284` and this line was never reconciled, while
+  `unit/main.test.ts` was deleted in the canon-B1 pass because it never touched
+  `src/main.ts` (its 24 tests were `Report` and `utils/markdown` coverage, since
+  redistributed — see the accounting above). **`src/main.ts` itself has no suite,
+  deliberately**: it is the four-line guarded `Action.run(program)` wrapper, and
+  the orchestration a reader would look for here is
+  `unit/program.inner.test.ts`. The `pre` / `post` suites drive the **real**
   `GitHubToken.provision` / `dispose` flow against the local doubles, covering
   scope provisioning (the minted test token's `permissions` must grant the
   `required` scopes or `provision` fails with `TokenPermissionError`), start-time
   persistence, duration reporting and unconditional revocation.
+  - **`main.effect.test.ts` was challenged during review as a filename this
+    document had invented. It is not — and the provenance is recorded because
+    that reading is easy to arrive at and hard to shake.** The file was born
+    **co-located** as `src/main.effect.test.ts` in `826309a` (the initial
+    implementation), moved to `__test__/unit/main.effect.test.ts` in `c2a75fd`
+    as an `R052` rename, and was deleted in `5c92284` at 80 lines. Any of
+    `git log --follow --diff-filter=A -- __test__/unit/main.effect.test.ts`,
+    `git ls-tree -r --name-only 826309a | grep main.effect`, or
+    `git show 5c92284 --stat -- __test__/unit/main.effect.test.ts` settles it.
+  - **A file that changed path is invisible to a history query pinned to the
+    path it ended at**, and the query returns empty rather than erroring — the
+    same shape as the controlled-grep rule this record already carries: an
+    absence is evidence only once the search has been shown capable of finding
+    the thing. The near miss is worth more than the fact. The proposed
+    correction was to log this as a *fabricated* filename in
+    @./09-project-status.md's claims register — which would have put a false
+    claim into the one section that exists to catalogue false claims.
 - **Doubles self-tests** (`unit/doubles.test.ts`) — see the reserved-directory note
   above. It also pins that the `ActionState` double **fails typed** on a missing
   key rather than dying, which is what the real store does. The double used to
@@ -382,13 +520,19 @@ Shared helpers currently in that directory:
   matching, and the fail-open filtering paths.
 - **Lockfile and changesets** (`unit/services/lockfile.test.ts`,
   `changesets.test.ts`) — catalog/importer comparison emitting per-importer,
-  per-section triples; and the DepsRegen **adapter plumbing** only (the
+  per-section triples. The lockfile suite drives the **standalone**
+  `captureLockfileState` / `compareLockfiles` exports directly now: it used to
+  resolve a local `Lockfile` service tag through `Lockfile.layer`, and it was
+  that tag's **only** resolver anywhere, so the tests passed because they were
+  the sole callers. Tag and layer are deleted; the suite exercises what
+  `program.ts` and `steps/lockfile-snapshot.ts` actually call. Same shape as
+  `workspace-yaml.test.ts` before it. And the DepsRegen **adapter plumbing** only (the
   `.changeset/` guard, the `plan({ cwd, base }) → execute` call, the
   `written → ChangesetFile` mapping, error mapping) against a mock
   `Changesets.DepsRegen`. The gating cascade, catalog-aware diffing and
   consolidation live upstream in `@savvy-web/silk-effects`.
 - **Reporting, branch and pure helpers** (`unit/services/report.test.ts`,
-  `branch.test.ts`, `workspace-yaml.test.ts`, `unit/utils/*.test.ts`) — PR
+  `branch.test.ts`, `workspace-yaml.test.ts`, `unit/utilities/*.test.ts`) — PR
   create/update and auto-merge degradation, commit-message and summary generation,
   YAML sorting/round-tripping, branch lifecycle over `GitBranch.upsert` /
   `GitCommit.commitFiles` (including the `ensureBaseHistory` merge-base probe and

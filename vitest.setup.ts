@@ -19,10 +19,13 @@
  *    set, importing the module under test runs the real phase — including a
  *    live `GitHubToken.provision` — mid-suite.
  * 2. **Real runner values leak into input and environment reads.**
- *    `ActionInput` resolves `INPUT_*` and `ActionEnvironment` snapshots
- *    `GITHUB_*` / `RUNNER_*` at layer construction. A suite that injects its
- *    own provider would otherwise silently read CI's values wherever it
- *    forgot to, and pass for the wrong reason.
+ *    `ActionInput` resolves `INPUT_*`, `ActionEnvironment` snapshots
+ *    `GITHUB_*` / `RUNNER_*` at layer construction, and `ActionState` reads
+ *    the runner's `STATE_*` pairs. A suite that injects its own provider would
+ *    otherwise silently read CI's values wherever it forgot to, and pass for
+ *    the wrong reason. `STATE_*` is the sharpest of the three: a fixture that
+ *    forgets to seed its own state reads the HOST workflow's persisted state
+ *    and decodes it successfully, so the test passes on someone else's data.
  *
  * `TEST_LOGS` (the suites' own opt-in for log output) is deliberately outside
  * every prefix stripped here.
@@ -31,7 +34,7 @@
  */
 
 /** Variable-name prefixes the GitHub Actions runner owns. */
-const RUNNER_PREFIXES = ["INPUT_", "GITHUB_", "RUNNER_", "ACTIONS_"] as const;
+const RUNNER_PREFIXES = ["INPUT_", "GITHUB_", "RUNNER_", "ACTIONS_", "STATE_"] as const;
 
 for (const key of Object.keys(process.env)) {
 	if (RUNNER_PREFIXES.some((prefix) => key.startsWith(prefix))) {
