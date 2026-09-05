@@ -21,11 +21,7 @@
 			"properties": {
 				"dependency": {
 					"type": "string",
-					"allOf": [
-						{
-							"minLength": 1
-						}
-					]
+					"minLength": 1
 				},
 				"from": {
 					"anyOf": [
@@ -39,11 +35,7 @@
 				},
 				"to": {
 					"type": "string",
-					"allOf": [
-						{
-							"minLength": 1
-						}
-					]
+					"minLength": 1
 				},
 				"type": {
 					"$ref": "#/$defs/DependencyType"
@@ -68,19 +60,11 @@
 			"properties": {
 				"catalog": {
 					"type": "string",
-					"allOf": [
-						{
-							"minLength": 1
-						}
-					]
+					"minLength": 1
 				},
 				"dependency": {
 					"type": "string",
-					"allOf": [
-						{
-							"minLength": 1
-						}
-					]
+					"minLength": 1
 				},
 				"from": {
 					"anyOf": [
@@ -119,19 +103,11 @@
 				},
 				"dependency": {
 					"type": "string",
-					"allOf": [
-						{
-							"minLength": 1
-						}
-					]
+					"minLength": 1
 				},
 				"wanted": {
 					"type": "string",
-					"allOf": [
-						{
-							"minLength": 1
-						}
-					]
+					"minLength": 1
 				},
 				"found": {
 					"anyOf": [
@@ -165,11 +141,7 @@
 				},
 				"dependency": {
 					"type": "string",
-					"allOf": [
-						{
-							"minLength": 1
-						}
-					]
+					"minLength": 1
 				},
 				"from": {
 					"anyOf": [
@@ -183,11 +155,7 @@
 				},
 				"to": {
 					"type": "string",
-					"allOf": [
-						{
-							"minLength": 1
-						}
-					]
+					"minLength": 1
 				},
 				"affectedPackages": {
 					"type": "array",
@@ -205,12 +173,8 @@
 			"properties": {
 				"id": {
 					"type": "string",
-					"allOf": [
-						{
-							"minLength": 1,
-							"description": "Unique changeset identifier"
-						}
-					]
+					"minLength": 1,
+					"description": "Unique changeset identifier"
 				},
 				"packages": {
 					"type": "array",
@@ -225,12 +189,8 @@
 				},
 				"summary": {
 					"type": "string",
-					"allOf": [
-						{
-							"minLength": 1,
-							"description": "Human-readable summary of changes"
-						}
-					]
+					"minLength": 1,
+					"description": "Human-readable summary of changes"
 				}
 			},
 			"required": ["id", "packages", "type", "summary"],
@@ -242,19 +202,11 @@
 			"properties": {
 				"number": {
 					"type": "integer",
-					"allOf": [
-						{
-							"exclusiveMinimum": 0
-						}
-					]
+					"exclusiveMinimum": 0
 				},
 				"url": {
 					"type": "string",
-					"allOf": [
-						{
-							"pattern": "^https:\\/\\/"
-						}
-					]
+					"pattern": "^https:\\/\\/"
 				},
 				"created": {
 					"type": "boolean"
